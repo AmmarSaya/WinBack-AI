@@ -11,7 +11,7 @@ on:
       - 'packages/db/prisma/schema.prisma'
       - 'packages/db/prisma/migrations/**'
   push:
-    branches: [main]
+    branches: [master]
     paths:
       - 'packages/db/prisma/schema.prisma'
       - 'packages/db/prisma/migrations/**'
