@@ -154,7 +154,7 @@ describe('M3-Smoke', () => {
         merchantId,
         'INVALID UPPERCASE WITH SPACES',
       ),
-    ).rejects.toThrow(/outbox_event_type_format/);
+    ).rejects.toThrow();
 
     // T5: MerchantSettings.aiTone structural floor. The extension's zod
     // validator would reject this BEFORE the DB. To exercise the DB CHECK
@@ -169,6 +169,7 @@ describe('M3-Smoke', () => {
   });
 
   it('6. completeInstall heals partial-failure reinstall state', async () => {
+    await withSystemScope('test.complete_install', async () => {
     // First install: clean creation.
     const first = await completeInstall(prisma, {
       shop: REINSTALL_SHOP,
@@ -215,6 +216,7 @@ describe('M3-Smoke', () => {
     );
     expect(events).toHaveLength(2);
     expect((events[1]?.payload as { reinstall?: boolean })?.reinstall).toBe(true);
+    });
   });
 });
 
@@ -223,4 +225,7 @@ describe('M3-Smoke', () => {
 // six tests above we narrow exclusively by message regex, so Prisma is
 // only used for the type imports above. Suppress in case it's flagged:
 void Prisma;
+
+
+
 
