@@ -1,4 +1,4 @@
-import { OUTBOX_EVENTS } from '@winback/contracts';
+import { OUTBOX_EVENTS, type BackfillResource } from '@winback/contracts';
 import {
   BackfillJobRepository,
   UnitOfWork,
@@ -30,7 +30,11 @@ const MAX_PAGES_HARD_LIMIT = 10_000;
 
 export interface BackfillRunnerOptions {
   readonly merchantId: string;
-  readonly resource: 'customers' | 'orders' | 'products';
+  /**
+   * Typed against the canonical registry in @winback/contracts. Callers
+   * use `BACKFILL_RESOURCES.customers` etc. — never string literals.
+   */
+  readonly resource: BackfillResource;
   readonly pageSize?: number;
 }
 

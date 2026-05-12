@@ -1,3 +1,4 @@
+import type { BackfillResource } from '@winback/contracts';
 import type { BackfillJob, BackfillStatus, Prisma } from '@prisma/client';
 
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';
@@ -24,7 +25,7 @@ export class BackfillJobRepository extends BaseRepository {
    */
   async getOrCreate(
     merchantId: string,
-    resource: string,
+    resource: BackfillResource,
     pageSize: number,
   ): Promise<BackfillJob> {
     assertScopeMatchesMerchant(merchantId);
@@ -35,14 +36,14 @@ export class BackfillJobRepository extends BaseRepository {
     });
   }
 
-  async findByResource(merchantId: string, resource: string): Promise<BackfillJob | null> {
+  async findByResource(merchantId: string, resource: BackfillResource): Promise<BackfillJob | null> {
     assertScopeMatchesMerchant(merchantId);
     return this.prisma.backfillJob.findUnique({
       where: { merchantId_resource: { merchantId, resource } },
     });
   }
 
-  async markStarted(merchantId: string, resource: string): Promise<void> {
+  async markStarted(merchantId: string, resource: BackfillResource): Promise<void> {
     assertScopeMatchesMerchant(merchantId);
     await this.prisma.backfillJob.update({
       where: { merchantId_resource: { merchantId, resource } },
@@ -61,7 +62,7 @@ export class BackfillJobRepository extends BaseRepository {
     tx: Prisma.TransactionClient,
     args: {
       merchantId: string;
-      resource: string;
+      resource: BackfillResource;
       newCursor: string | null;
       itemsInPage: number;
     },
@@ -78,7 +79,7 @@ export class BackfillJobRepository extends BaseRepository {
     });
   }
 
-  async markCompleted(merchantId: string, resource: string): Promise<void> {
+  async markCompleted(merchantId: string, resource: BackfillResource): Promise<void> {
     assertScopeMatchesMerchant(merchantId);
     await this.prisma.backfillJob.update({
       where: { merchantId_resource: { merchantId, resource } },
@@ -86,7 +87,7 @@ export class BackfillJobRepository extends BaseRepository {
     });
   }
 
-  async markPaused(merchantId: string, resource: string, error: string): Promise<void> {
+  async markPaused(merchantId: string, resource: BackfillResource, error: string): Promise<void> {
     assertScopeMatchesMerchant(merchantId);
     await this.prisma.backfillJob.update({
       where: { merchantId_resource: { merchantId, resource } },
@@ -94,7 +95,7 @@ export class BackfillJobRepository extends BaseRepository {
     });
   }
 
-  async markFailed(merchantId: string, resource: string, error: string): Promise<void> {
+  async markFailed(merchantId: string, resource: BackfillResource, error: string): Promise<void> {
     assertScopeMatchesMerchant(merchantId);
     await this.prisma.backfillJob.update({
       where: { merchantId_resource: { merchantId, resource } },

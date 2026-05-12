@@ -13,3 +13,10 @@ export {
   ALL_OUTBOX_EVENT_TYPES,
   type OutboxEventType,
 } from './events.js';
+
+export {
+  BACKFILL_RESOURCES,
+  ALL_BACKFILL_RESOURCES,
+  isBackfillResource,
+  type BackfillResource,
+} from './backfill.js';

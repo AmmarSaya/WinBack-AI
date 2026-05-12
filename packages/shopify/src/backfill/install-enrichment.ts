@@ -28,9 +28,20 @@ export interface EnrichInstallResult {
  *
  * Failures are returned as `{success: false, reason}` rather than thrown.
  * Enrichment is best-effort; the install itself already succeeded.
- * Callers (the install handler / future outbox drainer) log failures and
- * schedule a retry through a background job; they don't unwind the
- * install.
+ *
+ * CURRENT GAP — NO AUTOMATED RETRY YET:
+ *   A failed enrichment is logged but not re-attempted. `Merchant.
+ *   shopDetailsFetchedAt` stays null and the health check correctly
+ *   reports the merchant as un-enriched, but nothing currently picks
+ *   that up.
+ *
+ *   OWNING TASK (D3 — scheduler / cron, not yet built):
+ *     "Sweep merchants where shopDetailsFetchedAt IS NULL AND
+ *      installedAt < NOW() - INTERVAL '10 minutes' AND
+ *      tokenRevokedAt IS NULL — re-invoke enrichInstall for each."
+ *
+ *   Until D3 lands, operators can surface stale un-enriched merchants
+ *   via the same health-check query and trigger enrichment manually.
  */
 export async function enrichInstall(
   prisma: WinbackPrisma,

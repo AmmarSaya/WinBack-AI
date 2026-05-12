@@ -61,7 +61,14 @@
 //   Time: UTC always. Merchant-local windows use Merchant.timezone at
 //     query time.
 //   IDs: internal PKs are cuid() strings. External Shopify IDs are String
-//     (forward-compat with GIDs). Session.userId BigInt (forced by adapter).
+//     and store the FULL GID (e.g. "gid://shopify/Customer/12345"), NOT
+//     the numeric portion alone. Reasons: (1) modern Admin GraphQL takes
+//     `ID!` (GIDs) so storing GIDs avoids reconstruction at every call
+//     site; (2) the numeric is ambiguous across resources, the GID
+//     disambiguates. Webhook drainers (D2) MUST wrap numeric webhook
+//     payload IDs into full GIDs before upsert — see `toCustomerGid` in
+//     @winback/shopify/backfill. Session.userId is BigInt (forced by the
+//     Shopify session adapter; not our choice).
 //   Cascade policy (every FK explicitly accounted for):
 //     Merchant → Customer            : CASCADE   (GDPR right-to-erasure)
 //     Merchant → Order               : CASCADE
