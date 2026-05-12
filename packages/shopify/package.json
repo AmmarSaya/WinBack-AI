@@ -19,6 +19,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@prisma/client": "5.22.0",
     "@winback/config": "workspace:*",
     "@winback/contracts": "workspace:*",
     "@winback/crypto": "workspace:*",

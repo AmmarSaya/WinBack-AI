@@ -67,3 +67,6 @@ export {
 
 // --- Admin API client (C4) -------------------------------------------------
 export * from './admin/index.js';
+
+// --- Backfill + install enrichment (C5) ------------------------------------
+export * from './backfill/index.js';

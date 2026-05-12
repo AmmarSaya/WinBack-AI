@@ -217,6 +217,7 @@ model Merchant {
   outboxEvents        OutboxEvent[]
   idempotencyKeys     IdempotencyKey[]
   auditLogs           AuditLog[]
+  backfillJobs        BackfillJob[]
   settings            MerchantSettings?
   billingSubscription BillingSubscription?
 
@@ -735,4 +736,52 @@ model AuditLog {
   @@index([merchantId, createdAt])
   @@index([action, createdAt])
   @@index([targetType, targetId])
+}
+
+// =============================================================================
+// Backfill jobs (C5)
+//
+// Tracks resumable per-resource historical pulls from Shopify. The runner
+// commits each page's row writes and `cursor` update in the SAME tx; a
+// crash loses at most one in-flight page, and the next run re-fetches
+// from the persisted cursor (upsert idempotency handles dup writes).
+//
+// Cascades on Merchant delete (operational data; no compliance retention).
+// =============================================================================
+
+enum BackfillStatus {
+  pending
+  running
+  completed
+  paused
+  failed
+}
+
+model BackfillJob {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  // "customers" | "orders" | "products" — kept String, not enum, so adding
+  // a resource (e.g. "discounts") doesn't need a DDL migration. The
+  // application validates against a typed registry.
+  resource String
+
+  status         BackfillStatus @default(pending)
+  // Shopify GraphQL endCursor for resume. NULL = start from beginning.
+  cursor         String?
+  pageSize       Int            @default(50)
+  itemsProcessed Int            @default(0)
+  pagesProcessed Int            @default(0)
+  attempts       Int            @default(0)
+  lastError      String?
+
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([merchantId, resource])
+  @@index([status])
 }

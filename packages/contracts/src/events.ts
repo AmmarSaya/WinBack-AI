@@ -21,6 +21,7 @@ export const OUTBOX_EVENTS = {
     uninstalled: 'merchant.uninstalled',
     needs_reauth: 'merchant.needs_reauth',
     shop_details_fetched: 'merchant.shop_details_fetched',
+    backfill_completed: 'merchant.backfill_completed',
   },
   customer: {
     created: 'customer.created',
