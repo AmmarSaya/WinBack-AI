@@ -55,7 +55,8 @@ export async function completeInstall(
   // `findUnique` inside the tx determines new-vs-reinstall atomically
   // with the subsequent writes. No external read → no race.
   return withSystemScope('shopify.install', async () => {
-    return prisma.$transaction(async (tx) => {
+    return prisma.$transaction(async (rawTx) => {
+      const tx = rawTx as unknown as WinbackPrisma;
       const existing = await tx.merchant.findUnique({
         where: { shop: args.shop },
         select: { id: true },

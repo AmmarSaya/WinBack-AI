@@ -149,10 +149,10 @@ describe('M3-Smoke', () => {
     // (only model-specific checks for aiTone) so the raw value reaches
     // the DB CHECK.
     await expect(
-      withTenantScope(merchantId, () =>
-        prisma.outboxEvent.create({
-          data: { merchantId, type: 'INVALID UPPERCASE WITH SPACES', payload: {} },
-        }),
+      prisma.$executeRawUnsafe(
+        `INSERT INTO "OutboxEvent" ("merchantId", "type", "payload") VALUES ($1, $2, '{}'::jsonb)`,
+        merchantId,
+        'INVALID UPPERCASE WITH SPACES',
       ),
     ).rejects.toThrow(/outbox_event_type_format/);
 
