@@ -64,3 +64,6 @@ export {
   type CompleteInstallArgs,
   type CompleteInstallResult,
 } from './install.js';
+
+// --- Admin API client (C4) -------------------------------------------------
+export * from './admin/index.js';

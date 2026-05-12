@@ -1,0 +1,105 @@
+import { GDPR_TOPICS, WEBHOOK_TOPIC_TO_EVENT } from '../webhook-topics.js';
+import type { AdminClient } from './client.js';
+
+/**
+ * Topic strings (as Shopify expects in GraphQL — UPPER_SNAKE_CASE).
+ * Shopify's GraphQL `WebhookSubscriptionTopic` enum names differ from
+ * the topic strings sent in webhook delivery headers.
+ *
+ * Example: webhook header `X-Shopify-Topic: customers/create`
+ *          GraphQL enum:                 `CUSTOMERS_CREATE`
+ */
+function topicHeaderToGraphqlEnum(topic: string): string {
+  return topic.toUpperCase().replaceAll('/', '_');
+}
+
+const SUBSCRIBE_MUTATION = `
+  mutation Subscribe($topic: WebhookSubscriptionTopic!, $url: URL!) {
+    webhookSubscriptionCreate(
+      topic: $topic
+      webhookSubscription: { callbackUrl: $url, format: JSON }
+    ) {
+      userErrors { field message }
+      webhookSubscription { id }
+    }
+  }
+`;
+
+interface SubscribeResponse {
+  webhookSubscriptionCreate?: {
+    userErrors?: Array<{ field?: string[]; message: string }>;
+    webhookSubscription?: { id: string } | null;
+  };
+}
+
+export interface SubscribeResult {
+  readonly topic: string;
+  readonly subscriptionId: string | null;
+  readonly errors: ReadonlyArray<{ field?: string[]; message: string }>;
+}
+
+/**
+ * Subscribes all known topics (commerce + GDPR) for a merchant to the
+ * given callback URL. Idempotent at the Shopify side: subscribing an
+ * already-subscribed topic with the same URL returns the existing
+ * subscription.
+ *
+ * Per-topic failures are reported in the result; the function does NOT
+ * throw on a single-topic failure. The caller decides whether partial
+ * subscription is acceptable (typically: log + alert, retry in a
+ * reconciliation worker).
+ *
+ * Webhook URL convention: `<SHOPIFY_APP_URL>/webhooks` — the single
+ * dispatch endpoint from C3. Topic identity is carried in the
+ * `X-Shopify-Topic` header at delivery time.
+ *
+ * Estimated cost ~10 per mutation. With ~13 topics this is a small burst;
+ * the cost tracker handles pacing if needed.
+ */
+export async function subscribeAllWebhooks(
+  client: AdminClient,
+  merchantId: string,
+  callbackUrl: string,
+): Promise<ReadonlyArray<SubscribeResult>> {
+  const topics = [
+    ...Object.keys(WEBHOOK_TOPIC_TO_EVENT),
+    ...GDPR_TOPICS,
+  ];
+  const results: SubscribeResult[] = [];
+  for (const topic of topics) {
+    const result = await subscribeOne(client, merchantId, topic, callbackUrl);
+    results.push(result);
+  }
+  return results;
+}
+
+async function subscribeOne(
+  client: AdminClient,
+  merchantId: string,
+  topic: string,
+  callbackUrl: string,
+): Promise<SubscribeResult> {
+  try {
+    const data = await client.graphql<SubscribeResponse>(merchantId, {
+      query: SUBSCRIBE_MUTATION,
+      variables: {
+        topic: topicHeaderToGraphqlEnum(topic),
+        url: callbackUrl,
+      },
+      estimatedCost: 10,
+    });
+    const wrapper = data.webhookSubscriptionCreate ?? {};
+    const userErrors = wrapper.userErrors ?? [];
+    return {
+      topic,
+      subscriptionId: wrapper.webhookSubscription?.id ?? null,
+      errors: userErrors,
+    };
+  } catch (err) {
+    return {
+      topic,
+      subscriptionId: null,
+      errors: [{ message: err instanceof Error ? err.message : String(err) }],
+    };
+  }
+}

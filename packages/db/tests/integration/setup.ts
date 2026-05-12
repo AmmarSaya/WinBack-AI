@@ -20,6 +20,22 @@ export function getTestClient(): ReturnType<typeof createWinbackPrisma> {
  *
  * Not a tx — deleteMany operations are fast; failure mid-cleanup is rare
  * and recoverable by re-running. Keeping it simple for the smoke suite.
+ *
+ * Order is INTENTIONAL — children before parents, per the FK graph in
+ * schema.prisma v2.2:
+ *
+ *   1. OrderLineItem / OutboxEvent / IdempotencyKey / WebhookLog / AuditLog
+ *      (no further children)
+ *   2. Order / ProductVariant (children of higher rows already gone)
+ *   3. Product / Customer (children of Merchant)
+ *   4. BillingSubscription / MerchantSettings (siblings)
+ *   5. Merchant (last)
+ *
+ * Every FK is CASCADE or SetNull, so `DELETE FROM Merchant` cascade would
+ * also work — but the explicit order is defensive against future schema
+ * additions that introduce a RESTRICT FK. It also avoids intermittent
+ * "fails only on second run" failures, where a misordered delete violates
+ * a constraint left dangling by a prior partial cleanup.
  */
 export async function resetDb(): Promise<void> {
   const client = getTestClient();
