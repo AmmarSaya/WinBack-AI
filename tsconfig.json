@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/contracts" },
+    { "path": "./packages/errors" },
+    { "path": "./packages/config" },
+    { "path": "./packages/logger" },
+    { "path": "./packages/crypto" },
+    { "path": "./packages/db" },
+    { "path": "./packages/shopify" }
+  ]
+}

@@ -1,0 +1,29 @@
+# Local Postgres for the M3-Smoke integration tests.
+#
+# Started via `pnpm db:test:up` (or implicitly by `pnpm db:test`). Volume is
+# named so data persists across container restarts during iteration; wipe
+# with `pnpm db:test:down`.
+#
+# Port 5433 (not 5432) so it doesn't collide with a developer's local
+# Postgres instance.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: winback-test-postgres
+    environment:
+      POSTGRES_USER: winback
+      POSTGRES_PASSWORD: winback
+      POSTGRES_DB: winback_test
+    ports:
+      - "5433:5432"
+    volumes:
+      - winback-test-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U winback -d winback_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  winback-test-pg:

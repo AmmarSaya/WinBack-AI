@@ -1,0 +1,41 @@
+{
+  "name": "@winback/db",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "prisma"],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "postinstall": "prisma generate",
+    "prisma:generate": "prisma generate",
+    "prisma:validate": "prisma validate",
+    "prisma:format": "prisma format",
+    "migrate:dev": "prisma migrate dev",
+    "migrate:deploy": "prisma migrate deploy",
+    "migrate:status": "prisma migrate status",
+    "migrate:diff": "prisma migrate diff --from-migrations ./prisma/migrations --to-schema-datamodel ./prisma/schema.prisma --exit-code",
+    "db:reset": "node ./scripts/db-reset.mjs",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "@winback/contracts": "workspace:*",
+    "@winback/errors": "workspace:*",
+    "@winback/logger": "workspace:*"
+  },
+  "devDependencies": {
+    "@winback/shopify": "workspace:*",
+    "prisma": "5.22.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,738 @@
+// =============================================================================
+// AI Customer Winback — Database Schema (B1, version 2)
+// =============================================================================
+//
+// Revision history:
+//   v1   — initial draft (CP-1 candidate).
+//   v2.2 — third-round review resolutions:
+//          · aiTone enforcement strategy committed: DB CHECK floor (T5) +
+//            zod schema in @winback/contracts + typed repository chokepoint.
+//            Documented in field comment and header T5 entry.
+//          · Migration file separation policy committed in B2 plan (one
+//            auto-generated migration; T1–T5 as separate hand-authored
+//            migrations).
+//          · ProductVariant.inventoryQuantity confirmed at line 450.
+//          · db:reset safeguard scope committed in B2 plan.
+//   v2.1 — second-round review fixes:
+//          · OrderLineItem.merchantId is now a proper FK with Cascade
+//            (was a non-FK String — DB-enforced tenant safety > redundant
+//            cascade aesthetics).
+//          · BillingSubscription.onHoldReason → BillingHoldReason enum.
+//          · MerchantSettings.aiToneOverride String → aiTone Json? with
+//            documented shape.
+//          · Soft-delete enforcement explicitly relocated from
+//            "repository auto-filters" (comment-contract) to a Prisma
+//            Client Extension in B3 — single point of enforcement.
+//          · T1 raw-SQL spelled out (composite functional + partial
+//            index, exact CREATE INDEX statement below).
+//          · Cascade policy header covers all v2.1 tables explicitly.
+//   v2   — incorporated CP-1 review feedback:
+//         · Field-level encryption on Session.accessToken (header-doc only;
+//           ciphertext fits the existing String column).
+//         · Dropped Customer.emailLower; functional index lower(email) added
+//           in B2 raw SQL; B3 provides typed findByEmail helper.
+//         · CustomerState made orthogonal to isVip (was conflated).
+//         · WebhookLog payload offloadable to object storage via
+//           payload / payloadUrl / payloadSize columns; C3 policy decides
+//           inline vs offload at ingestion (default threshold 50 KB).
+//         · OutboxEvent.type kept as String; check constraint + TS-typed
+//           registry layer enforce format (B2 + @winback/contracts).
+//         · ProductVariant model added (customers buy variants, not products).
+//         · OrderFinancialStatus / OrderFulfillmentStatus / ProductStatus
+//           enumerated.
+//         · Customer.totalSpentCents dropped (multi-currency makes it
+//           semantically meaningless; per-currency rollups in Epic H).
+//         · ordersCount kept and explicitly framed as Shopify cache.
+//         · Merchant.shopifyPlan, shopDetailsFetchedAt added.
+//         · Session @@index([expires]) added.
+//         · OrderLineItem.merchantId denormalized; product/variant FKs split.
+//         · Soft-delete (deletedAt) added on Customer, Product, ProductVariant.
+//         · Indexes added: WebhookLog(status, receivedAt),
+//                          Customer(merchantId, acceptsMarketing),
+//                          Order(merchantId, financialStatus).
+//         · MerchantSettings, BillingSubscription, AuditLog tables added.
+//
+// CONVENTIONS — UNCHANGED from v1:
+//   Multi-tenancy: every business table carries merchantId; composite
+//     uniques (merchantId, shopifyXxxId); FKs never cross tenants.
+//   Money: BigInt cents only. Currency: ISO 4217 Char(3). Multi-currency
+//     handled per-order (presentmentCurrency) and per-currency at the
+//     rollup layer (Epic H) — never cumulative on Customer.
+//   Time: UTC always. Merchant-local windows use Merchant.timezone at
+//     query time.
+//   IDs: internal PKs are cuid() strings. External Shopify IDs are String
+//     (forward-compat with GIDs). Session.userId BigInt (forced by adapter).
+//   Cascade policy (every FK explicitly accounted for):
+//     Merchant → Customer            : CASCADE   (GDPR right-to-erasure)
+//     Merchant → Order               : CASCADE
+//     Merchant → Product             : CASCADE
+//     Merchant → ProductVariant      : CASCADE
+//     Merchant → OrderLineItem       : CASCADE   (direct FK; transitively
+//                                                 also via Order — Postgres
+//                                                 handles this correctly)
+//     Merchant → MerchantSettings    : CASCADE   (operational config)
+//     Merchant → BillingSubscription : CASCADE   (operational; no retention)
+//     Merchant → OutboxEvent         : CASCADE
+//     Merchant → IdempotencyKey      : CASCADE
+//     Merchant → WebhookLog          : SetNull   (forensic survival)
+//     Merchant → AuditLog            : SetNull   (compliance evidence)
+//     Order    → OrderLineItem       : CASCADE
+//     Product  → ProductVariant      : CASCADE
+//     Customer → Order               : SetNull   (severs personal link;
+//                                                 preserves merchant revenue
+//                                                 history)
+//     Product  → OrderLineItem       : SetNull   (product gone but line item
+//                                                 retained for revenue)
+//     ProductVariant → OrderLineItem : SetNull
+//
+// ENCRYPTION
+//   Session.accessToken stores AES-256-GCM CIPHERTEXT (not plaintext).
+//   Encryption wrapper around the Shopify session adapter lives in
+//   @winback/crypto (M2, alongside C1). Never log this column.
+//   Customer email/phone are NOT field-encrypted (queryable); disk-level
+//   encryption from the managed Postgres provider is the protection.
+//
+// SOFT-DELETE
+//   Customer / Product / ProductVariant carry deletedAt. Order has no
+//   deletedAt (orders are immutable; cancel/refund are status changes).
+//
+//   Enforcement is NOT a repository convention. A Prisma Client Extension
+//   (B3 — packages/db/src/extensions/soft-delete.ts) intercepts every
+//   `findMany | findFirst | findUnique | count | aggregate` on these
+//   models and injects `where: { deletedAt: null }`. The extension is the
+//   single point of enforcement. Application code that needs to read
+//   deleted rows must opt in explicitly with `deletedAt: { not: null }`
+//   — which surfaces at call sites for code review.
+//
+//   This replaces the "repository must remember to filter" pattern, which
+//   is exactly the kind of comment-contract that gets violated at 2 a.m.
+//
+// RAW-SQL ADDITIONS (B2 hard tasks, exact SQL pinned):
+//
+//   T1 — Composite functional + partial index for case-insensitive customer
+//        email lookup. Composite (merchantId, lower(email)) so the planner
+//        uses it for `WHERE merchantId = $1 AND lower(email) = lower($2)`;
+//        partial WHERE deletedAt IS NULL so deleted rows don't bloat the
+//        index AND the predicate matches what the Prisma soft-delete
+//        extension actually queries.
+//
+//          CREATE INDEX customer_merchant_email_lower
+//            ON "Customer" ("merchantId", lower(email))
+//            WHERE "deletedAt" IS NULL;
+//
+//   T2 — Partial index on outbox drain path:
+//
+//          CREATE INDEX outbox_unprocessed_created_at
+//            ON "OutboxEvent" ("createdAt")
+//            WHERE "processedAt" IS NULL;
+//
+//   T3 — GIN index for tag membership queries on Customer:
+//
+//          CREATE INDEX customer_tags_gin
+//            ON "Customer" USING GIN (tags);
+//
+//   T4 — Check constraint enforcing OutboxEvent.type format. Combined with
+//        the TS-typed event-name registry in @winback/contracts, this gives
+//        defense in depth:
+//
+//          ALTER TABLE "OutboxEvent"
+//            ADD CONSTRAINT outbox_event_type_format
+//            CHECK (type ~ '^[a-z][a-z_]*\.[a-z][a-z_0-9]*(@v[0-9]+)?$');
+//
+//   T5 — Structural floor for MerchantSettings.aiTone (Json column). DB
+//        rejects anything that isn't NULL or a Json object. Detailed shape
+//        validation (enum values for `style`, length bounds, etc.) lives
+//        in @winback/contracts' AiTone zod schema, enforced at the
+//        repository write boundary in B3. Two-layer defense: DB owns the
+//        floor, application owns the shape.
+//
+//          ALTER TABLE "MerchantSettings"
+//            ADD CONSTRAINT merchant_settings_ai_tone_shape
+//            CHECK ("aiTone" IS NULL OR jsonb_typeof("aiTone") = 'object');
+//
+// RESERVED FOR LATER SUBSYSTEMS (additive; no churn to v2 tables):
+//   Epic E: CustomerScore, Segment, SegmentMembership
+//   Epic F: AiGeneration, AiSpendBucket
+//   Epic G: Suppression, Workflow, WorkflowExecution, WorkflowStepExecution,
+//           Campaign, CampaignTarget, Message, MessageEvent,
+//           MessageQuotaBucket
+//   Epic H: AttributionEvent, AttributionWindow, MetricsDailyRollup,
+//           CustomerCurrencyTotal
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =============================================================================
+// Tenant
+// =============================================================================
+
+model Merchant {
+  id            String  @id @default(cuid())
+  shop          String  @unique // "foo.myshopify.com"
+  shopifyShopId String? @unique
+
+  email   String?
+  name    String?
+  country String? @db.Char(2)
+  // Store's default currency. NOT used to denormalize aggregate totals —
+  // multi-currency stores carry presentment fields on Order; per-currency
+  // rollups live in Epic H.
+  currency String? @db.Char(3)
+  // IANA tz (e.g. "America/Los_Angeles"). Used for all merchant-local
+  // window computations (dormancy, send-time scheduling).
+  timezone String?
+  // Documented values: "basic" | "shopify" | "advanced" | "plus" |
+  // "partner_test" | "affiliate". Kept String, not enum, because Shopify
+  // adds tiers without notice. Repository wraps with a typed accessor.
+  shopifyPlan String?
+
+  // null  → shop details have not been fetched yet (just installed).
+  // set   → fetched once; null name/email mean Shopify returned them null.
+  // Lets the health check distinguish "not yet" from "permanently null".
+  shopDetailsFetchedAt DateTime?
+
+  installedAt    DateTime  @default(now())
+  uninstalledAt  DateTime?
+  // Set when a 401 from the Admin API indicates the offline token was
+  // revoked (merchant removed app from another device, etc.). Pauses all
+  // workers for this merchant until re-auth.
+  tokenRevokedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  customers           Customer[]
+  orders              Order[]
+  orderLineItems      OrderLineItem[]
+  products            Product[]
+  productVariants     ProductVariant[]
+  webhookLogs         WebhookLog[]
+  outboxEvents        OutboxEvent[]
+  idempotencyKeys     IdempotencyKey[]
+  auditLogs           AuditLog[]
+  settings            MerchantSettings?
+  billingSubscription BillingSubscription?
+
+  @@index([uninstalledAt]) // cron: hard-delete after retention
+  @@index([tokenRevokedAt]) // cron: surface re-auth prompts
+}
+
+// =============================================================================
+// Merchant configuration
+//
+// Separated from Merchant so settings additions don't churn the core tenant
+// table. 1:1 row; created with defaults during install.
+// =============================================================================
+
+model MerchantSettings {
+  id         String   @id @default(cuid())
+  merchantId String   @unique
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  // Attribution (Epic H)
+  attributionDirectWindowDays   Int @default(14)
+  attributionAssistedWindowDays Int @default(30)
+
+  // Send-time policy (Epic G), in merchant tz
+  sendTimeStartHour        Int @default(9)
+  sendTimeEndHour          Int @default(18)
+  defaultCooldownHours     Int @default(168) // 1 week
+  maxDailySendsPerCustomer Int @default(1)
+
+  // Cost / volume ceilings — ENFORCED from M6/M7, not deferred to M10.
+  // Defaults are conservative; merchants raise via onboarding/settings UI.
+  monthlyAiSpendCapCents BigInt @default(50000) // $500/mo
+  monthlySendsCap        Int    @default(1000)
+
+  // Structured tone configuration merged into AI prompts (Epic F).
+  // Shape (locked here for B1; exact zod schema owned by F2 in
+  // @winback/contracts):
+  //   {
+  //     "style":             "formal" | "casual" | "playful" | "professional",
+  //     "avoid":             string[],   // banned words / phrases
+  //     "emphasize":         string[],   // brand values to lean into
+  //     "emojiPolicy":       "none" | "minimal" | "liberal",
+  //     "brandVoiceSample":  string,     // optional 100-word sample
+  //     "customInstructions": string     // free-form additional rules
+  //   }
+  //
+  // Enforcement (two-layer; see also T5 in header):
+  //   · DB CHECK (T5): rejects non-object Json. Structural floor only.
+  //   · Repository chokepoint: MerchantSettingsRepository.update() in
+  //     @winback/db accepts a typed `AiTone` parameter, NOT raw Json. The
+  //     typed parameter is parsed/validated by @winback/contracts' zod
+  //     schema. There is no untyped write path.
+  aiTone Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// =============================================================================
+// Billing
+//
+// Placeholder for Shopify Billing API integration in M10. Created during
+// install with status=trialing.
+// =============================================================================
+
+enum BillingSubscriptionStatus {
+  trialing
+  active
+  past_due
+  cancelled
+  paused
+}
+
+enum BillingHoldReason {
+  shop_on_hold   // Shopify reported the shop itself is on hold
+  payment_failed // Recurring charge attempt failed
+  plan_change    // Mid-transition between plans
+  manual_pause   // Operator intervention
+  fraud_review   // Internal review
+}
+
+model BillingSubscription {
+  id         String   @id @default(cuid())
+  merchantId String   @unique
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  shopifyChargeId       String? // Shopify Recurring/Application Charge ID
+  status                BillingSubscriptionStatus @default(trialing)
+  plan                  String? // internal plan identifier
+  trialEndsAt           DateTime?
+  currentPeriodStartsAt DateTime?
+  currentPeriodEndsAt   DateTime?
+
+  // Operator-set hold (payment failed, manual intervention, etc.)
+  onHoldReason BillingHoldReason?
+  onHoldAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([currentPeriodEndsAt])
+}
+
+// =============================================================================
+// Shopify Session
+//
+// Matches @shopify/shopify-app-session-storage-prisma. `accessToken` is
+// AES-256-GCM CIPHERTEXT — encryption wraps the official adapter (M2).
+// Never log this column, never expose it via any API.
+// =============================================================================
+
+model Session {
+  id            String    @id
+  shop          String
+  state         String
+  isOnline      Boolean   @default(false)
+  scope         String?
+  expires       DateTime?
+  accessToken   String // CIPHERTEXT — see header
+  userId        BigInt?
+  firstName     String?
+  lastName      String?
+  email         String?
+  accountOwner  Boolean   @default(false)
+  locale        String?
+  collaborator  Boolean?  @default(false)
+  emailVerified Boolean?  @default(false)
+
+  @@index([shop])
+  @@index([expires]) // cleanup cron
+}
+
+// =============================================================================
+// Customer
+//
+// `state` (lifecycle) and `isVip` (value) are ORTHOGONAL dimensions:
+//   (state=at_risk, isVip=true)   → high-value customer trending to churn
+//                                    (the highest-priority retention target)
+//   (state=dormant, isVip=false)  → low-value lapsed customer
+//
+// `ordersCount` is a cache from Shopify's customer payload — we copy it on
+// every customers/update webhook. Never computed locally; never used as
+// source of truth.
+//
+// Case-insensitive email lookup is served by a functional index lower(email)
+// added via raw SQL in B2 (T1). No emailLower column.
+// =============================================================================
+
+enum CustomerState {
+  active
+  warm
+  at_risk
+  dormant
+  lost
+}
+
+model Customer {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  shopifyCustomerId String
+
+  email     String?
+  phone     String?
+  firstName String?
+  lastName  String?
+
+  acceptsMarketing Boolean @default(false)
+  acceptsSms       Boolean @default(false)
+
+  // Cached from Shopify customers payload (NOT computed locally).
+  ordersCount Int @default(0)
+
+  firstOrderAt DateTime?
+  lastOrderAt  DateTime?
+
+  state CustomerState @default(active)
+  isVip Boolean       @default(false)
+
+  tags String[] @default([]) // GIN index via raw SQL (T3)
+
+  shopifyCreatedAt DateTime?
+  shopifyUpdatedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  // Set when Shopify reports the customer gone (404 on resync) or when
+  // a customers/redact GDPR webhook fires. Repository auto-filters.
+  deletedAt DateTime?
+
+  orders Order[]
+
+  @@unique([merchantId, shopifyCustomerId])
+  @@index([merchantId, state])
+  @@index([merchantId, lastOrderAt])
+  @@index([merchantId, acceptsMarketing]) // hot path: campaign audience build
+  @@index([merchantId, isVip])
+}
+
+// =============================================================================
+// Product / ProductVariant
+//
+// Customers buy variants. OrderLineItem links to ProductVariant for
+// replenishment-interval scoring (E5) and per-variant pricing history.
+// =============================================================================
+
+enum ProductStatus {
+  active
+  draft
+  archived
+}
+
+model Product {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  shopifyProductId String
+
+  title       String
+  productType String?
+  vendor      String?
+  status      ProductStatus @default(active)
+
+  shopifyCreatedAt DateTime?
+  shopifyUpdatedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  variants  ProductVariant[]
+  lineItems OrderLineItem[]
+
+  @@unique([merchantId, shopifyProductId])
+  @@index([merchantId, productType]) // category affinity
+  @@index([merchantId, status])
+}
+
+model ProductVariant {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  productId  String
+  product    Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  shopifyVariantId String
+
+  sku   String?
+  title String
+
+  priceCents          BigInt
+  compareAtPriceCents BigInt?
+  currency            String  @db.Char(3)
+
+  inventoryQuantity Int?
+
+  shopifyCreatedAt DateTime?
+  shopifyUpdatedAt DateTime?
+
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+  deletedAt DateTime?
+
+  lineItems OrderLineItem[]
+
+  @@unique([merchantId, shopifyVariantId])
+  @@index([productId])
+  @@index([merchantId, sku])
+}
+
+// =============================================================================
+// Order
+// =============================================================================
+
+enum OrderFinancialStatus {
+  pending
+  authorized
+  partially_paid
+  paid
+  partially_refunded
+  refunded
+  voided
+}
+
+enum OrderFulfillmentStatus {
+  fulfilled
+  partial
+  unfulfilled
+  restocked
+}
+
+model Order {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  customerId String?
+  // SetNull (not Cascade) so GDPR customer purge severs the personal link
+  // but preserves merchant revenue history.
+  customer   Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
+  shopifyOrderId     String
+  shopifyOrderNumber String?
+
+  totalAmountCents    BigInt
+  subtotalAmountCents BigInt
+  totalTaxCents       BigInt @default(0)
+  totalDiscountCents  BigInt @default(0)
+  currency            String @db.Char(3)
+
+  presentmentCurrency   String? @db.Char(3)
+  presentmentTotalCents BigInt?
+
+  financialStatus   OrderFinancialStatus?
+  fulfillmentStatus OrderFulfillmentStatus?
+
+  // `placedAt` is when the customer placed the order (Shopify created_at).
+  // Replaces a redundant shopifyCreatedAt column; the business name is the
+  // useful one.
+  placedAt    DateTime
+  cancelledAt DateTime?
+
+  shopifyUpdatedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lineItems OrderLineItem[]
+
+  @@unique([merchantId, shopifyOrderId])
+  @@index([merchantId, customerId])
+  @@index([merchantId, placedAt])
+  @@index([merchantId, financialStatus]) // attribution & revenue rollups
+}
+
+model OrderLineItem {
+  id String @id @default(cuid())
+  // Proper FK to Merchant. Postgres handles the transitive cascade path
+  // (Merchant → Order → OrderLineItem AND Merchant → OrderLineItem) just
+  // fine — the row is deleted exactly once. The point is DB-ENFORCED tenant
+  // safety: a junior dev cannot accidentally write the wrong merchantId
+  // here, because the FK constraint will reject it.
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  shopifyLineItemId String
+
+  productId        String?
+  product          Product?        @relation(fields: [productId], references: [id], onDelete: SetNull)
+  productVariantId String?
+  productVariant   ProductVariant? @relation(fields: [productVariantId], references: [id], onDelete: SetNull)
+
+  title          String
+  quantity       Int
+  unitPriceCents BigInt
+  currency       String @db.Char(3)
+
+  createdAt DateTime @default(now())
+
+  @@unique([orderId, shopifyLineItemId])
+  @@index([merchantId, productId])
+  @@index([productVariantId])
+}
+
+// =============================================================================
+// Webhook log
+//
+// To bound storage at scale, payloads larger than INLINE_LIMIT_BYTES (50 KB
+// default) are offloaded to object storage and referenced via payloadUrl.
+// Both payload and payloadUrl are nullable; payloadSize is the original
+// byte size regardless of storage location. The choice is made by C3 at
+// ingestion.
+// =============================================================================
+
+enum WebhookProcessingStatus {
+  received
+  processed
+  failed
+  skipped_duplicate
+}
+
+model WebhookLog {
+  id         String    @id @default(cuid())
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  // Denormalized so logs are queryable after the merchant FK is nulled
+  // (forensic survival post-merchant-deletion).
+  shop       String
+
+  topic            String
+  shopifyWebhookId String?
+  idempotencyKey   String?
+  hmacOk           Boolean
+
+  status       WebhookProcessingStatus @default(received)
+  errorCode    String?
+  errorMessage String?
+
+  payload     Json?   // stored inline when small
+  payloadUrl  String? // object storage reference when offloaded
+  payloadSize Int?    // original size in bytes
+
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+
+  @@index([merchantId, receivedAt])
+  @@index([shop, receivedAt])
+  @@index([topic, receivedAt])
+  @@index([status, receivedAt]) // monitoring + retry workers
+  @@index([idempotencyKey])
+}
+
+// =============================================================================
+// Outbox
+//
+// Domain events written in the SAME DB transaction as the business write
+// that produced them. A worker drains the outbox into BullMQ (D2). This
+// eliminates dual-write inconsistency between DB and queue.
+//
+// `type` is a String, but format is enforced by:
+//   (a) a B2 CHECK constraint matching ^[a-z][a-z_]*\.[a-z][a-z_0-9]*(?:@v\d+)?$
+//   (b) a TS-typed event-name registry in @winback/contracts — producers
+//       reference registry constants, not string literals.
+//
+// Partial index WHERE processedAt IS NULL added in B2 (T2); the standard
+// composite index here is a fallback until partition / partial lands.
+// =============================================================================
+
+model OutboxEvent {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  type    String // see header for validation strategy
+  payload Json
+
+  createdAt   DateTime  @default(now())
+  processedAt DateTime?
+  attempts    Int       @default(0)
+  lastError   String?
+
+  @@index([processedAt, createdAt])
+  @@index([merchantId, type, createdAt])
+}
+
+// =============================================================================
+// Idempotency keys
+//
+// Composite PK (merchantId, key). Key format conventions:
+//   webhook ingestion: "<topic>:<X-Shopify-Webhook-Id>"
+//                  or  "<topic>:<resourceId>:<shopifyUpdatedAt>"
+//   send pipeline:     "send:<campaignId>:<customerId>:<stepId>"
+//
+// `expiresAt` indexed for cron-driven cleanup (D3). Typical TTL: 7d
+// (webhook dedup window) or 30d (send pipeline keys).
+// =============================================================================
+
+model IdempotencyKey {
+  key        String
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@id([merchantId, key])
+  @@index([expiresAt])
+}
+
+// =============================================================================
+// Audit log
+//
+// Append-only record of sensitive operations: GDPR redactions, merchant
+// uninstalls, operator interventions, billing actions. Compliance evidence;
+// retained through merchant deletion via SetNull + denormalized `shop`.
+//
+// Distinct from WebhookLog (operational debugging) and OutboxEvent
+// (domain events). AuditLog is for human-readable forensics.
+// =============================================================================
+
+enum AuditActorType {
+  system
+  merchant
+  operator
+}
+
+model AuditLog {
+  id         String    @id @default(cuid())
+  merchantId String?
+  merchant   Merchant? @relation(fields: [merchantId], references: [id], onDelete: SetNull)
+  shop       String?
+
+  actorType AuditActorType
+  // Operator email, merchant user id, or system component name.
+  actorId   String?
+
+  // Dotted action name. Examples:
+  //   "merchant.uninstalled"
+  //   "gdpr.customer_redact"
+  //   "campaign.force_cancelled"
+  //   "billing.subscription_paused"
+  action     String
+  targetType String? // "customer" | "merchant" | "campaign" | ...
+  targetId   String?
+
+  context Json?
+
+  createdAt DateTime @default(now())
+
+  @@index([merchantId, createdAt])
+  @@index([action, createdAt])
+  @@index([targetType, targetId])
+}

@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*"],
+  "references": [
+    { "path": "../config" },
+    { "path": "../contracts" },
+    { "path": "../crypto" },
+    { "path": "../db" },
+    { "path": "../errors" },
+    { "path": "../logger" }
+  ]
+}

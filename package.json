@@ -1,0 +1,46 @@
+{
+  "name": "ai-customer-winback",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI-powered customer winback platform for Shopify merchants.",
+  "engines": {
+    "node": ">=20.11.0",
+    "pnpm": ">=9.0.0"
+  },
+  "packageManager": "pnpm@9.12.0",
+  "scripts": {
+    "build": "tsc -b",
+    "build:clean": "tsc -b --clean",
+    "typecheck": "tsc -b --noEmit",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "db:migrate:dev": "pnpm --filter @winback/db migrate:dev",
+    "db:migrate:deploy": "pnpm --filter @winback/db migrate:deploy",
+    "db:migrate:status": "pnpm --filter @winback/db migrate:status",
+    "db:migrate:diff": "pnpm --filter @winback/db migrate:diff",
+    "db:reset": "pnpm --filter @winback/db db:reset",
+    "db:test": "node ./scripts/db-test.mjs",
+    "db:test:up": "node ./scripts/db-test.mjs up",
+    "db:test:run": "node ./scripts/db-test.mjs run",
+    "db:test:down": "node ./scripts/db-test.mjs down"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.10",
+    "eslint": "^9.17.0",
+    "eslint-import-resolver-typescript": "^3.7.0",
+    "eslint-plugin-import": "^2.31.0",
+    "prettier": "^3.4.2",
+    "prisma": "5.22.0",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.0"
+  },
+  "pnpm": {
+    "overrides": {
+      "@prisma/client": "5.22.0",
+      "prisma": "5.22.0"
+    }
+  }
+}

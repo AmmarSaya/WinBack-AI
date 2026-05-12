@@ -1,0 +1,24 @@
+{
+  "name": "@winback/logger",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean"
+  },
+  "dependencies": {
+    "@winback/config": "workspace:*",
+    "pino": "^9.5.0",
+    "pino-pretty": "^11.3.0"
+  }
+}

@@ -1,0 +1,68 @@
+# Detects drift between schema.prisma and the migrations folder.
+# Runs on every PR that touches either — not gated to merge.
+#
+# Triggers a Postgres service container so the check is hermetic (no
+# dependence on any shared dev/staging DB).
+name: migration-drift
+
+on:
+  pull_request:
+    paths:
+      - 'packages/db/prisma/schema.prisma'
+      - 'packages/db/prisma/migrations/**'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/db/prisma/schema.prisma'
+      - 'packages/db/prisma/migrations/**'
+
+jobs:
+  drift-check:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: winback_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgresql://ci:ci@localhost:5432/winback_ci
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v3
+        with:
+          version: 9
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20.11.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate Prisma schema
+        run: pnpm --filter @winback/db prisma:validate
+
+      - name: Apply existing migrations
+        run: pnpm --filter @winback/db migrate:deploy
+
+      - name: Detect drift (schema vs migrations)
+        run: pnpm --filter @winback/db migrate:diff
+
+      - name: Detect drift (migrations vs deployed DB)
+        run: |
+          pnpm --filter @winback/db prisma migrate diff \
+            --from-url "$DATABASE_URL" \
+            --to-schema-datamodel packages/db/prisma/schema.prisma \
+            --exit-code
