@@ -27,6 +27,9 @@ jobs:
 
     env:
       DATABASE_URL: postgresql://winback:winback@localhost:5432/winback_test
+      NODE_ENV: test
+      SERVICE_NAME: integration-test
+      LOG_LEVEL: error
 
     steps:
       - name: Checkout code
@@ -51,10 +54,6 @@ jobs:
 
       - name: Run Prisma migrations
         run: pnpm --filter @winback/db exec prisma migrate deploy
-        env:
-          DATABASE_URL: postgresql://winback:winback@localhost:5432/winback_test
 
       - name: Run integration tests
         run: pnpm --filter @winback/db exec vitest run --config vitest.integration.config.ts
-        env:
-          DATABASE_URL: postgresql://winback:winback@localhost:5432/winback_test
