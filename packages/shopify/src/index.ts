@@ -41,6 +41,7 @@ export { verifyShopifyOAuthHmac, verifyShopifyWebhookHmac } from './hmac.js';
 // --- Webhook topic dispatch ------------------------------------------------
 export {
   GDPR_TOPICS,
+  GDPR_TOPIC_TO_EVENT,
   WEBHOOK_TOPIC_TO_EVENT,
   getOutboxEventForTopic,
   isGdprTopic,

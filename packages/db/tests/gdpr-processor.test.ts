@@ -1,0 +1,501 @@
+/**
+ * Unit tests for the C6 GDPR compliance processors.
+ *
+ * Mock-prisma pattern (records ops in-memory). The point is to exercise the
+ * processor control flow — tenant-scope wrapping, transaction sequencing,
+ * PII redaction column set, chunked-delete loop, idempotency on missing
+ * merchant — not the DB itself. End-to-end coverage with real Postgres
+ * lands as part of M10 / CP-7 (external security review + GDPR pass).
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  DEFAULT_SHOP_REDACT_BATCH_SIZE,
+  processCustomerDataRequest,
+  processCustomerRedact,
+  processShopRedact,
+} from '../src/compliance/gdpr-processor.js';
+import type { WinbackPrisma } from '../src/client.js';
+
+const MERCHANT_ID = 'm_test';
+const SHOP = 'test-shop.myshopify.com';
+
+// ===========================================================================
+// Mock prisma — records operations and lets the test inspect state.
+// ===========================================================================
+
+interface MockCustomer {
+  id: string;
+  merchantId: string;
+  shopifyCustomerId: string;
+  email: string | null;
+  phone: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  deletedAt: Date | null;
+}
+
+interface AuditLogRow {
+  merchantId: string | null;
+  shop: string | null;
+  actorType: string;
+  actorId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  context: unknown;
+}
+
+interface MockTenantTable {
+  /** Number of rows for this merchant, used by the chunked-delete loop. */
+  rows: string[];
+}
+
+interface MockState {
+  merchant: { id: string; shop: string } | null;
+  customers: MockCustomer[];
+  orderCustomerIdUpdates: Array<{ merchantId: string; customerId: string }>;
+  tenantTables: Record<string, MockTenantTable>;
+  sessionDeleteCount: number;
+  merchantDeleteCount: number;
+  auditLogs: AuditLogRow[];
+}
+
+function makeInitialState(): MockState {
+  return {
+    merchant: null,
+    customers: [],
+    orderCustomerIdUpdates: [],
+    tenantTables: {
+      orderLineItem: { rows: [] },
+      order: { rows: [] },
+      productVariant: { rows: [] },
+      product: { rows: [] },
+      customer: { rows: [] },
+      outboxEvent: { rows: [] },
+      idempotencyKey: { rows: [] },
+      backfillJob: { rows: [] },
+      merchantSettings: { rows: [] },
+      billingSubscription: { rows: [] },
+    },
+    sessionDeleteCount: 0,
+    merchantDeleteCount: 0,
+    auditLogs: [],
+  };
+}
+
+interface MockHandle {
+  prisma: WinbackPrisma;
+  state: MockState;
+  callLog: string[];
+}
+
+function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
+  const state: MockState = { ...makeInitialState(), ...initial };
+  const callLog: string[] = [];
+
+  function buildTenantDelegate(table: string) {
+    return {
+      findMany: vi.fn(async (args: { where: { merchantId: string }; take: number }) => {
+        callLog.push(`${table}.findMany take=${args.take}`);
+        const t = state.tenantTables[table];
+        if (t === undefined) throw new Error(`unexpected table: ${table}`);
+        const batch = t.rows.slice(0, args.take);
+        return batch.map((id) => ({ id }));
+      }),
+      deleteMany: vi.fn(async (args: { where: { merchantId: string; id?: { in: string[] } } }) => {
+        callLog.push(`${table}.deleteMany`);
+        const t = state.tenantTables[table];
+        if (t === undefined) throw new Error(`unexpected table: ${table}`);
+        if (args.where.id?.in !== undefined) {
+          const ids = new Set(args.where.id.in);
+          t.rows = t.rows.filter((r) => !ids.has(r));
+        } else {
+          t.rows = [];
+        }
+        return { count: 0 };
+      }),
+    };
+  }
+
+  function buildOneToOneDelegate(table: string) {
+    return {
+      deleteMany: vi.fn(async (_args: { where: { merchantId: string } }) => {
+        callLog.push(`${table}.deleteMany`);
+        const t = state.tenantTables[table];
+        if (t !== undefined) t.rows = [];
+        return { count: 0 };
+      }),
+    };
+  }
+
+  const customerDelegate = {
+    findUnique: vi.fn(async (args: { where: { merchantId_shopifyCustomerId: { merchantId: string; shopifyCustomerId: string } } }) => {
+      callLog.push('customer.findUnique');
+      const key = args.where.merchantId_shopifyCustomerId;
+      const found = state.customers.find(
+        (c) => c.merchantId === key.merchantId && c.shopifyCustomerId === key.shopifyCustomerId,
+      );
+      return found ? { id: found.id } : null;
+    }),
+    update: vi.fn(async (args: { where: { id: string }; data: Partial<MockCustomer> }) => {
+      callLog.push('customer.update');
+      const c = state.customers.find((x) => x.id === args.where.id);
+      if (c === undefined) throw new Error('mock: customer.update on missing row');
+      Object.assign(c, args.data);
+      return { ...c };
+    }),
+    findMany: buildTenantDelegate('customer').findMany,
+    deleteMany: buildTenantDelegate('customer').deleteMany,
+  };
+
+  const orderDelegate = {
+    updateMany: vi.fn(async (args: { where: { merchantId: string; customerId: string }; data: { customerId: null } }) => {
+      callLog.push('order.updateMany');
+      state.orderCustomerIdUpdates.push({
+        merchantId: args.where.merchantId,
+        customerId: args.where.customerId,
+      });
+      return { count: 0 };
+    }),
+    findMany: buildTenantDelegate('order').findMany,
+    deleteMany: buildTenantDelegate('order').deleteMany,
+  };
+
+  const auditLogDelegate = {
+    create: vi.fn(async (args: { data: AuditLogRow }) => {
+      callLog.push(`auditLog.create action=${args.data.action}`);
+      state.auditLogs.push(args.data);
+      return args.data;
+    }),
+  };
+
+  const idempotencyKeyDelegate = {
+    findMany: vi.fn(async (args: { where: { merchantId: string }; take: number }) => {
+      callLog.push(`idempotencyKey.findMany take=${args.take}`);
+      const t = state.tenantTables.idempotencyKey;
+      if (t === undefined) throw new Error('mock: idempotencyKey missing');
+      const batch = t.rows.slice(0, args.take);
+      return batch.map((key) => ({ key }));
+    }),
+    deleteMany: vi.fn(async (args: { where: { merchantId: string; key?: { in: string[] } } }) => {
+      callLog.push('idempotencyKey.deleteMany');
+      const t = state.tenantTables.idempotencyKey;
+      if (t === undefined) throw new Error('mock: idempotencyKey missing');
+      if (args.where.key?.in !== undefined) {
+        const keys = new Set(args.where.key.in);
+        t.rows = t.rows.filter((r) => !keys.has(r));
+      } else {
+        t.rows = [];
+      }
+      return { count: 0 };
+    }),
+  };
+
+  const merchantDelegate = {
+    findUnique: vi.fn(async (args: { where: { shop: string } }) => {
+      callLog.push('merchant.findUnique');
+      if (state.merchant && state.merchant.shop === args.where.shop) {
+        return { id: state.merchant.id };
+      }
+      return null;
+    }),
+    delete: vi.fn(async (args: { where: { id: string } }) => {
+      callLog.push('merchant.delete');
+      if (state.merchant && state.merchant.id === args.where.id) {
+        state.merchant = null;
+      }
+      state.merchantDeleteCount += 1;
+      return { id: args.where.id };
+    }),
+  };
+
+  const sessionDelegate = {
+    deleteMany: vi.fn(async (args: { where: { shop: string } }) => {
+      callLog.push(`session.deleteMany shop=${args.where.shop}`);
+      state.sessionDeleteCount += 1;
+      return { count: 0 };
+    }),
+  };
+
+  const orderLineItem = {
+    findMany: buildTenantDelegate('orderLineItem').findMany,
+    deleteMany: buildTenantDelegate('orderLineItem').deleteMany,
+  };
+  const productVariant = {
+    findMany: buildTenantDelegate('productVariant').findMany,
+    deleteMany: buildTenantDelegate('productVariant').deleteMany,
+  };
+  const product = {
+    findMany: buildTenantDelegate('product').findMany,
+    deleteMany: buildTenantDelegate('product').deleteMany,
+  };
+  const outboxEvent = {
+    findMany: buildTenantDelegate('outboxEvent').findMany,
+    deleteMany: buildTenantDelegate('outboxEvent').deleteMany,
+  };
+  const backfillJob = {
+    findMany: buildTenantDelegate('backfillJob').findMany,
+    deleteMany: buildTenantDelegate('backfillJob').deleteMany,
+  };
+  const merchantSettings = buildOneToOneDelegate('merchantSettings');
+  const billingSubscription = buildOneToOneDelegate('billingSubscription');
+
+  const txClient = {
+    auditLog: auditLogDelegate,
+    customer: customerDelegate,
+    order: orderDelegate,
+    orderLineItem,
+    productVariant,
+    product,
+    outboxEvent,
+    idempotencyKey: idempotencyKeyDelegate,
+    backfillJob,
+    merchantSettings,
+    billingSubscription,
+  };
+
+  const prismaLike = {
+    ...txClient,
+    merchant: merchantDelegate,
+    session: sessionDelegate,
+    $transaction: vi.fn(async <T>(cb: (tx: typeof txClient) => Promise<T>) => cb(txClient)),
+  };
+
+  return {
+    prisma: prismaLike as unknown as WinbackPrisma,
+    state,
+    callLog,
+  };
+}
+
+// ===========================================================================
+// processCustomerDataRequest
+// ===========================================================================
+
+describe('processCustomerDataRequest', () => {
+  it('writes a gdpr.customer_data_request AuditLog row inside the tenant scope', async () => {
+    const handle = makeMockPrisma();
+    await processCustomerDataRequest({
+      prisma: handle.prisma,
+      merchantId: MERCHANT_ID,
+      shop: SHOP,
+      payload: {
+        shop_id: 999,
+        shop_domain: SHOP,
+        customer: { id: 12345, email: 'jane@example.com' },
+        orders_requested: [100, 101],
+        data_request: { id: 555 },
+      },
+    });
+
+    expect(handle.state.auditLogs).toHaveLength(1);
+    const row = handle.state.auditLogs[0]!;
+    expect(row.merchantId).toBe(MERCHANT_ID);
+    expect(row.shop).toBe(SHOP);
+    expect(row.actorType).toBe('system');
+    expect(row.action).toBe('gdpr.customer_data_request');
+    expect(row.targetType).toBe('customer');
+    expect(row.targetId).toBe('12345');
+    const ctx = row.context as { dataRequestId: string; ordersRequested: string[]; shopDomain: string };
+    expect(ctx.dataRequestId).toBe('555');
+    expect(ctx.shopDomain).toBe(SHOP);
+    expect(ctx.ordersRequested).toEqual(['100', '101']);
+  });
+});
+
+// ===========================================================================
+// processCustomerRedact
+// ===========================================================================
+
+describe('processCustomerRedact', () => {
+  it('nulls PII, sets deletedAt, severs Order link, writes audit (existing customer)', async () => {
+    const handle = makeMockPrisma({
+      customers: [
+        {
+          id: 'c_1',
+          merchantId: MERCHANT_ID,
+          shopifyCustomerId: 'gid://shopify/Customer/12345',
+          email: 'jane@example.com',
+          phone: '+15555555555',
+          firstName: 'Jane',
+          lastName: 'Doe',
+          deletedAt: null,
+        },
+      ],
+    });
+
+    await processCustomerRedact({
+      prisma: handle.prisma,
+      merchantId: MERCHANT_ID,
+      shop: SHOP,
+      payload: {
+        shop_domain: SHOP,
+        customer: { id: 12345, email: 'jane@example.com', phone: '+15555555555' },
+        orders_to_redact: [100, 101],
+      },
+    });
+
+    const c = handle.state.customers[0]!;
+    expect(c.email).toBeNull();
+    expect(c.phone).toBeNull();
+    expect(c.firstName).toBeNull();
+    expect(c.lastName).toBeNull();
+    expect(c.deletedAt).toBeInstanceOf(Date);
+
+    // Order link severed: updateMany called with customerId=c_1
+    expect(handle.state.orderCustomerIdUpdates).toEqual([
+      { merchantId: MERCHANT_ID, customerId: 'c_1' },
+    ]);
+
+    // Exactly one audit row for the successful redact.
+    expect(handle.state.auditLogs).toHaveLength(1);
+    const row = handle.state.auditLogs[0]!;
+    expect(row.action).toBe('gdpr.customer_redact');
+    expect(row.targetId).toBe('c_1');
+    const ctx = row.context as { shopifyCustomerGid: string; ordersToRedact: string[] };
+    expect(ctx.shopifyCustomerGid).toBe('gid://shopify/Customer/12345');
+    expect(ctx.ordersToRedact).toEqual(['100', '101']);
+  });
+
+  it('no-local-record: writes gdpr.customer_redact_no_local_record and does NOT update any customer', async () => {
+    const handle = makeMockPrisma(); // empty customers
+    await processCustomerRedact({
+      prisma: handle.prisma,
+      merchantId: MERCHANT_ID,
+      shop: SHOP,
+      payload: {
+        shop_domain: SHOP,
+        customer: { id: 99999 },
+      },
+    });
+
+    expect(handle.state.customers).toEqual([]);
+    expect(handle.state.orderCustomerIdUpdates).toEqual([]);
+    expect(handle.state.auditLogs).toHaveLength(1);
+    expect(handle.state.auditLogs[0]!.action).toBe('gdpr.customer_redact_no_local_record');
+  });
+
+  it('malformed payload (no customer.id): logs gdpr.customer_redact_malformed and exits', async () => {
+    const handle = makeMockPrisma();
+    await processCustomerRedact({
+      prisma: handle.prisma,
+      merchantId: MERCHANT_ID,
+      shop: SHOP,
+      payload: { shop_domain: SHOP }, // customer missing entirely
+    });
+
+    expect(handle.callLog.some((c) => c === 'customer.update')).toBe(false);
+    expect(handle.state.auditLogs).toHaveLength(1);
+    expect(handle.state.auditLogs[0]!.action).toBe('gdpr.customer_redact_malformed');
+  });
+
+  it('rejects non-numeric customer id (no silent passthrough) — logs malformed', async () => {
+    const handle = makeMockPrisma();
+    await processCustomerRedact({
+      prisma: handle.prisma,
+      merchantId: MERCHANT_ID,
+      shop: SHOP,
+      payload: { shop_domain: SHOP, customer: { id: 'abc-not-numeric' } },
+    });
+
+    expect(handle.state.auditLogs).toHaveLength(1);
+    expect(handle.state.auditLogs[0]!.action).toBe('gdpr.customer_redact_malformed');
+  });
+});
+
+// ===========================================================================
+// processShopRedact
+// ===========================================================================
+
+describe('processShopRedact', () => {
+  it('idempotent: no merchant row → logs gdpr.shop_redact_idempotent and exits', async () => {
+    const handle = makeMockPrisma(); // merchant = null
+    await processShopRedact({
+      prisma: handle.prisma,
+      shop: SHOP,
+      payload: { shop_domain: SHOP, shop_id: 999 },
+    });
+
+    expect(handle.state.merchantDeleteCount).toBe(0);
+    expect(handle.state.sessionDeleteCount).toBe(0);
+    expect(handle.state.auditLogs).toHaveLength(1);
+    const row = handle.state.auditLogs[0]!;
+    expect(row.merchantId).toBeNull();
+    expect(row.shop).toBe(SHOP);
+    expect(row.action).toBe('gdpr.shop_redact_idempotent');
+  });
+
+  it('happy path: writes audit, runs chunked deletes, deletes session, deletes merchant', async () => {
+    const handle = makeMockPrisma({
+      merchant: { id: MERCHANT_ID, shop: SHOP },
+      tenantTables: {
+        orderLineItem: { rows: [] },
+        order: { rows: ['o1', 'o2', 'o3'] },
+        productVariant: { rows: ['pv1'] },
+        product: { rows: ['p1'] },
+        customer: { rows: ['c1', 'c2'] },
+        outboxEvent: { rows: ['ob1'] },
+        idempotencyKey: { rows: ['k1'] },
+        backfillJob: { rows: [] },
+        merchantSettings: { rows: ['ms1'] },
+        billingSubscription: { rows: [] },
+      },
+    });
+
+    await processShopRedact({
+      prisma: handle.prisma,
+      shop: SHOP,
+      payload: { shop_domain: SHOP, shop_id: 999 },
+      batchSize: 10,
+    });
+
+    // Audit row written FIRST (before any tenant-table delete).
+    const auditIndex = handle.callLog.indexOf('auditLog.create action=gdpr.shop_redact');
+    const firstDeleteIndex = handle.callLog.findIndex((c) => c.endsWith('.deleteMany'));
+    expect(auditIndex).toBeGreaterThanOrEqual(0);
+    expect(firstDeleteIndex).toBeGreaterThan(auditIndex);
+
+    // All tenant tables drained.
+    for (const t of Object.keys(handle.state.tenantTables)) {
+      expect(handle.state.tenantTables[t]!.rows).toEqual([]);
+    }
+
+    // Session + Merchant deleted exactly once.
+    expect(handle.state.sessionDeleteCount).toBe(1);
+    expect(handle.state.merchantDeleteCount).toBe(1);
+    expect(handle.state.merchant).toBeNull();
+  });
+
+  it('chunks repeatedly when a table has more rows than batchSize', async () => {
+    // 25 customers, batchSize 10 → 3 fetch-delete iterations (10, 10, 5)
+    const handle = makeMockPrisma({
+      merchant: { id: MERCHANT_ID, shop: SHOP },
+      tenantTables: {
+        ...makeInitialState().tenantTables,
+        customer: {
+          rows: Array.from({ length: 25 }, (_, i) => `c${String(i)}`),
+        },
+      },
+    });
+
+    await processShopRedact({
+      prisma: handle.prisma,
+      shop: SHOP,
+      payload: { shop_domain: SHOP },
+      batchSize: 10,
+    });
+
+    const customerFetches = handle.callLog.filter((c) => c.startsWith('customer.findMany'));
+    // 3 successful fetches (10/10/5) — and at least one more to see "empty"
+    // and terminate. The loop terminates when fetch returns fewer than
+    // batchSize, so 3 fetches total.
+    expect(customerFetches.length).toBe(3);
+    expect(handle.state.tenantTables.customer!.rows).toEqual([]);
+  });
+
+  it('DEFAULT_SHOP_REDACT_BATCH_SIZE has a sensible value', () => {
+    expect(DEFAULT_SHOP_REDACT_BATCH_SIZE).toBe(1000);
+  });
+});

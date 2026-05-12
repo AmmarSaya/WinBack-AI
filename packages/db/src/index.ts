@@ -43,3 +43,6 @@ export { TenantScopeError } from './errors.js';
 
 // --- Repositories -----------------------------------------------------------
 export * from './repositories/index.js';
+
+// --- Compliance (C6 — GDPR processors) -------------------------------------
+export * from './compliance/index.js';

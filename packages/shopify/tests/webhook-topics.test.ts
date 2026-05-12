@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GDPR_TOPICS,
+  GDPR_TOPIC_TO_EVENT,
   WEBHOOK_TOPIC_TO_EVENT,
   getOutboxEventForTopic,
   isGdprTopic,
@@ -32,10 +33,14 @@ describe('webhook topic → outbox event mapping', () => {
     expect(getOutboxEventForTopic('app/uninstalled')).toBe(OUTBOX_EVENTS.merchant.uninstalled);
   });
 
-  it('returns null for GDPR topics (C3 logs only; C6 processes)', () => {
-    expect(getOutboxEventForTopic('customers/data_request')).toBeNull();
-    expect(getOutboxEventForTopic('customers/redact')).toBeNull();
-    expect(getOutboxEventForTopic('shop/redact')).toBeNull();
+  it('maps GDPR topics to gdpr.* outbox events (C6)', () => {
+    expect(getOutboxEventForTopic('customers/data_request')).toBe(
+      OUTBOX_EVENTS.gdpr.customer_data_requested,
+    );
+    expect(getOutboxEventForTopic('customers/redact')).toBe(
+      OUTBOX_EVENTS.gdpr.customer_redacted,
+    );
+    expect(getOutboxEventForTopic('shop/redact')).toBe(OUTBOX_EVENTS.gdpr.shop_redacted);
   });
 
   it('returns null for unknown topics', () => {
@@ -81,6 +86,30 @@ describe('WEBHOOK_TOPIC_TO_EVENT shape', () => {
       expect(typeof event).toBe('string');
       expect(event.length).toBeGreaterThan(0);
       expect(topic.length).toBeGreaterThan(0);
+    }
+  });
+});
+
+describe('GDPR_TOPIC_TO_EVENT shape', () => {
+  it('every mapped value is a gdpr.* event type', () => {
+    for (const [topic, event] of Object.entries(GDPR_TOPIC_TO_EVENT)) {
+      expect(event.startsWith('gdpr.')).toBe(true);
+      expect(topic.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('exposes exactly the three Shopify-mandatory topics', () => {
+    expect(Object.keys(GDPR_TOPIC_TO_EVENT).sort()).toEqual([
+      'customers/data_request',
+      'customers/redact',
+      'shop/redact',
+    ]);
+  });
+
+  it('GDPR_TOPICS set is derived from GDPR_TOPIC_TO_EVENT', () => {
+    expect(GDPR_TOPICS.size).toBe(Object.keys(GDPR_TOPIC_TO_EVENT).length);
+    for (const topic of GDPR_TOPICS) {
+      expect(topic in GDPR_TOPIC_TO_EVENT).toBe(true);
     }
   });
 });

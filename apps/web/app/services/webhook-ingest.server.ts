@@ -134,8 +134,10 @@ export async function ingestWebhook(
             },
           });
 
-          // (c) Outbox publish, if topic maps to an event.
-          // GDPR topics + unknown topics: WebhookLog only; no outbox event.
+          // (c) Outbox publish, if topic maps to an event. Since C6, GDPR
+          // topics also map (gdpr.* events), so they emit normally and are
+          // routed to the compliance processor by the drainer (D2). Topics
+          // outside both the commerce and GDPR maps are still WebhookLog-only.
           if (eventType !== null) {
             await tx.outboxEvent.create({
               data: {
