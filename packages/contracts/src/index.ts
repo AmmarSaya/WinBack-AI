@@ -1,5 +1,3 @@
-export const CONTRACTS_PACKAGE_VERSION = '0.0.0' as const;
-
 export {
   AI_TONE_STYLES,
   AI_TONE_EMOJI_POLICIES,

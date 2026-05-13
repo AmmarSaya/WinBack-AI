@@ -7,6 +7,8 @@ settings:
 overrides:
   '@prisma/client': 5.22.0
   prisma: 5.22.0
+  vitest: 2.1.9
+  zod: 3.25.76
 
 importers:
 
@@ -101,7 +103,7 @@ importers:
         specifier: ^5.0.0
         version: 5.1.4(typescript@5.9.3)(vite@5.4.21(@types/node@20.19.40))
       vitest:
-        specifier: ^2.1.0
+        specifier: 2.1.9
         version: 2.1.9(@types/node@20.19.40)
 
   packages/config:
@@ -110,13 +112,13 @@ importers:
         specifier: workspace:*
         version: link:../errors
       zod:
-        specifier: ^3.23.8
+        specifier: 3.25.76
         version: 3.25.76
 
   packages/contracts:
     dependencies:
       zod:
-        specifier: ^3.23.8
+        specifier: 3.25.76
         version: 3.25.76
 
   packages/crypto:
@@ -126,7 +128,7 @@ importers:
         version: link:../errors
     devDependencies:
       vitest:
-        specifier: ^2.1.0
+        specifier: 2.1.9
         version: 2.1.9(@types/node@20.19.40)
 
   packages/db:
@@ -151,7 +153,7 @@ importers:
         specifier: 5.22.0
         version: 5.22.0
       vitest:
-        specifier: ^2.1.0
+        specifier: 2.1.9
         version: 2.1.9(@types/node@20.19.40)
 
   packages/errors: {}
@@ -192,11 +194,11 @@ importers:
         specifier: workspace:*
         version: link:../logger
       zod:
-        specifier: ^3.23.8
+        specifier: 3.25.76
         version: 3.25.76
     devDependencies:
       vitest:
-        specifier: ^2.1.0
+        specifier: 2.1.9
         version: 2.1.9(@types/node@20.19.40)
 
 packages:

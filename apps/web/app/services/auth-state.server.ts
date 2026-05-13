@@ -33,7 +33,7 @@ export interface StateRecord {
   readonly exp: number;
 }
 
-export interface GenerateStateResult {
+interface GenerateStateResult {
   readonly state: string;
   readonly cookieHeader: string;
 }

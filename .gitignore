@@ -33,3 +33,6 @@ coverage/
 
 # Prisma generated artifacts (created in B1)
 .prisma/
+
+# Claude Code session state (worktrees, scratch). Tooling artifact, not source.
+.claude/

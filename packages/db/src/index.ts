@@ -10,7 +10,7 @@
 // =============================================================================
 
 // --- Client factory ---------------------------------------------------------
-export { createWinbackPrisma, type WinbackPrisma, type CreateWinbackPrismaOptions } from './client.js';
+export { createWinbackPrisma, type WinbackPrisma } from './client.js';
 
 // --- Tenant scoping ---------------------------------------------------------
 export {

@@ -73,13 +73,4 @@ export function getLogger(name?: string): Logger {
   return name === undefined ? root : root.child({ module: name });
 }
 
-/**
- * Drops the cached root logger so the next `getLogger()` call rebuilds it
- * against current config. Tests use this between cases that mutate env.
- * Production code must never call this.
- */
-export function resetLogger(): void {
-  rootLogger = null;
-}
-
 export type { Logger } from 'pino';
