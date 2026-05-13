@@ -60,14 +60,17 @@ export async function completeInstall(
 
   return withSystemScope(SYSTEM_SCOPE_REASONS.shopify.install, async () => {
     return prisma.$transaction(async (extendedTx) => {
-      // Prisma 5 typing gap (see unit-of-work.ts header): calling
-      // `$transaction` on the extended client returns the extended client
-      // type for the callback parameter, not `Prisma.TransactionClient`.
-      // The two aren't bidirectionally assignable. Runtime extension hooks
-      // still fire on `extendedTx`; only TS typing differs. Cast at this
-      // boundary so the repository's `Prisma.TransactionClient` parameter
-      // accepts it. Pattern matches UoW.run, which does the same cast
-      // internally.
+      // Prisma 5 typing gap. Calling `$transaction` on the extended client
+      // returns the extended client type for the callback parameter, not
+      // `Prisma.TransactionClient`. The two are not bidirectionally
+      // assignable. Runtime extension hooks still fire on `extendedTx`;
+      // only TS typing differs. Cast at this boundary so the repository's
+      // `Prisma.TransactionClient` parameter accepts it. Pattern matches
+      // UoW.run, which performs the same cast internally — see
+      // `packages/db/src/unit-of-work.ts` lines 42-55 and 132-138 for the
+      // mechanism and rationale. No public Prisma issue tracks this
+      // specifically; revisit when Prisma improves callback typing in a
+      // future major (Prisma 6+ does not fix this).
       const tx = extendedTx as unknown as Prisma.TransactionClient;
 
       const { id: merchantId, isNewInstall } = await merchantRepo.upsertInstall(

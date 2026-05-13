@@ -55,8 +55,26 @@ export interface AppendAuditLogInput {
 export class AuditLogRepository {
   constructor(private readonly prisma: WinbackPrisma) {}
 
-  async append(input: AppendAuditLogInput): Promise<void> {
-    await this.prisma.auditLog.create({
+  /**
+   * Writes an AuditLog row. The optional `tx` parameter is load-bearing:
+   * compliance evidence must land in the SAME transaction as the business
+   * action it records (see ARCHITECTURE.md — Audit Write Policy). Callers
+   * inside a `UoW.run(ctx => ...)` callback pass `ctx.db`; callers outside
+   * any transaction (system-scope idempotent acks, etc.) omit it and the
+   * write goes against `this.prisma` directly.
+   *
+   * The signature accepts `Prisma.TransactionClient`, which is what
+   * `ctx.db` resolves to (per the typing-gap cast inside UoW.run — see
+   * unit-of-work.ts lines 42–55). Direct callers from
+   * `prisma.$transaction` wrappers must cast at the boundary, same as
+   * `install.ts` does for `MerchantRepository.upsertInstall`.
+   */
+  async append(
+    input: AppendAuditLogInput,
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
+    const client = tx ?? this.prisma;
+    await client.auditLog.create({
       data: {
         merchantId: input.merchantId,
         shop: input.shop,
@@ -75,23 +93,26 @@ export class AuditLogRepository {
     });
   }
 
-  async appendFromContext(extra?: {
-    merchantId?: string | null;
-    shop?: string | null;
-  }): Promise<void> {
+  async appendFromContext(
+    extra?: { merchantId?: string | null; shop?: string | null },
+    tx?: Prisma.TransactionClient,
+  ): Promise<void> {
     const ctx = getAuditContext();
     if (ctx === undefined) {
       throw new Error('appendFromContext called outside withAudit scope');
     }
-    await this.append({
-      merchantId: extra?.merchantId ?? null,
-      shop: extra?.shop ?? null,
-      actorType: ctx.actorType,
-      ...(ctx.actorId !== undefined && { actorId: ctx.actorId }),
-      action: ctx.action,
-      ...(ctx.targetType !== undefined && { targetType: ctx.targetType }),
-      ...(ctx.targetId !== undefined && { targetId: ctx.targetId }),
-      ...(ctx.context !== undefined && { context: ctx.context as Record<string, unknown> }),
-    });
+    await this.append(
+      {
+        merchantId: extra?.merchantId ?? null,
+        shop: extra?.shop ?? null,
+        actorType: ctx.actorType,
+        ...(ctx.actorId !== undefined && { actorId: ctx.actorId }),
+        action: ctx.action,
+        ...(ctx.targetType !== undefined && { targetType: ctx.targetType }),
+        ...(ctx.targetId !== undefined && { targetId: ctx.targetId }),
+        ...(ctx.context !== undefined && { context: ctx.context as Record<string, unknown> }),
+      },
+      tx,
+    );
   }
 }

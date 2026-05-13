@@ -35,9 +35,9 @@
  */
 
 import { AUDIT_ACTIONS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
-import { Prisma } from '@prisma/client';
 
 import type { WinbackPrisma } from '../client.js';
+import { AuditLogRepository } from '../repositories/audit-log.repository.js';
 import { MerchantRepository } from '../repositories/merchant.repository.js';
 import { withSystemScope, withTenantScope } from '../tenant-scope.js';
 import { UnitOfWork } from '../unit-of-work.js';
@@ -121,25 +121,27 @@ export async function processCustomerDataRequest(
 ): Promise<void> {
   const { prisma, merchantId, shop, payload } = args;
   const uow = new UnitOfWork(prisma);
+  const auditLog = new AuditLogRepository(prisma);
 
   await withTenantScope(merchantId, () =>
     uow.run(async (ctx) => {
-      await ctx.db.auditLog.create({
-        data: {
+      await auditLog.append(
+        {
           merchantId,
           shop,
           actorType: 'system',
           actorId: 'gdpr.processor',
           action: AUDIT_ACTIONS.gdpr.customer_data_request,
           targetType: 'customer',
-          targetId: payload.customer?.id != null ? String(payload.customer.id) : null,
+          ...(payload.customer?.id != null && { targetId: String(payload.customer.id) }),
           context: {
             dataRequestId: payload.data_request?.id != null ? String(payload.data_request.id) : null,
             shopDomain: payload.shop_domain ?? null,
             ordersRequested: (payload.orders_requested ?? []).map((id) => String(id)),
-          } as Prisma.InputJsonValue,
+          },
         },
-      });
+        ctx.db,
+      );
     }),
   );
 }
@@ -176,25 +178,25 @@ export interface ProcessCustomerRedactArgs {
 
 export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Promise<void> {
   const { prisma, merchantId, shop, payload } = args;
+  const auditLog = new AuditLogRepository(prisma);
 
   const numericId = payload.customer?.id;
   if (numericId == null || !/^\d+$/.test(String(numericId))) {
     // Malformed payload. Log via audit + return — Shopify retry won't fix
-    // the payload, so we ack the work without acting on it.
-    await withTenantScope(merchantId, async () => {
-      await prisma.auditLog.create({
-        data: {
-          merchantId,
-          shop,
-          actorType: 'system',
-          actorId: 'gdpr.processor',
-          action: AUDIT_ACTIONS.gdpr.customer_redact_malformed,
-          targetType: 'customer',
-          targetId: numericId != null ? String(numericId) : null,
-          context: { shopDomain: payload.shop_domain ?? null } as Prisma.InputJsonValue,
-        },
-      });
-    });
+    // the payload, so we ack the work without acting on it. No business
+    // action accompanies this audit row, so no tx is passed.
+    await withTenantScope(merchantId, () =>
+      auditLog.append({
+        merchantId,
+        shop,
+        actorType: 'system',
+        actorId: 'gdpr.processor',
+        action: AUDIT_ACTIONS.gdpr.customer_redact_malformed,
+        targetType: 'customer',
+        ...(numericId != null && { targetId: String(numericId) }),
+        context: { shopDomain: payload.shop_domain ?? null },
+      }),
+    );
     return;
   }
 
@@ -211,8 +213,8 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
       });
 
       if (customer === null) {
-        await ctx.db.auditLog.create({
-          data: {
+        await auditLog.append(
+          {
             merchantId,
             shop,
             actorType: 'system',
@@ -223,9 +225,10 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
             context: {
               shopifyCustomerGid,
               shopDomain: payload.shop_domain ?? null,
-            } as Prisma.InputJsonValue,
+            },
           },
-        });
+          ctx.db,
+        );
         return;
       }
 
@@ -250,9 +253,9 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
         data: { customerId: null },
       });
 
-      // 5. Audit evidence.
-      await ctx.db.auditLog.create({
-        data: {
+      // 5. Audit evidence — same tx as steps 2-4.
+      await auditLog.append(
+        {
           merchantId,
           shop,
           actorType: 'system',
@@ -264,9 +267,10 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
             shopifyCustomerGid,
             shopDomain: payload.shop_domain ?? null,
             ordersToRedact: (payload.orders_to_redact ?? []).map((id) => String(id)),
-          } as Prisma.InputJsonValue,
+          },
         },
-      });
+        ctx.db,
+      );
     }),
   );
 }
@@ -338,6 +342,7 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   const { prisma, shop, payload } = args;
   const batchSize = args.batchSize ?? DEFAULT_SHOP_REDACT_BATCH_SIZE;
   const merchantRepo = new MerchantRepository(prisma);
+  const auditLog = new AuditLogRepository(prisma);
 
   // 1. System-scope lookup. Idempotent if already redacted.
   const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
@@ -345,20 +350,19 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   );
 
   if (merchant === null) {
-    await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
-      await prisma.auditLog.create({
-        data: {
-          merchantId: null,
-          shop,
-          actorType: 'system',
-          actorId: 'gdpr.processor',
-          action: AUDIT_ACTIONS.gdpr.shop_redact_idempotent,
-          targetType: 'merchant',
-          targetId: null,
-          context: { shopDomain: payload.shop_domain ?? null } as Prisma.InputJsonValue,
-        },
-      });
-    });
+    // Tombstone row: merchantId=null is legal here because we're in
+    // system scope — the extension passes it through unmodified.
+    await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
+      auditLog.append({
+        merchantId: null,
+        shop,
+        actorType: 'system',
+        actorId: 'gdpr.processor',
+        action: AUDIT_ACTIONS.gdpr.shop_redact_idempotent,
+        targetType: 'merchant',
+        context: { shopDomain: payload.shop_domain ?? null },
+      }),
+    );
     return;
   }
 
@@ -366,9 +370,9 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
 
   // 2. AuditLog FIRST inside tenant scope (FK SetNull preserves it).
   await withTenantScope(merchantId, () =>
-    new UnitOfWork(prisma).run(async (ctx) => {
-      await ctx.db.auditLog.create({
-        data: {
+    new UnitOfWork(prisma).run(async (ctx) =>
+      auditLog.append(
+        {
           merchantId,
           shop,
           actorType: 'system',
@@ -379,10 +383,11 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
           context: {
             shopId: payload.shop_id != null ? String(payload.shop_id) : null,
             shopDomain: payload.shop_domain ?? null,
-          } as Prisma.InputJsonValue,
+          },
         },
-      });
-    }),
+        ctx.db,
+      ),
+    ),
   );
 
   // 3. Chunked deletes. Each chunk: one UoW.run inside the tenant scope.

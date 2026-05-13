@@ -74,14 +74,41 @@ export class MerchantRepository {
    *   - Re-install:  clears `tokenRevokedAt` + `uninstalledAt` so the
    *                  health check stops paging.
    *
-   * Returns `{ id, isNewInstall }`. The `isNewInstall` flag is derived
-   * from a `findUnique` inside the same operation — the caller's
-   * transaction (if any) wraps both reads + writes, so there is no
-   * race window between the existence check and the upsert.
+   * Returns `{ id, isNewInstall }`. The flag is derived from a
+   * `findUnique` performed before the `upsert`, both inside the caller's
+   * transaction.
    *
-   * MUST be called from system scope. `completeInstall` is the
-   * canonical caller and opens `withSystemScope('shopify.install')`
-   * because no tenant exists yet at install time.
+   * KNOWN RACE — `isNewInstall` is NOT strictly correct under concurrent
+   * installs for the same shop. With Postgres's default READ COMMITTED
+   * isolation, two simultaneous transactions A and B can both see
+   * `null` on the pre-check (because neither has committed yet) before
+   * the upsert resolves the actual write. Postgres `INSERT ... ON
+   * CONFLICT DO UPDATE` then has one transaction create the row and the
+   * other update it — but BOTH report `isNewInstall: true` because both
+   * observed `null` at SELECT time. The race window is on the order of
+   * tens of milliseconds at most.
+   *
+   *   Practical mitigation today: Shopify OAuth `code` values are
+   *   single-use, so two concurrent install callbacks for the same shop
+   *   carry the same code; only the first succeeds at the upstream token
+   *   exchange. The second callback never reaches `completeInstall`.
+   *   This is a real-world defense, not a correctness guarantee.
+   *
+   *   Consequence if the race fires anyway: the `merchant.installed`
+   *   outbox event payload carries `reinstall: false` when it should be
+   *   `true`. D2 consumers must remain idempotent against duplicate
+   *   first-install signals (BackfillJob's `@@unique(merchantId, resource)`
+   *   already provides this at the database layer).
+   *
+   *   Hardening paths (deferred to M10 or whenever this matters): either
+   *   SERIALIZABLE isolation on the install transaction with retry, a
+   *   Postgres advisory lock keyed on shop, or dropping `isNewInstall`
+   *   from the API and emitting the same event regardless. See gap
+   *   register entry for follow-up.
+   *
+   * MUST be called from system scope. `completeInstall` is the canonical
+   * caller and opens `withSystemScope('shopify.install')` because no
+   * tenant exists yet at install time.
    */
   async upsertInstall(
     args: UpsertInstallArgs,
