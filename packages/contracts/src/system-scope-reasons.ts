@@ -27,7 +27,10 @@
  * D1/D2 will add `outbox.drain`, `cron.idempotency_cleanup`, and similar
  * reasons. They are intentionally NOT pre-registered here — speculative
  * entries would dead-export and could mask a real wiring gap (a reason
- * exists but no caller uses it).
+ * exists but no caller uses it). When you arrive here as the D1/D2
+ * author: add the new constant under a new (or existing) category below,
+ * use it at the call site, and the exhaustive shape test in
+ * `packages/contracts/tests/registries.test.ts` will pick it up.
  */
 
 export const SYSTEM_SCOPE_REASONS = {

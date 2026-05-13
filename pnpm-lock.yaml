@@ -160,7 +160,11 @@ importers:
         specifier: 2.1.9
         version: 2.1.9(@types/node@20.19.40)
 
-  packages/errors: {}
+  packages/errors:
+    devDependencies:
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@20.19.40)
 
   packages/logger:
     dependencies:

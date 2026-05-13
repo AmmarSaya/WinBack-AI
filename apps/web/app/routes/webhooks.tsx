@@ -1,4 +1,5 @@
 import type { ActionFunctionArgs } from '@remix-run/node';
+import { toHttp } from '@winback/errors';
 import { getLogger } from '@winback/logger';
 
 import { getPrisma } from '~/services/db.server.js';
@@ -44,10 +45,21 @@ export async function action({ request }: ActionFunctionArgs) {
       });
     } catch (err) {
       // Ingestion error AFTER HMAC passed — DB or unknown failure. Return
-      // 500 so Shopify retries. The atomic tx in ingestWebhook means no
+      // 5xx so Shopify retries. The atomic tx in ingestWebhook means no
       // IdempotencyKey was written, so retry is clean (not double-processed).
-      log.error({ err, topic, shop, webhookId }, 'webhook handler 500');
-      return new Response('internal error', { status: 500 });
+      //
+      // Body shape comes from @winback/errors `toHttp`. Shopify itself
+      // ignores the body, but the JSON envelope is what shows up in our
+      // logs / operator dashboards and what D2 worker error-surfacing
+      // will compose against. The contract is tested in
+      // packages/errors/tests/http.test.ts; loosening it requires a
+      // paired update there.
+      log.error({ err, topic, shop, webhookId }, 'webhook handler caught');
+      const { status, body } = toHttp(err, { safeMessage: 'webhook handler failure' });
+      return new Response(JSON.stringify(body), {
+        status,
+        headers: { 'Content-Type': 'application/json' },
+      });
     }
 
     if (outcome.kind === 'reject') {
