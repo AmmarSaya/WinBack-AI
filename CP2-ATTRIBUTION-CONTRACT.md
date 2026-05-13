@@ -1,9 +1,14 @@
 # CP-2 — Attribution Event Contract
 
-Status: **DRAFT — pending review.** This document is the design output of
-CP-2. No code lands until it's approved. Every ambiguity left here
+Status: **APPROVED — 2026-05-13.** This document is the design output of
+CP-2. No code lands without referencing it. Every ambiguity left here
 becomes a schema migration after merchants are live, so precision wins
 over length.
+
+Approval audit: six-issue review applied; reviewer sign-off recorded
+against every checklist item below. Two H1 implementation notes were
+added from the audit and live in the "Carry-forward to D1 / H1"
+section at the bottom of this document.
 
 The schema changes implied by this document ship at H1 (per Phase 0's
 Epic H reservation: `AttributionEvent`, `AttributionWindow`,
@@ -630,3 +635,67 @@ no migration files exist.
       silent" disposition is correct
 - [ ] Open-questions-deferred-to-H1 list captures the right deferrals,
       including the explicit Epic G sequencing dependency
+
+---
+
+## Carry-forward to D1 / H1
+
+Items established BY this contract that the next implementers must
+honor. Recorded here so the doc stands alone as a reference rather
+than depending on commit-message archaeology.
+
+### For D1 (queue infrastructure)
+
+1. **Separate attribution queue.** The outbox drainer (D2) will need
+   an attribution call site wired against the H1 table. D1's queue
+   topology must include an `attribution` queue distinct from the
+   order-processing queue. **Attribution is lower priority than order
+   ingestion and must not block it under load.** Concrete shape: two
+   BullMQ queues, separate worker concurrency budgets, separate retry
+   policies. Order ingestion runs hot (Shopify's 5-second ack budget);
+   attribution can tolerate seconds-to-minutes of lag.
+
+### For D3 (scheduler / cron)
+
+1. **`rollup.daily` system-scope reason** must be registered in
+   `SYSTEM_SCOPE_REASONS` (in `@winback/contracts/src/system-scope-
+   reasons.ts`) when D3 ships the rollup cron, NOT speculatively now.
+   Per the documented convention in `system-scope-reasons.ts`:
+   "speculative entries would dead-export and could mask a real wiring
+   gap." Add the constant at the call site that needs it. The
+   exhaustive shape test in `packages/contracts/tests/registries.test
+   .ts` will pick it up automatically.
+
+### For H1 (Epic H schema + drainer attribution wiring)
+
+1. **Drainer transaction shape — explicit guarantee.** The Q1
+   qualifying-transition check ("read existing `Order.financialStatus`
+   before applying the update") must execute inside the **same DB
+   transaction** as the order update + AttributionEvent insert. Race-
+   free behavior depends on this. The drainer's implementation should
+   make the same-tx guarantee explicit (a comment in the drainer code,
+   plus a regression test that mocks a concurrent update arriving
+   between the read and the write — if same-tx, the test passes; if
+   the implementation splits them across two txs, the test fails).
+
+2. **Same-second order race on `isFirstPurchase`.** The
+   `Order.count(merchantId, customerId, placedAt ≤ thisOrder.placedAt)`
+   query counts orders with `placedAt <= thisOrder.placedAt`. If two
+   orders for the same customer are processed in the same second
+   (same drainer batch or near-simultaneous trigger), both could see
+   `count == 1` and both could be marked `isFirstPurchase = true`.
+   Extremely rare edge case in practice (a customer placing two orders
+   in the same second is unusual; the drainer typically serializes per-
+   merchant). **Acceptable for v1.** H1 implementation must document
+   this in an inline comment at the `isFirstPurchase` computation site
+   so future readers see the known limitation without re-deriving it.
+   Hardening (advisory lock keyed on `(merchantId, customerId)` for the
+   duration of the attribution tx) is deferred to a future revision if
+   merchant data ever surfaces a real instance.
+
+3. **Operator runbook ships at H1.** The `pnpm rollup:reaggregate
+   --merchant $ID --since $DATE` CLI subcommand referenced in Q2(d)
+   is an H1 deliverable, not a v2 promise. Without it, the long-tail-
+   refund disclosure to merchants is a promise the operator team
+   can't actually fulfill. Ship the CLI in the same PR as the
+   `MetricsDailyRollup` migration.
