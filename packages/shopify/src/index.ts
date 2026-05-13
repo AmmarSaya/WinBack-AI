@@ -22,9 +22,6 @@ export {
   type GetShopifyConfigOptions,
 } from './config.js';
 
-// --- Types -----------------------------------------------------------------
-export type { ShopifySession, SessionStorage } from './types.js';
-
 // --- Errors ----------------------------------------------------------------
 export {
   ShopifyHmacError,

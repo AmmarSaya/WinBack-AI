@@ -1,138 +1,112 @@
+import { Session } from '@shopify/shopify-api';
+import type { SessionStorage } from '@shopify/shopify-app-session-storage';
 import type { Cipher } from '@winback/crypto';
-import type { WinbackPrisma } from '@winback/db';
 import { getLogger } from '@winback/logger';
-
-import type { SessionStorage, ShopifySession } from './types.js';
 
 const log = getLogger('shopify.session-storage');
 
 /**
- * Implements the Shopify `SessionStorage` interface, persisting to the
- * Prisma `Session` table with `accessToken` ENCRYPTED at the storage
- * boundary.
+ * AES-256-GCM-encrypting decorator over a `SessionStorage` from
+ * `@shopify/shopify-app-session-storage`. The inner adapter does all
+ * persistence (Prisma CRUD on the Session table); this class wraps each
+ * call to encrypt the access token on the way down and decrypt it on the
+ * way up. The DB column always contains ciphertext.
  *
- * Constructor takes `WinbackPrisma` (NOT raw `PrismaClient`) by design —
- * the type rejection prevents future developers from accidentally passing
- * an unwrapped client. Session is `UNSCOPED_MODELS` in our extension so
- * the runtime behavior is the same either way, but the type-level
- * declaration encodes the intent.
+ * Why a decorator and not direct CRUD: the Shopify SDK (specifically
+ * `@shopify/shopify-app-session-storage-prisma`) owns the Session-to-row
+ * mapping, including the round-trip through `Session.fromPropertyArray`
+ * for `loadSession`. Re-implementing that mapping inside our class would
+ * be duplication that drifts. Delegating to the adapter means the SDK is
+ * the source of truth for the on-disk row shape; we add encryption.
  *
- * Session writes happen OUTSIDE any tenant scope — they precede the
- * Merchant row's existence during install, and they're keyed by `shop`
- * not by merchant id. This is the ONE legitimate place in the codebase
- * where unscoped database writes occur, and it works because Session is
- * the unscoped model.
+ * Contract with callers (and the SDK):
+ *   - storeSession(session: Session) — encrypts `session.accessToken` on
+ *     a clone before delegating. The caller's instance is NOT mutated.
+ *   - loadSession(id) — delegates, then decrypts `accessToken` in place
+ *     on the returned `Session` (the SDK field is public mutable).
+ *     `Session` class methods (`isActive()`, `isExpired()`, etc.) are
+ *     preserved because the instance came from the adapter.
+ *   - findSessionsByShop(shop) — delegates + decrypts each in place.
+ *   - deleteSession / deleteSessions — pass-through.
+ *
+ * What the cipher operates on:
+ *   - Empty access token (Session.accessToken === undefined or '') —
+ *     not encrypted. Empty stays empty. This matches the adapter's
+ *     `sessionToRow` behavior of writing `accessToken: ''` when absent.
+ *
+ * Scope semantics: Session writes happen OUTSIDE any tenant scope —
+ * Session is `UNSCOPED_MODELS` in our Prisma extension so the extension
+ * passes the queries through. Callers do not need to wrap in
+ * `withTenantScope` or `withSystemScope`.
  */
 export class EncryptedSessionStorage implements SessionStorage {
   constructor(
-    private readonly prisma: WinbackPrisma,
+    private readonly inner: SessionStorage,
     private readonly cipher: Cipher,
   ) {}
 
-  async storeSession(session: ShopifySession): Promise<boolean> {
-    const encrypted = session.accessToken !== undefined
-      ? this.cipher.encrypt(session.accessToken)
-      : '';
-
-    const data = {
-      shop: session.shop,
-      state: session.state,
-      isOnline: session.isOnline,
-      scope: session.scope ?? null,
-      expires: session.expires ?? null,
-      accessToken: encrypted,
-      userId: toBigIntOrNull(session.userId),
-      firstName: session.firstName ?? null,
-      lastName: session.lastName ?? null,
-      email: session.email ?? null,
-      accountOwner: session.accountOwner ?? false,
-      locale: session.locale ?? null,
-      collaborator: session.collaborator ?? false,
-      emailVerified: session.emailVerified ?? false,
-    };
-
-    await this.prisma.session.upsert({
-      where: { id: session.id },
-      create: { id: session.id, ...data },
-      update: data,
+  async storeSession(session: Session): Promise<boolean> {
+    const original = session.accessToken;
+    if (original === undefined || original.length === 0) {
+      // No token to encrypt — delegate as-is.
+      return this.inner.storeSession(session);
+    }
+    // Clone via toObject() so onlineAccessInfo and any extension fields
+    // round-trip cleanly through the Session constructor.
+    const clone = new Session({
+      ...session.toObject(),
+      accessToken: this.cipher.encrypt(original),
     });
-    return true;
+    return this.inner.storeSession(clone);
   }
 
-  async loadSession(id: string): Promise<ShopifySession | undefined> {
-    const row = await this.prisma.session.findUnique({ where: { id } });
-    if (row === null) return undefined;
-    return this.rowToSession(row);
+  async loadSession(id: string): Promise<Session | undefined> {
+    const session = await this.inner.loadSession(id);
+    if (session === undefined) return undefined;
+    if (session.accessToken !== undefined && session.accessToken.length > 0) {
+      try {
+        session.accessToken = this.cipher.decrypt(session.accessToken);
+      } catch (err) {
+        // Corrupt ciphertext (wrong key, truncation, etc.). Treat as no
+        // usable token so callers surface a re-auth flow rather than
+        // ship plaintext-of-ciphertext as the access token. Use `delete`
+        // (not `= undefined`) because `accessToken?: string` under
+        // exactOptionalPropertyTypes: assigning `undefined` to an
+        // optional property is rejected by TS — `delete` is the honest
+        // way to express "this property is now absent."
+        log.warn({ id, err }, 'EncryptedSessionStorage: decrypt failed; dropping accessToken');
+        delete session.accessToken;
+      }
+    }
+    return session;
   }
 
   async deleteSession(id: string): Promise<boolean> {
-    try {
-      await this.prisma.session.delete({ where: { id } });
-      return true;
-    } catch (err) {
-      // P2025: record not found — idempotent delete behavior.
-      log.debug({ err, id }, 'Session delete: row not found (idempotent OK)');
-      return true;
-    }
+    return this.inner.deleteSession(id);
   }
 
   async deleteSessions(ids: string[]): Promise<boolean> {
     if (ids.length === 0) return true;
-    await this.prisma.session.deleteMany({ where: { id: { in: ids } } });
-    return true;
+    return this.inner.deleteSessions(ids);
   }
 
-  async findSessionsByShop(shop: string): Promise<ShopifySession[]> {
-    const rows = await this.prisma.session.findMany({ where: { shop } });
-    return rows.map((row) => this.rowToSession(row));
-  }
-
-  private rowToSession(row: {
-    id: string;
-    shop: string;
-    state: string;
-    isOnline: boolean;
-    scope: string | null;
-    expires: Date | null;
-    accessToken: string;
-    userId: bigint | null;
-    firstName: string | null;
-    lastName: string | null;
-    email: string | null;
-    accountOwner: boolean;
-    locale: string | null;
-    collaborator: boolean | null;
-    emailVerified: boolean | null;
-  }): ShopifySession {
-    const accessToken = row.accessToken.length > 0
-      ? this.cipher.decrypt(row.accessToken)
-      : undefined;
-    return {
-      id: row.id,
-      shop: row.shop,
-      state: row.state,
-      isOnline: row.isOnline,
-      scope: row.scope ?? undefined,
-      expires: row.expires ?? undefined,
-      accessToken,
-      userId: row.userId ?? undefined,
-      firstName: row.firstName ?? undefined,
-      lastName: row.lastName ?? undefined,
-      email: row.email ?? undefined,
-      accountOwner: row.accountOwner,
-      locale: row.locale ?? undefined,
-      collaborator: row.collaborator ?? undefined,
-      emailVerified: row.emailVerified ?? undefined,
-    };
-  }
-}
-
-function toBigIntOrNull(v: string | number | bigint | undefined): bigint | null {
-  if (v === undefined) return null;
-  if (typeof v === 'bigint') return v;
-  try {
-    return BigInt(v.toString());
-  } catch {
-    return null;
+  async findSessionsByShop(shop: string): Promise<Session[]> {
+    const sessions = await this.inner.findSessionsByShop(shop);
+    for (const session of sessions) {
+      if (session.accessToken !== undefined && session.accessToken.length > 0) {
+        try {
+          session.accessToken = this.cipher.decrypt(session.accessToken);
+        } catch (err) {
+          // See loadSession for the `delete` rationale (exactOptional-
+          // PropertyTypes prohibits `= undefined` on `accessToken?: string`).
+          log.warn(
+            { id: session.id, err },
+            'EncryptedSessionStorage: decrypt failed for findSessionsByShop row',
+          );
+          delete session.accessToken;
+        }
+      }
+    }
+    return sessions;
   }
 }

@@ -1,4 +1,5 @@
 import { type LoaderFunctionArgs, redirect } from '@remix-run/node';
+import { Session } from '@shopify/shopify-api';
 import { getLogger } from '@winback/logger';
 import {
   completeInstall,
@@ -110,8 +111,15 @@ export async function loader({ request }: LoaderFunctionArgs) {
 
     // (8) Session store — guardrail #1 continues. Without a session row,
     // the embedded app can't load. Hard failure → restart.
+    //
+    // Wrapped in `new Session({...})` (step 6) because the SDK session-
+    // storage interface accepts the SDK's `Session` class instance, not
+    // an object literal. EncryptedSessionStorage decorates the official
+    // `@shopify/shopify-app-session-storage-prisma` adapter; the adapter
+    // calls `session.toObject()` internally, which only exists on the
+    // class. Construction here is data-only; no method side effects.
     try {
-      await getSessionStorage().storeSession({
+      const offlineSession = new Session({
         id: `offline_${shop}`,
         shop,
         state,
@@ -119,6 +127,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
         scope: tokenResult.scope,
         accessToken: tokenResult.accessToken,
       });
+      await getSessionStorage().storeSession(offlineSession);
     } catch (err) {
       log.error(
         { err, shop, merchantId: installResult.merchantId },

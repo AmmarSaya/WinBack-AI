@@ -42,7 +42,11 @@
       "@prisma/client": "5.22.0",
       "prisma": "5.22.0",
       "vitest": "2.1.9",
-      "zod": "3.25.76"
+      "zod": "3.25.76",
+      "@shopify/shopify-api": "11.14.1",
+      "@shopify/shopify-app-remix": "3.8.1",
+      "@shopify/shopify-app-session-storage": "3.0.20",
+      "@shopify/shopify-app-session-storage-prisma": "5.2.3"
     }
   }
 }
