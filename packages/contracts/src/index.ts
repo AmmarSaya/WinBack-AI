@@ -18,3 +18,17 @@ export {
   isBackfillResource,
   type BackfillResource,
 } from './backfill.js';
+
+export {
+  AUDIT_ACTIONS,
+  ALL_AUDIT_ACTIONS,
+  isAuditAction,
+  type AuditAction,
+} from './audit-actions.js';
+
+export {
+  SYSTEM_SCOPE_REASONS,
+  ALL_SYSTEM_SCOPE_REASONS,
+  isSystemScopeReason,
+  type SystemScopeReason,
+} from './system-scope-reasons.js';

@@ -1,23 +1,27 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import { type AuditAction } from '@winback/contracts';
+
 /**
  * Audit context — set at boundaries that perform sensitive operations so
  * subsequent writes can be tagged with `action`, `actorType`, `actorId`.
  *
- * B3 state: this ALS exists and is read by the extension for log-line
- * enrichment, but the extension does NOT auto-write AuditLog rows.
- * AuditLog rows are written by explicit calls to
- * `AuditLogRepository.append()` at the relevant call sites.
+ * Audit Write Policy (see ARCHITECTURE.md): AuditLog rows are written
+ * DIRECTLY in the same DB transaction as the business action they record.
+ * They are NOT outbox-driven. The repository chokepoint is
+ * `AuditLogRepository.append`, which accepts only `AuditAction` constants
+ * from `@winback/contracts` — never raw strings.
  *
- * Future (D2 outbox drainer): an `audit.entry` outbox event published in
- * the same transaction as the business write will materialize the AuditLog
- * row automatically — that's the correct compositional design. The current
- * shape of this module is forward-compatible.
+ * This module exists so audit context (actor, target, free-form metadata)
+ * can be carried implicitly via AsyncLocalStorage when a caller is far
+ * from the AuditLog write itself (e.g. operator dashboards, request
+ * middleware). The explicit `AuditLogRepository.append` call remains the
+ * write — `appendFromContext` is a convenience that reads from this ALS.
  */
 
 export interface AuditContext {
-  /** Dotted action identifier, e.g. "merchant.uninstalled", "gdpr.customer_redact". */
-  readonly action: string;
+  /** Typed audit action — must come from AUDIT_ACTIONS in @winback/contracts. */
+  readonly action: AuditAction;
   readonly actorType: 'system' | 'merchant' | 'operator';
   readonly actorId?: string;
   readonly targetType?: string;

@@ -1,5 +1,6 @@
-import { getLogger } from '@winback/logger';
+import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { withSystemScope } from '@winback/db';
+import { getLogger } from '@winback/logger';
 
 import { getPrisma } from '~/services/db.server.js';
 
@@ -17,7 +18,7 @@ const log = getLogger('web.readyz');
  */
 export async function loader() {
   try {
-    await withSystemScope('healthcheck.readyz', async () => {
+    await withSystemScope(SYSTEM_SCOPE_REASONS.healthcheck.readyz, async () => {
       await getPrisma().$queryRaw`SELECT 1`;
     });
     return new Response('ok', {

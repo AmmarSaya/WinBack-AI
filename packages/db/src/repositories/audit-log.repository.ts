@@ -1,3 +1,4 @@
+import { type AuditAction } from '@winback/contracts';
 import { Prisma } from '@prisma/client';
 
 import type { WinbackPrisma } from '../client.js';
@@ -10,8 +11,12 @@ export interface AppendAuditLogInput {
   readonly shop: string | null;
   readonly actorType: 'system' | 'merchant' | 'operator';
   readonly actorId?: string;
-  /** Dotted action identifier, e.g. "merchant.uninstalled". */
-  readonly action: string;
+  /**
+   * Typed audit-action identifier — must come from AUDIT_ACTIONS in
+   * @winback/contracts. Raw string literals are a compile error here.
+   * See ARCHITECTURE.md for the Audit Write Policy.
+   */
+  readonly action: AuditAction;
   readonly targetType?: string;
   readonly targetId?: string;
   readonly context?: Record<string, unknown>;

@@ -13,6 +13,12 @@
  *
  * Versioning rule: a payload-shape change MUST bump the @v<n> suffix.
  * Consumers handle multiple versions or drop unsupported ones.
+ *
+ * Audit is intentionally NOT a domain here. Per the Audit Write Policy in
+ * ARCHITECTURE.md, AuditLog rows are written directly in the same DB
+ * transaction as the business action they record — never through the
+ * outbox. See AUDIT_ACTIONS in this package for the typed registry of
+ * AuditLog.action values.
  */
 
 export const OUTBOX_EVENTS = {
@@ -41,10 +47,6 @@ export const OUTBOX_EVENTS = {
     updated: 'product.updated',
     deleted: 'product.deleted',
   },
-  // Reserved for D2 (outbox drainer materializes AuditLog rows from these):
-  audit: {
-    entry: 'audit.entry',
-  },
   // GDPR compliance (C6). Emitted by webhook-ingest when a GDPR topic
   // arrives; consumed by the compliance processor in @winback/db. Per
   // Shopify, merchants have a 30-day SLA on redact actions — the processor
@@ -69,7 +71,6 @@ export type OutboxEventType =
   | (typeof OUTBOX_EVENTS.customer)[keyof typeof OUTBOX_EVENTS.customer]
   | (typeof OUTBOX_EVENTS.order)[keyof typeof OUTBOX_EVENTS.order]
   | (typeof OUTBOX_EVENTS.product)[keyof typeof OUTBOX_EVENTS.product]
-  | (typeof OUTBOX_EVENTS.audit)[keyof typeof OUTBOX_EVENTS.audit]
   | (typeof OUTBOX_EVENTS.gdpr)[keyof typeof OUTBOX_EVENTS.gdpr];
 
 // Convenience: all event types as a runtime Set for validation / iteration.
@@ -78,6 +79,5 @@ export const ALL_OUTBOX_EVENT_TYPES: ReadonlySet<OutboxEventType> = new Set([
   ...Object.values(OUTBOX_EVENTS.customer),
   ...Object.values(OUTBOX_EVENTS.order),
   ...Object.values(OUTBOX_EVENTS.product),
-  ...Object.values(OUTBOX_EVENTS.audit),
   ...Object.values(OUTBOX_EVENTS.gdpr),
 ] as OutboxEventType[]);

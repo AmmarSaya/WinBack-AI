@@ -1,6 +1,7 @@
 import { type LoaderFunctionArgs, json, redirect } from '@remix-run/node';
 import { useLoaderData } from '@remix-run/react';
 import { Card, Layout, Page, Text } from '@shopify/polaris';
+import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { withSystemScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import { isValidShopDomain } from '@winback/shopify';
@@ -29,8 +30,10 @@ export async function loader({ request }: LoaderFunctionArgs) {
       return new Response('Missing shop', { status: 400 });
     }
 
-    // Pre-tenant: we look up by shop without a tenant scope.
-    const merchant = await withSystemScope('web.index.lookup', () =>
+    // Pre-tenant: we look up by shop without a tenant scope. Reason
+    // renamed from `web.index.lookup` (two dots — latent runtime bug)
+    // to `web.index_lookup` (one dot, registry-valid) in step 2.
+    const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.web.index_lookup, () =>
       getPrisma().merchant.findUnique({
         where: { shop },
         select: { id: true, shop: true, installedAt: true },

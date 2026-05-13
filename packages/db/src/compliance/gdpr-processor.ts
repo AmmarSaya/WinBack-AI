@@ -34,6 +34,7 @@
  * (no-op if the target is already redacted/deleted).
  */
 
+import { AUDIT_ACTIONS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { Prisma } from '@prisma/client';
 
 import type { WinbackPrisma } from '../client.js';
@@ -128,7 +129,7 @@ export async function processCustomerDataRequest(
           shop,
           actorType: 'system',
           actorId: 'gdpr.processor',
-          action: 'gdpr.customer_data_request',
+          action: AUDIT_ACTIONS.gdpr.customer_data_request,
           targetType: 'customer',
           targetId: payload.customer?.id != null ? String(payload.customer.id) : null,
           context: {
@@ -186,7 +187,7 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
           shop,
           actorType: 'system',
           actorId: 'gdpr.processor',
-          action: 'gdpr.customer_redact_malformed',
+          action: AUDIT_ACTIONS.gdpr.customer_redact_malformed,
           targetType: 'customer',
           targetId: numericId != null ? String(numericId) : null,
           context: { shopDomain: payload.shop_domain ?? null } as Prisma.InputJsonValue,
@@ -215,7 +216,7 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
             shop,
             actorType: 'system',
             actorId: 'gdpr.processor',
-            action: 'gdpr.customer_redact_no_local_record',
+            action: AUDIT_ACTIONS.gdpr.customer_redact_no_local_record,
             targetType: 'customer',
             targetId: String(numericId),
             context: {
@@ -255,7 +256,7 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
           shop,
           actorType: 'system',
           actorId: 'gdpr.processor',
-          action: 'gdpr.customer_redact',
+          action: AUDIT_ACTIONS.gdpr.customer_redact,
           targetType: 'customer',
           targetId: customer.id,
           context: {
@@ -337,19 +338,19 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   const batchSize = args.batchSize ?? DEFAULT_SHOP_REDACT_BATCH_SIZE;
 
   // 1. System-scope lookup. Idempotent if already redacted.
-  const merchant = await withSystemScope('gdpr.shop_redact', () =>
+  const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
     prisma.merchant.findUnique({ where: { shop }, select: { id: true } }),
   );
 
   if (merchant === null) {
-    await withSystemScope('gdpr.shop_redact', async () => {
+    await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
       await prisma.auditLog.create({
         data: {
           merchantId: null,
           shop,
           actorType: 'system',
           actorId: 'gdpr.processor',
-          action: 'gdpr.shop_redact_idempotent',
+          action: AUDIT_ACTIONS.gdpr.shop_redact_idempotent,
           targetType: 'merchant',
           targetId: null,
           context: { shopDomain: payload.shop_domain ?? null } as Prisma.InputJsonValue,
@@ -370,7 +371,7 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
           shop,
           actorType: 'system',
           actorId: 'gdpr.processor',
-          action: 'gdpr.shop_redact',
+          action: AUDIT_ACTIONS.gdpr.shop_redact,
           targetType: 'merchant',
           targetId: merchantId,
           context: {
@@ -390,14 +391,14 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   // 4. Delete Session rows for the shop. Sessions are UNSCOPED (Shopify
   // adapter table), so we don't bind a tenant scope — system scope is the
   // correct boundary.
-  await withSystemScope('gdpr.shop_redact', async () => {
+  await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
     await prisma.session.deleteMany({ where: { shop } });
   });
 
   // 5. Final Merchant delete (system scope — the merchant row itself is
   // unscoped from the tenant perspective). CASCADE handles any rows the
   // chunked passes missed.
-  await withSystemScope('gdpr.shop_redact', async () => {
+  await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
     await prisma.merchant.delete({ where: { id: merchantId } });
   });
 }

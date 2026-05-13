@@ -1,5 +1,10 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 
+import {
+  ALL_SYSTEM_SCOPE_REASONS,
+  type SystemScopeReason,
+} from '@winback/contracts';
+
 import { TenantScopeError } from './errors.js';
 
 // ---------------------------------------------------------------------------
@@ -89,28 +94,42 @@ export function withTenantScope<T>(merchantId: string, fn: () => Promise<T>): Pr
 /**
  * Runs `fn` in system scope. Required for legitimate cross-tenant operations
  * (cron sweeps, operator tooling, outbox drainer). `reason` is mandatory
- * AND must match `category.action` format (lowercase, dotted) — forces
- * every system-scope entry to document WHY it's bypassing tenancy in a
- * greppable form. The reason surfaces in logs and audit trails.
+ * and is typed against `SystemScopeReason` from `@winback/contracts` —
+ * production code MUST reference a constant from `SYSTEM_SCOPE_REASONS`.
+ * String literals are a type error at compile time.
  *
  * The system scope is NOT a free pass for application code. Use only at
  * system component boundaries. Application code should never see `kind: 'system'`.
  *
- * Format examples that pass:
- *   "outbox.drain"
- *   "cron.idempotency_cleanup"
- *   "shopify.install"
- *   "operator.admin_query"
+ * Test escape: integration tests use ad-hoc reasons prefixed `test.` for
+ * scenario labelling (e.g. `test.cleanup`, `test.setup_merchant`). Those
+ * don't belong in the production registry. The type signature accepts any
+ * `test.${string}` template-literal so tests compile without polluting the
+ * registry.
  *
- * Format examples that fail:
+ * Runtime regex is retained as belt-and-suspenders for callers that bypass
+ * TS (e.g. `as never`, untyped JS, FFI). The two layers serve different
+ * audiences: the union catches typos at compile time for typed callers,
+ * the regex catches them at runtime for everyone else.
+ *
+ * Format examples that pass (TS + runtime):
+ *   "outbox.drain"            (when registered)
+ *   "shopify.install"
+ *   "test.cleanup"            (test escape)
+ *
+ * Format examples that fail (TS rejects; if forced past with cast, regex also rejects):
  *   ""                  (empty)
  *   "system"            (no category.action)
  *   "Fix bug"           (uppercase + space)
  *   "tmp"               (no dot)
+ *   "web.index.lookup"  (two dots — failed silently before step-2 lock; fixed)
  */
 const SYSTEM_REASON_PATTERN = /^[a-z][a-z_]*\.[a-z][a-z_0-9]*$/;
 
-export function withSystemScope<T>(reason: string, fn: () => Promise<T>): Promise<T> {
+export function withSystemScope<T>(
+  reason: SystemScopeReason | `test.${string}`,
+  fn: () => Promise<T>,
+): Promise<T> {
   if (typeof reason !== 'string' || !SYSTEM_REASON_PATTERN.test(reason)) {
     return Promise.reject(
       new TenantScopeError(
@@ -121,6 +140,9 @@ export function withSystemScope<T>(reason: string, fn: () => Promise<T>): Promis
   }
   return scopeStore.run({ kind: 'system', reason }, fn);
 }
+
+/** Re-exported for tests and tooling that need the registered-reasons set. */
+export { ALL_SYSTEM_SCOPE_REASONS };
 
 /**
  * Reads the current scope. Returns `undefined` if no scope is active.

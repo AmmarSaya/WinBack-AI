@@ -1,4 +1,4 @@
-import { OUTBOX_EVENTS } from '@winback/contracts';
+import { OUTBOX_EVENTS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { type WinbackPrisma, withSystemScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
 
@@ -54,7 +54,7 @@ export async function completeInstall(
   //
   // `findUnique` inside the tx determines new-vs-reinstall atomically
   // with the subsequent writes. No external read → no race.
-  return withSystemScope('shopify.install', async () => {
+  return withSystemScope(SYSTEM_SCOPE_REASONS.shopify.install, async () => {
     return prisma.$transaction(async (rawTx) => {
       const tx = rawTx as unknown as WinbackPrisma;
       const existing = await tx.merchant.findUnique({

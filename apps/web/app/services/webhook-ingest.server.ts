@@ -1,4 +1,5 @@
 import { Prisma } from '@prisma/client';
+import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { type WinbackPrisma, withSystemScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import {
@@ -75,7 +76,7 @@ export async function ingestWebhook(
   const eventType = getOutboxEventForTopic(topic);
   const parsedBody = tryParseJson(rawBody);
 
-  return withSystemScope('webhook.ingest', async () => {
+  return withSystemScope(SYSTEM_SCOPE_REASONS.webhook.ingest, async () => {
     // 3. Merchant resolution.
     const merchant = await prisma.merchant.findUnique({
       where: { shop },

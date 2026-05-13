@@ -1,4 +1,4 @@
-import { OUTBOX_EVENTS } from '@winback/contracts';
+import { OUTBOX_EVENTS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import type { Cipher } from '@winback/crypto';
 import { type WinbackPrisma, withSystemScope } from '@winback/db';
 
@@ -48,7 +48,7 @@ export class PrismaShopifyTokenResolver implements ShopifyTokenResolver {
   ) {}
 
   async getOfflineToken(merchantId: string): Promise<ResolvedToken | null> {
-    return withSystemScope('admin.token_resolve', async () => {
+    return withSystemScope(SYSTEM_SCOPE_REASONS.admin.token_resolve, async () => {
       const merchant = await this.prisma.merchant.findUnique({
         where: { id: merchantId },
         select: { shop: true, tokenRevokedAt: true },
@@ -74,7 +74,7 @@ export class PrismaShopifyTokenResolver implements ShopifyTokenResolver {
   }
 
   async markTokenRevoked(merchantId: string): Promise<void> {
-    await withSystemScope('admin.token_revoke', async () => {
+    await withSystemScope(SYSTEM_SCOPE_REASONS.admin.token_revoke, async () => {
       await this.prisma.$transaction(async (tx) => {
         await tx.merchant.update({
           where: { id: merchantId },
