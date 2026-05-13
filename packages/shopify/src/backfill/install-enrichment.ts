@@ -1,5 +1,10 @@
 import { OUTBOX_EVENTS } from '@winback/contracts';
-import { UnitOfWork, type WinbackPrisma, withTenantScope } from '@winback/db';
+import {
+  MerchantRepository,
+  UnitOfWork,
+  type WinbackPrisma,
+  withTenantScope,
+} from '@winback/db';
 import { getLogger } from '@winback/logger';
 
 import type { AdminClient } from '../admin/client.js';
@@ -59,21 +64,23 @@ export async function enrichInstall(
 
   try {
     const uow = new UnitOfWork(prisma);
+    const merchantRepo = new MerchantRepository(prisma);
     await withTenantScope(merchantId, async () => {
       await uow.run(async (ctx) => {
-        // Field updates + timestamp — atomic. Single SQL UPDATE.
-        await ctx.db.merchant.update({
-          where: { id: merchantId },
-          data: {
+        // Field updates + timestamp via the repository — atomic, single
+        // SQL UPDATE bundled with the outbox event in the same tx.
+        await merchantRepo.updateEnrichment(
+          merchantId,
+          {
             email: details.email,
             name: details.name,
             country: details.country,
             currency: details.currency,
             timezone: details.timezone,
             shopifyPlan: details.plan,
-            shopDetailsFetchedAt: new Date(),
           },
-        });
+          ctx.db,
+        );
         // Outbox event in the same tx — downstream workers (E intelligence,
         // operator dashboards) react to merchant enrichment becoming
         // available.

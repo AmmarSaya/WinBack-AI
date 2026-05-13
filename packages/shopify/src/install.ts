@@ -1,6 +1,7 @@
 import { OUTBOX_EVENTS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
-import { type WinbackPrisma, withSystemScope } from '@winback/db';
+import { MerchantRepository, type WinbackPrisma, withSystemScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
+import type { Prisma } from '@prisma/client';
 
 import { ShopifyInvalidShopError } from './errors.js';
 import { isValidShopDomain } from './shop-domain.js';
@@ -52,41 +53,45 @@ export async function completeInstall(
   // migration mishap, hand-edit, race during a crash), the next install
   // restores invariants instead of getting stuck.
   //
-  // `findUnique` inside the tx determines new-vs-reinstall atomically
-  // with the subsequent writes. No external read → no race.
-  return withSystemScope(SYSTEM_SCOPE_REASONS.shopify.install, async () => {
-    return prisma.$transaction(async (rawTx) => {
-      const tx = rawTx as unknown as WinbackPrisma;
-      const existing = await tx.merchant.findUnique({
-        where: { shop: args.shop },
-        select: { id: true },
-      });
-      const isNewInstall = existing === null;
+  // Merchant upsert routes through MerchantRepository.upsertInstall, which
+  // does the findUnique+upsert atomically and returns `{id, isNewInstall}`.
+  // No external read → no race.
+  const merchantRepo = new MerchantRepository(prisma);
 
-      const merchant = await tx.merchant.upsert({
-        where: { shop: args.shop },
-        create: { shop: args.shop, installedAt: new Date() },
-        update: { tokenRevokedAt: null, uninstalledAt: null },
-        select: { id: true },
-      });
+  return withSystemScope(SYSTEM_SCOPE_REASONS.shopify.install, async () => {
+    return prisma.$transaction(async (extendedTx) => {
+      // Prisma 5 typing gap (see unit-of-work.ts header): calling
+      // `$transaction` on the extended client returns the extended client
+      // type for the callback parameter, not `Prisma.TransactionClient`.
+      // The two aren't bidirectionally assignable. Runtime extension hooks
+      // still fire on `extendedTx`; only TS typing differs. Cast at this
+      // boundary so the repository's `Prisma.TransactionClient` parameter
+      // accepts it. Pattern matches UoW.run, which does the same cast
+      // internally.
+      const tx = extendedTx as unknown as Prisma.TransactionClient;
+
+      const { id: merchantId, isNewInstall } = await merchantRepo.upsertInstall(
+        { shop: args.shop },
+        tx,
+      );
 
       // Heal MerchantSettings — defensive create-if-missing on every install.
       await tx.merchantSettings.upsert({
-        where: { merchantId: merchant.id },
-        create: { merchantId: merchant.id },
+        where: { merchantId },
+        create: { merchantId },
         update: {},
       });
 
       // Heal BillingSubscription.
       await tx.billingSubscription.upsert({
-        where: { merchantId: merchant.id },
-        create: { merchantId: merchant.id, status: 'trialing' },
+        where: { merchantId },
+        create: { merchantId, status: 'trialing' },
         update: {},
       });
 
       await tx.outboxEvent.create({
         data: {
-          merchantId: merchant.id,
+          merchantId,
           type: OUTBOX_EVENTS.merchant.installed,
           payload: {
             shop: args.shop,
@@ -98,14 +103,14 @@ export async function completeInstall(
 
       log.info(
         {
-          merchantId: merchant.id,
+          merchantId,
           shop: args.shop,
           reinstall: !isNewInstall,
         },
         isNewInstall ? 'Merchant install completed' : 'Merchant reinstall completed',
       );
 
-      return { merchantId: merchant.id, isNewInstall };
+      return { merchantId, isNewInstall };
     });
   });
 }

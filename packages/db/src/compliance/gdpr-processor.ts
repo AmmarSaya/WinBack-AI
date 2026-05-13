@@ -38,6 +38,7 @@ import { AUDIT_ACTIONS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { Prisma } from '@prisma/client';
 
 import type { WinbackPrisma } from '../client.js';
+import { MerchantRepository } from '../repositories/merchant.repository.js';
 import { withSystemScope, withTenantScope } from '../tenant-scope.js';
 import { UnitOfWork } from '../unit-of-work.js';
 
@@ -336,10 +337,11 @@ type ShopRedactTable = (typeof SHOP_REDACT_TABLES_IN_ORDER)[number];
 export async function processShopRedact(args: ProcessShopRedactArgs): Promise<void> {
   const { prisma, shop, payload } = args;
   const batchSize = args.batchSize ?? DEFAULT_SHOP_REDACT_BATCH_SIZE;
+  const merchantRepo = new MerchantRepository(prisma);
 
   // 1. System-scope lookup. Idempotent if already redacted.
   const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
-    prisma.merchant.findUnique({ where: { shop }, select: { id: true } }),
+    merchantRepo.findByShop(shop),
   );
 
   if (merchant === null) {
@@ -398,9 +400,9 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   // 5. Final Merchant delete (system scope — the merchant row itself is
   // unscoped from the tenant perspective). CASCADE handles any rows the
   // chunked passes missed.
-  await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
-    await prisma.merchant.delete({ where: { id: merchantId } });
-  });
+  await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
+    merchantRepo.hardDelete(merchantId),
+  );
 }
 
 /**

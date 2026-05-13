@@ -100,12 +100,15 @@ describe('enrichInstall — contract', () => {
 
 describe('enrichInstall — atomicity invariant (documentation)', () => {
   /**
-   * The Merchant.shopDetailsFetchedAt timestamp + the field updates +
-   * the outbox event all live in a single UnitOfWork.run callback in
-   * the implementation. This test exists so the test file fails (or is
+   * The Merchant field updates (via the MerchantRepository, which is the
+   * site of `shopDetailsFetchedAt: new Date()` since step 4) and the
+   * outbox event all live in a single UnitOfWork.run callback in the
+   * implementation. This test exists so the test file fails (or is
    * obviously deleted) if a future refactor splits them.
    *
-   * The behavior under real Postgres is integration-tested at M10.
+   * The behavior under real Postgres is integration-tested at M10. The
+   * repository-level behavior (timestamp set, fields applied) is unit-
+   * tested in packages/db/tests/merchant-repository.test.ts.
    */
   it('the file `install-enrichment.ts` writes Merchant + outbox in one UoW', async () => {
     const src = await import('node:fs').then((fs) =>
@@ -119,9 +122,11 @@ describe('enrichInstall — atomicity invariant (documentation)', () => {
     // the failure forces a human to revisit the atomicity guarantee.
     const uowRunCount = (src.match(/uow\.run\(/g) ?? []).length;
     expect(uowRunCount).toBe(1);
-    // And both writes (merchant.update + ctx.publish) inside that block:
-    expect(src).toContain('merchant.update(');
-    expect(src).toContain('shopDetailsFetchedAt: new Date()');
+    // Both writes (repo.updateEnrichment + ctx.publish) inside that block:
+    expect(src).toContain('merchantRepo.updateEnrichment(');
     expect(src).toContain('OUTBOX_EVENTS.merchant.shop_details_fetched');
+    // The MerchantRepository must be constructed (so the call above is
+    // routed through it, not a direct ctx.db.merchant.update):
+    expect(src).toContain('new MerchantRepository(prisma)');
   });
 });
