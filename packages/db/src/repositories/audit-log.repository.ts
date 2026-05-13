@@ -27,15 +27,30 @@ export interface AppendAuditLogInput {
  * operations: GDPR redact handlers, billing actions, operator interventions,
  * merchant uninstall flows.
  *
- * `append` always succeeds in this layer — failures are caught and logged
- * but never thrown. This is intentional: a failed audit write should not
- * cancel the business operation that triggered it. The opposite policy
- * (audit-must-succeed-or-fail) is achievable by callers via try/catch
- * around the explicit `append` call.
+ * Failure policy — `append` PROPAGATES errors to the caller. If the DB
+ * write fails (connection drop, constraint violation, scope mismatch
+ * thrown by the Prisma extension), the rejected Promise is what the caller
+ * sees. This is intentional for compliance code: silently swallowing an
+ * audit-write failure means a GDPR action happened without its evidence
+ * row, which is the failure mode auditors care about. Callers that want
+ * fire-and-forget semantics (a non-critical "operator clicked button" log,
+ * say) must explicitly try/catch around `append`.
+ *
+ * Scope gating — `append` does NOT do its own scope check. The Prisma
+ * extension's write hook (`enforceTenantScopeOnWrite` in `./extensions/
+ * hooks.ts`) is the single source of truth for tenant assertion on
+ * AuditLog writes. Behavior:
+ *
+ *   - no scope:          throws TenantScopeError
+ *   - tenant scope m_1:  data.merchantId must be undefined (auto-injected
+ *                        as m_1) or already === m_1. Mismatch (including
+ *                        null) throws.
+ *   - system scope:      pass-through. Cross-tenant or null merchantId is
+ *                        only legal under withSystemScope.
  *
  * `appendFromContext` reads the active audit ALS context and appends with
  * those fields; convenience for code that's already inside a withAudit()
- * scope.
+ * scope. Same failure-propagation and scope-gating semantics.
  */
 export class AuditLogRepository {
   constructor(private readonly prisma: WinbackPrisma) {}

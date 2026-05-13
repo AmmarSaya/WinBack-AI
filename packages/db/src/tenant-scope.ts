@@ -9,6 +9,32 @@ import { TenantScopeError } from './errors.js';
 
 // ---------------------------------------------------------------------------
 // Model classification
+//
+// Every model in the schema belongs to exactly one of four buckets. The
+// extension dispatches on the bucket; getting the bucket wrong is a
+// tenant-safety bug.
+//
+//   1. TENANT_SCOPED_MODELS         — most business tables. merchantId
+//                                     mandatory on reads + writes.
+//   2. TENANT_OPTIONAL_READ_MODELS  — forensic tables (FK SetNull on
+//                                     Merchant delete). System-scope reads
+//                                     may span tenants; writes still gated.
+//   3. UNSCOPED_MODELS              — Shopify-adapter-owned. No tenant
+//                                     concept (Session).
+//   4. Merchant (handled by its own explicit branch in the extension)
+//                                   — the tenant ROOT. Not in any set
+//                                     because the semantics differ from
+//                                     the other three: in tenant scope,
+//                                     reads/writes must target the active
+//                                     merchant (no merchantId field; the
+//                                     `id` column IS the tenant). System
+//                                     scope passes through.
+//
+// Adding a new model:
+//   - business data → TENANT_SCOPED_MODELS
+//   - audit/forensic data with FK SetNull → TENANT_OPTIONAL_READ_MODELS
+//   - external-adapter table → UNSCOPED_MODELS
+//   - a second tenant-root concept (unlikely) → new explicit branch
 // ---------------------------------------------------------------------------
 
 /**
@@ -29,9 +55,24 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * Models with OPTIONAL tenant scoping on reads. System-scope reads may span
- * tenants (operator dashboards, audit trails). Writes still require a
- * tenant scope.
+ * Forensic-retention tables: `merchantId` becomes nullable on Merchant
+ * deletion (FK SetNull), preserving the row for compliance / debugging.
+ *
+ * Read gating: tenant scope behaves identically to TENANT_SCOPED_MODELS
+ * (merchantId auto-injected and asserted). System scope bypasses the
+ * tenant assertion, allowing operator dashboards and audit-trail queries
+ * to span tenants.
+ *
+ * Write gating: identical to TENANT_SCOPED_MODELS in tenant scope —
+ * merchantId is injected if absent, asserted if present, and explicit
+ * `merchantId: null` is rejected. System scope writes pass through
+ * unmodified, which is the ONLY path that can legally write `null` here.
+ * (Example: `gdpr.shop_redact_idempotent` writes a tombstone AuditLog
+ * row with `merchantId: null` from inside `withSystemScope`.)
+ *
+ * Test coverage for this gating lives in
+ * `packages/db/tests/tenant-scope.test.ts` (`AuditLog write enforcement`
+ * block); the gdpr-processor unit tests exercise the system-scope path.
  */
 export const TENANT_OPTIONAL_READ_MODELS: ReadonlySet<string> = new Set([
   'WebhookLog',

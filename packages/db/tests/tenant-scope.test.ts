@@ -119,3 +119,87 @@ describe('tenant scope — writes', () => {
     });
   });
 });
+
+/**
+ * AuditLog (and other TENANT_OPTIONAL_READ_MODELS) write enforcement.
+ *
+ * These tests pin the behavior described in the model-classification
+ * comment at the top of tenant-scope.ts: the "READ" in the set name
+ * refers to the cross-tenant ALLOWANCE on reads (system scope can span
+ * tenants), not to the write side. Writes still go through
+ * enforceTenantScopeOnWrite — merchantId is injected/asserted in tenant
+ * scope, and only system scope can write `null` or cross-tenant rows.
+ *
+ * Without these tests the behavior is comment-asserted only, which is
+ * exactly the failure mode the project is set up to eliminate.
+ */
+describe('AuditLog write enforcement (TENANT_OPTIONAL_READ_MODELS)', () => {
+  it('throws when no scope is active', () => {
+    expect(() =>
+      applyWriteHooks('AuditLog', { data: { action: 'x.y' } }, 'create'),
+    ).toThrow(TenantScopeError);
+  });
+
+  it('auto-injects merchantId in tenant scope when absent', async () => {
+    await withTenantScope('m_1', async () => {
+      const result = applyWriteHooks('AuditLog', { data: { action: 'x.y' } }, 'create');
+      expect(result.data).toMatchObject({ merchantId: 'm_1', action: 'x.y' });
+    });
+  });
+
+  it('passes matching merchantId through in tenant scope', async () => {
+    await withTenantScope('m_1', async () => {
+      const result = applyWriteHooks(
+        'AuditLog',
+        { data: { merchantId: 'm_1', action: 'x.y' } },
+        'create',
+      );
+      expect(result.data).toMatchObject({ merchantId: 'm_1' });
+    });
+  });
+
+  it('throws on cross-tenant data.merchantId in tenant scope', async () => {
+    await withTenantScope('m_1', async () => {
+      expect(() =>
+        applyWriteHooks(
+          'AuditLog',
+          { data: { merchantId: 'm_2', action: 'x.y' } },
+          'create',
+        ),
+      ).toThrow(TenantScopeError);
+    });
+  });
+
+  it('throws on explicit merchantId=null in tenant scope (mismatch with active tenant)', async () => {
+    // Important: tenant-scope code paths cannot write tombstone rows.
+    // The only legal way to write merchantId=null is system scope.
+    await withTenantScope('m_1', async () => {
+      expect(() =>
+        applyWriteHooks(
+          'AuditLog',
+          { data: { merchantId: null, action: 'x.y' } },
+          'create',
+        ),
+      ).toThrow(TenantScopeError);
+    });
+  });
+
+  it('passes through unmodified in system scope (including merchantId=null)', async () => {
+    await withSystemScope('test.audit_passthrough', async () => {
+      const a = applyWriteHooks('AuditLog', { data: { action: 'x.y' } }, 'create');
+      const b = applyWriteHooks(
+        'AuditLog',
+        { data: { merchantId: null, action: 'x.y' } },
+        'create',
+      );
+      const c = applyWriteHooks(
+        'AuditLog',
+        { data: { merchantId: 'm_42', action: 'x.y' } },
+        'create',
+      );
+      expect(a.data).toEqual({ action: 'x.y' });
+      expect(b.data).toEqual({ merchantId: null, action: 'x.y' });
+      expect(c.data).toEqual({ merchantId: 'm_42', action: 'x.y' });
+    });
+  });
+});
