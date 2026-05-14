@@ -14,10 +14,15 @@
   "files": ["dist"],
   "scripts": {
     "build": "tsc -b",
-    "clean": "tsc -b --clean"
+    "clean": "tsc -b --clean",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@winback/errors": "workspace:*",
     "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "vitest": "2.1.9"
   }
 }

@@ -12,3 +12,8 @@ export {
 } from './core.js';
 export { ConfigError, type ConfigErrorIssue } from './error.js';
 export { redact, redactSecrets } from './redact.js';
+export {
+  getRedisConfig,
+  type RedisConfig,
+  type GetRedisConfigOptions,
+} from './redis.js';
