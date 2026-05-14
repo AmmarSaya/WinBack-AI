@@ -32,3 +32,10 @@ export {
   isSystemScopeReason,
   type SystemScopeReason,
 } from './system-scope-reasons.js';
+
+export {
+  QUEUE_NAMES,
+  ALL_QUEUE_NAMES,
+  isQueueName,
+  type QueueName,
+} from './queues.js';

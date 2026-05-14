@@ -19,13 +19,16 @@ import {
   ALL_AUDIT_ACTIONS,
   ALL_BACKFILL_RESOURCES,
   ALL_OUTBOX_EVENT_TYPES,
+  ALL_QUEUE_NAMES,
   ALL_SYSTEM_SCOPE_REASONS,
   AUDIT_ACTIONS,
   BACKFILL_RESOURCES,
   OUTBOX_EVENTS,
+  QUEUE_NAMES,
   SYSTEM_SCOPE_REASONS,
   isAuditAction,
   isBackfillResource,
+  isQueueName,
   isSystemScopeReason,
 } from '../src/index.js';
 
@@ -141,7 +144,9 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
       expect(isSystemScopeReason(value)).toBe(true);
     }
     expect(isSystemScopeReason('gdpr.shop_redcat')).toBe(false); // typo
-    expect(isSystemScopeReason('outbox.drain')).toBe(false); // not yet registered
+    // queue names are a different registry — outbox.drain is a QueueName,
+    // not a SystemScopeReason, and the two must never bleed into each other.
+    expect(isSystemScopeReason('outbox.drain')).toBe(false);
     expect(isSystemScopeReason('')).toBe(false);
   });
 
@@ -154,6 +159,55 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     expect(SYSTEM_SCOPE_REASONS.webhook.ingest).toBe('webhook.ingest');
     expect(SYSTEM_SCOPE_REASONS.healthcheck.readyz).toBe('healthcheck.readyz');
     expect(SYSTEM_SCOPE_REASONS.web.index_lookup).toBe('web.index_lookup');
+  });
+});
+
+// ===========================================================================
+// QUEUE_NAMES
+// ===========================================================================
+
+describe('QUEUE_NAMES registry', () => {
+  it('every value matches the canonical <domain>.<action> format', () => {
+    for (const value of flattenConst(QUEUE_NAMES)) {
+      expect(value, value).toMatch(CANONICAL_FORMAT);
+    }
+  });
+
+  it('ALL_QUEUE_NAMES cardinality matches the flattened const', () => {
+    expect(ALL_QUEUE_NAMES.size).toBe(flattenConst(QUEUE_NAMES).length);
+  });
+
+  it('ALL_QUEUE_NAMES contains every value from the const', () => {
+    for (const value of flattenConst(QUEUE_NAMES)) {
+      expect(ALL_QUEUE_NAMES.has(value as never)).toBe(true);
+    }
+  });
+
+  it('isQueueName is consistent with ALL_QUEUE_NAMES', () => {
+    for (const value of flattenConst(QUEUE_NAMES)) {
+      expect(isQueueName(value)).toBe(true);
+    }
+    // D3 will register these at the call site — must not exist yet
+    // (standing rule 36, mirrors the SYSTEM_SCOPE_REASONS pattern).
+    expect(isQueueName('cron.rollup')).toBe(false);
+    expect(isQueueName('cron.sweep')).toBe(false);
+    // Regression for Q-1a — single-segment names rejected. Locks the
+    // decision that the queue registry uses the dotted format the three
+    // other registries use, not the BACKFILL_RESOURCES flat format.
+    expect(isQueueName('attribution')).toBe(false);
+    expect(isQueueName('outbox')).toBe(false);
+    expect(isQueueName('')).toBe(false);
+    expect(isQueueName('Outbox.Drain')).toBe(false); // caps rejected by format
+  });
+
+  it('contains the two D1 queues (cron.* deferred to D3 per rule 36)', () => {
+    expect(ALL_QUEUE_NAMES.size).toBe(2);
+    expect(QUEUE_NAMES.outbox.drain).toBe('outbox.drain');
+    expect(QUEUE_NAMES.attribution.compute).toBe('attribution.compute');
+  });
+
+  it('does NOT contain a cron.* domain (D3 owns that — register at call site)', () => {
+    expect(Object.keys(QUEUE_NAMES)).not.toContain('cron');
   });
 });
 
