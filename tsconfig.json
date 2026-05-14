@@ -7,6 +7,7 @@
     { "path": "./packages/logger" },
     { "path": "./packages/crypto" },
     { "path": "./packages/db" },
-    { "path": "./packages/shopify" }
+    { "path": "./packages/shopify" },
+    { "path": "./packages/queue" }
   ]
 }
