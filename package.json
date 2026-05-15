@@ -25,7 +25,11 @@
     "db:test": "node ./scripts/db-test.mjs",
     "db:test:up": "node ./scripts/db-test.mjs up",
     "db:test:run": "node ./scripts/db-test.mjs run",
-    "db:test:down": "node ./scripts/db-test.mjs down"
+    "db:test:down": "node ./scripts/db-test.mjs down",
+    "queue:test": "node ./scripts/queue-test.mjs",
+    "queue:test:up": "node ./scripts/queue-test.mjs up",
+    "queue:test:run": "node ./scripts/queue-test.mjs run",
+    "queue:test:down": "node ./scripts/queue-test.mjs down"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

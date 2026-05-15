@@ -30,11 +30,34 @@ vi.mock('bullmq', () => ({
   }),
 }));
 
+// Mock client that mimics enough of the ioredis surface area for closeQueues
+// to exercise its post-disconnect 'end'-event wait. We use a tiny EventEmitter
+// to register listeners; the disconnect mock synchronously emits 'end' so the
+// awaited endPromise inside closeQueues resolves without hanging the test.
+// Real-Redis 'end'-event semantics (async via socket close) are exercised in
+// the step-5 integration suite.
+import { EventEmitter } from 'node:events';
+
 vi.mock('../src/redis-client.js', () => ({
-  createRedisClient: vi.fn((connectionName: string) => ({
-    connectionName,
-    quit: vi.fn().mockResolvedValue('OK'),
-  })),
+  createRedisClient: vi.fn((connectionName: string) => {
+    const emitter = new EventEmitter();
+    const client = Object.assign(emitter, {
+      connectionName,
+      status: 'ready' as 'ready' | 'end',
+      disconnect: vi.fn(() => {
+        // Match the production-code contract: after disconnect, the client
+        // emits 'end' and transitions to status 'end'. Done synchronously
+        // here so tests don't need to await microtasks.
+        client.status = 'end';
+        emitter.emit('end');
+      }),
+      // `quit` retained for future asymmetric usage; closeQueues calls
+      // disconnect ONLY, so this is unused in step 5 but documents that the
+      // mock surface intentionally covers both verbs.
+      quit: vi.fn().mockResolvedValue('OK'),
+    });
+    return client;
+  }),
 }));
 
 const QueueMock = vi.mocked(Queue);
@@ -125,6 +148,7 @@ describe('getQueues + closeQueues', () => {
     // than a confusing TypeError on the .quit property access below.
     expect(createRedisClientMock.mock.results[0]).toBeDefined();
     const firstClientResult = createRedisClientMock.mock.results[0]!.value as {
+      disconnect: Mock;
       quit: Mock;
     };
 
@@ -133,8 +157,10 @@ describe('getQueues + closeQueues', () => {
     // Each Queue's close() was invoked once.
     expect(outboxClose).toHaveBeenCalledTimes(1);
     expect(attribClose).toHaveBeenCalledTimes(1);
-    // Shared client was quit.
-    expect(firstClientResult.quit).toHaveBeenCalledTimes(1);
+    // Shared client was disconnected (NOT quit — see queues.ts header
+    // for why disconnect is the deterministic choice at shutdown).
+    expect(firstClientResult.disconnect).toHaveBeenCalledTimes(1);
+    expect(firstClientResult.quit).not.toHaveBeenCalled();
 
     // Cache cleared — next getQueues() re-initializes (different
     // Queues reference + a fresh createRedisClient call). The user

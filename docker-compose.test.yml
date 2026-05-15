@@ -1,11 +1,13 @@
-# Local Postgres for the M3-Smoke integration tests.
+# Local Postgres and Redis for the M3-Smoke integration tests.
 #
-# Started via `pnpm db:test:up` (or implicitly by `pnpm db:test`). Volume is
-# named so data persists across container restarts during iteration; wipe
-# with `pnpm db:test:down`.
+# Postgres started via `pnpm db:test:up` (or implicitly by `pnpm db:test`).
+# Redis started via `pnpm queue:test:up` (or implicitly by `pnpm queue:test`).
+# Postgres volume is named so data persists across container restarts during
+# iteration; wipe with `pnpm db:test:down`. Redis carries no persistent
+# volume — `pnpm queue:test:down` removes the container only.
 #
-# Port 5433 (not 5432) so it doesn't collide with a developer's local
-# Postgres instance.
+# Port 5433 (not 5432) and 6380 (not 6379) so they don't collide with a
+# developer's local database instances.
 
 services:
   postgres:
@@ -21,6 +23,17 @@ services:
       - winback-test-pg:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U winback -d winback_test"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    container_name: winback-test-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
       interval: 1s
       timeout: 3s
       retries: 30

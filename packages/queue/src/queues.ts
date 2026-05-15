@@ -54,6 +54,27 @@ export function getQueues(): Queues {
   return cachedQueues;
 }
 
+/**
+ * INTERNAL — exposes the shared ioredis client reference for integration
+ * testing only. Returns the current `sharedClient`, or null if either
+ * `getQueues()` has not been called yet or `closeQueues()` has run since
+ * the last `getQueues()`.
+ *
+ * NOT re-exported from `index.ts`. Production code MUST NOT call this —
+ * the sanctioned API is `getQueues()` for Queue handles. The integration
+ * suite (step 5) needs access to the shared client to assert its
+ * post-close `status === 'end'` (BullMQ Queue.add doesn't reliably throw
+ * after close in 5.76.8, so this is the load-bearing assertion that
+ * closeQueues actually disconnected ioredis).
+ *
+ * The leading double-underscore + `ForTesting` suffix make the intent
+ * grep-clear: any production grep for `__getSharedClientForTesting` is
+ * a code-review red flag.
+ */
+export function __getSharedClientForTesting(): Redis | null {
+  return sharedClient;
+}
+
 export async function closeQueues(): Promise<void> {
   if (cachedQueues === null && sharedClient === null) {
     // Double-close: caller's shutdown sequence fired twice (e.g. SIGTERM
@@ -70,12 +91,23 @@ export async function closeQueues(): Promise<void> {
   }
 
   // Null both module-level references in `finally` so a thrown close()
-  // or quit() can't leave the module in a partial-cleanup state — e.g.
-  // cachedQueues=null but sharedClient still set, where the NEXT
-  // closeQueues() call would skip the queues block (already null) and
-  // hit the warning branch, leaking the shared client forever. The
-  // try/finally guarantees both fields are nulled even if either close
-  // or quit throws.
+  // can't leave the module in a partial-cleanup state — e.g. cachedQueues=null
+  // but sharedClient still set, where the NEXT closeQueues() call would
+  // skip the queues block (already null) and hit the warning branch,
+  // leaking the shared client forever. The try/finally guarantees both
+  // fields are nulled even if Queue.close() throws.
+  //
+  // We use `disconnect()` (synchronous, forceful) on the shared client
+  // rather than `quit()` (async, polite). Two reasons:
+  //   1. ioredis does not reliably update its `status` field to 'end'
+  //      after an awaited `quit()` in all scenarios — BullMQ itself
+  //      documents and works around this in its own RedisConnection.close
+  //      via a manual `this._client['status'] = 'end'` assignment.
+  //      Using disconnect avoids the reliability gap entirely.
+  //   2. At SIGTERM time the distinction between polite QUIT and abrupt
+  //      socket close is operationally meaningless — Redis treats both
+  //      as connection closures. We are tearing the worker down either
+  //      way; deterministic > polite.
   try {
     if (cachedQueues !== null) {
       await Promise.all([
@@ -84,7 +116,24 @@ export async function closeQueues(): Promise<void> {
       ]);
     }
     if (sharedClient !== null) {
-      await sharedClient.quit();
+      // ioredis's `disconnect()` severs the socket synchronously, but
+      // the resulting status transition to 'end' propagates through the
+      // Node.js event loop (socket close event → ioredis close handler →
+      // status update). Without awaiting the 'end' event, closeQueues
+      // returns before the connection is observably torn down, which
+      // breaks any caller that checks the client's status post-shutdown
+      // (notably the step-5 integration test honoring Checkpoint 4).
+      //
+      // Capture the reference into a local because the `finally` block
+      // below nulls `sharedClient` after this try-block exits — but the
+      // local survives, so the `once('end')` listener attaches to the
+      // right instance.
+      const client = sharedClient;
+      const endPromise = new Promise<void>((resolve) => {
+        client.once('end', () => resolve());
+      });
+      client.disconnect();
+      await endPromise;
     }
   } finally {
     cachedQueues = null;
