@@ -23,10 +23,11 @@ import { getSessionStorage } from '~/services/session-storage.server.js';
  *     OAuth + webhook ingestion. The locked OAuth ordering invariants
  *     and the typed-event/outbox webhook pattern are preserved.
  *
- * SHOPIFY_API_VERSION comes from our config (default '2025-01' per the
- * schema). If the SDK doesn't recognize the literal as `ApiVersion`,
- * fall back to LATEST_API_VERSION — the SDK still accepts the raw
- * version string at the API call boundary.
+ * SHOPIFY_API_VERSION comes from our config (currently '2026-04' per the
+ * schema example; was '2025-01' until 2026-05-15 when the pin moved to
+ * the latest stable per Partner Dashboard). If the SDK doesn't recognize
+ * the literal as `ApiVersion`, fall back to LATEST_API_VERSION — the SDK
+ * still accepts the raw version string at the API call boundary.
  */
 const config = getShopifyConfig();
 const scopes = Array.from(parseScopes(config.SHOPIFY_SCOPES));

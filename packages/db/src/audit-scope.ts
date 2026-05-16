@@ -30,7 +30,18 @@ export interface AuditContext {
   readonly context?: Readonly<Record<string, unknown>>;
 }
 
-const auditStore = new AsyncLocalStorage<AuditContext>();
+// Hoisted onto globalThis to survive Vite HMR — same reason documented in
+// detail in tenant-scope.ts. If two module copies each construct their own
+// AsyncLocalStorage, the Prisma extension and the caller end up writing
+// to / reading from different stores, and audit context goes silently
+// missing in dev. Production is unaffected (single module instantiation).
+declare global {
+  // eslint-disable-next-line no-var
+  var __winbackAuditStore: AsyncLocalStorage<AuditContext> | undefined;
+}
+
+const auditStore: AsyncLocalStorage<AuditContext> = (globalThis.__winbackAuditStore ??=
+  new AsyncLocalStorage<AuditContext>());
 
 export function withAudit<T>(ctx: AuditContext, fn: () => Promise<T>): Promise<T> {
   return auditStore.run(ctx, fn);

@@ -123,8 +123,8 @@ export async function processCustomerDataRequest(
   const uow = new UnitOfWork(prisma);
   const auditLog = new AuditLogRepository(prisma);
 
-  await withTenantScope(merchantId, () =>
-    uow.run(async (ctx) => {
+  await withTenantScope(merchantId, async () => {
+    await uow.run(async (ctx) => {
       await auditLog.append(
         {
           merchantId,
@@ -142,8 +142,8 @@ export async function processCustomerDataRequest(
         },
         ctx.db,
       );
-    }),
-  );
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -185,8 +185,8 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
     // Malformed payload. Log via audit + return — Shopify retry won't fix
     // the payload, so we ack the work without acting on it. No business
     // action accompanies this audit row, so no tx is passed.
-    await withTenantScope(merchantId, () =>
-      auditLog.append({
+    await withTenantScope(merchantId, async () => {
+      await auditLog.append({
         merchantId,
         shop,
         actorType: 'system',
@@ -195,16 +195,16 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
         targetType: 'customer',
         ...(numericId != null && { targetId: String(numericId) }),
         context: { shopDomain: payload.shop_domain ?? null },
-      }),
-    );
+      });
+    });
     return;
   }
 
   const shopifyCustomerGid = `gid://shopify/Customer/${String(numericId)}`;
   const uow = new UnitOfWork(prisma);
 
-  await withTenantScope(merchantId, () =>
-    uow.run(async (ctx) => {
+  await withTenantScope(merchantId, async () => {
+    await uow.run(async (ctx) => {
       // 1. Locate the customer row. Skip-with-audit if absent — Shopify can
       // re-send redacts for customers we never ingested.
       const customer = await ctx.db.customer.findUnique({
@@ -271,8 +271,8 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
         },
         ctx.db,
       );
-    }),
-  );
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -345,15 +345,15 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   const auditLog = new AuditLogRepository(prisma);
 
   // 1. System-scope lookup. Idempotent if already redacted.
-  const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
-    merchantRepo.findByShop(shop),
-  );
+  const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
+    return await merchantRepo.findByShop(shop);
+  });
 
   if (merchant === null) {
     // Tombstone row: merchantId=null is legal here because we're in
     // system scope — the extension passes it through unmodified.
-    await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
-      auditLog.append({
+    await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
+      await auditLog.append({
         merchantId: null,
         shop,
         actorType: 'system',
@@ -361,17 +361,17 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
         action: AUDIT_ACTIONS.gdpr.shop_redact_idempotent,
         targetType: 'merchant',
         context: { shopDomain: payload.shop_domain ?? null },
-      }),
-    );
+      });
+    });
     return;
   }
 
   const merchantId = merchant.id;
 
   // 2. AuditLog FIRST inside tenant scope (FK SetNull preserves it).
-  await withTenantScope(merchantId, () =>
-    new UnitOfWork(prisma).run(async (ctx) =>
-      auditLog.append(
+  await withTenantScope(merchantId, async () => {
+    await new UnitOfWork(prisma).run(async (ctx) => {
+      await auditLog.append(
         {
           merchantId,
           shop,
@@ -386,9 +386,9 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
           },
         },
         ctx.db,
-      ),
-    ),
-  );
+      );
+    });
+  });
 
   // 3. Chunked deletes. Each chunk: one UoW.run inside the tenant scope.
   for (const table of SHOP_REDACT_TABLES_IN_ORDER) {
@@ -405,9 +405,9 @@ export async function processShopRedact(args: ProcessShopRedactArgs): Promise<vo
   // 5. Final Merchant delete (system scope — the merchant row itself is
   // unscoped from the tenant perspective). CASCADE handles any rows the
   // chunked passes missed.
-  await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, () =>
-    merchantRepo.hardDelete(merchantId),
-  );
+  await withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, async () => {
+    await merchantRepo.hardDelete(merchantId);
+  });
 }
 
 /**

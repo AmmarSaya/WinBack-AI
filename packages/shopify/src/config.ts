@@ -5,7 +5,7 @@ import { z } from 'zod';
  * Shopify app + crypto config. Validated lazily on first call.
  *
  * `SHOPIFY_API_VERSION` is the quarterly Shopify Admin API version
- * (e.g. "2025-01"). Bumps are intentional code changes, never auto.
+ * (e.g. "2026-04"). Bumps are intentional code changes, never auto.
  *
  * `ENCRYPTION_KEY` is the AES-256-GCM key for the session-token cipher
  * (base64-encoded 32 bytes). Generate locally with:
@@ -29,7 +29,7 @@ const shopifyConfigSchema = z.object({
   SHOPIFY_SCOPES: z.string().min(1, 'SHOPIFY_SCOPES is required'),
   SHOPIFY_API_VERSION: z
     .string()
-    .regex(/^\d{4}-\d{2}$/, 'SHOPIFY_API_VERSION must be YYYY-MM (e.g. 2025-01)'),
+    .regex(/^\d{4}-\d{2}$/, 'SHOPIFY_API_VERSION must be YYYY-MM (e.g. 2026-04)'),
   /**
    * Optional dedicated webhook secret. If unset, webhook HMAC uses
    * SHOPIFY_API_SECRET (Shopify default). Most apps don't need to set this.

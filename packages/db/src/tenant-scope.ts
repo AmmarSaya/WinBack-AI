@@ -105,7 +105,29 @@ export type TenantScope =
   | { readonly kind: 'tenant'; readonly merchantId: string }
   | { readonly kind: 'system'; readonly reason: string };
 
-const scopeStore = new AsyncLocalStorage<TenantScope>();
+// Hoist the AsyncLocalStorage onto `globalThis` so it survives Vite's
+// module-reload mechanism. Vite serves modules via `eval at instantiateModule`
+// and creates fresh module instances per request/transform cycle — each
+// fresh instance would otherwise construct its own `AsyncLocalStorage`,
+// breaking the contract that "withSystemScope sets the scope that the
+// extension reads at the Prisma call site." The Prisma client (cached on
+// globalThis in apps/web's db.server.ts) gets bound to ONE ALS at
+// construction time; if a route's @winback/db import resolves to a
+// different module instance with a different ALS, scopes set in the route
+// are invisible to the extension and every read throws TenantScopeError.
+//
+// In production (no HMR, single module instantiation), this is effectively
+// a no-op: the global is set once on first import and never re-resolved.
+//
+// Same pattern used for `__winbackPrisma` in apps/web/app/services/db.server.ts.
+declare global {
+  // eslint-disable-next-line no-var
+  var __winbackScopeStore: AsyncLocalStorage<TenantScope> | undefined;
+}
+
+const scopeStore: AsyncLocalStorage<TenantScope> = (globalThis.__winbackScopeStore ??=
+  new AsyncLocalStorage<TenantScope>());
+
 
 /**
  * Runs `fn` inside a tenant scope. Every db operation inside (and in any
