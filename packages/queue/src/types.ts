@@ -19,4 +19,6 @@ import type { Queue } from 'bullmq';
 export interface Queues {
   readonly outboxDrain: Queue;
   readonly attributionCompute: Queue;
+  readonly cronRollup: Queue;
+  readonly cronSweep: Queue;
 }

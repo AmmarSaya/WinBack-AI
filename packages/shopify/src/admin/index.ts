@@ -1,4 +1,5 @@
 export { AdminClient, type AdminClientOptions, type GraphQLArgs, type GraphQLResponse } from './client.js';
+export { buildAdminClient } from './build-client.js';
 export { CostTracker, type CostTrackerOptions } from './cost-tracker.js';
 export { ShopifyAdminApiError, ShopifyTokenRevokedError } from './errors.js';
 export {

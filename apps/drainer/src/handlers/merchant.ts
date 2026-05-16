@@ -32,17 +32,14 @@
  * yet earning an abstraction.
  */
 
-import { Cipher, decodeKey } from '@winback/crypto';
 import type { OutboxEventRow } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import {
-  AdminClient,
   BackfillRunner,
   CUSTOMER_BACKFILL_RESOURCE,
-  CostTracker,
   CustomerPageFetcher,
   CustomerPageProcessor,
-  PrismaShopifyTokenResolver,
+  buildAdminClient,
   enrichInstall,
   type ShopifyCustomerNode,
 } from '@winback/shopify';
@@ -59,12 +56,11 @@ export async function handleMerchantInstalled(
   const payload = merchantInstalledPayloadSchema.parse(row.payload);
 
   // (1) AdminClient — one instance reused by enrichInstall and the
-  // customer-backfill fetcher. Inline construction; same ritual as
-  // apps/web/app/routes/auth.callback.tsx step 8b. N=2 < helper.
-  const cipher = new Cipher(decodeKey(ctx.shopifyConfig.ENCRYPTION_KEY));
-  const resolver = new PrismaShopifyTokenResolver(ctx.prisma, cipher);
-  const tracker = new CostTracker();
-  const adminClient = new AdminClient(resolver, tracker);
+  // customer-backfill fetcher. buildAdminClient encapsulates the
+  // Cipher → resolver → tracker → AdminClient construction ritual
+  // (promoted to @winback/shopify in D3 when the third call site
+  // landed in apps/scheduler).
+  const adminClient = buildAdminClient(ctx.prisma, ctx.shopifyConfig);
 
   // (2) Enrichment. enrichInstall returns `{success, reason?}` rather
   // than throwing. Log non-success at warn; do NOT throw — D3 cron

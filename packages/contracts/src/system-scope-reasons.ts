@@ -64,6 +64,29 @@ export const SYSTEM_SCOPE_REASONS = {
     drain: 'outbox.drain',
   },
   /**
+   * Rollup cron (D3 + H1). The hourly UTC tick selects merchants
+   * across all tenants whose local midnight just passed (CP-2 §Q5),
+   * then upserts `MetricsDailyRollup` per (merchantId, campaignId,
+   * date). System scope wraps the cross-tenant SELECT and each
+   * per-merchant upsert pass. D3 ships the cron infrastructure with a
+   * stub body; H1 fills the upsert math once `MetricsDailyRollup`
+   * lands.
+   */
+  rollup: {
+    daily: 'rollup.daily',
+  },
+  /**
+   * Enrichment retry sweep (D3). Cross-tenant SELECT for merchants
+   * whose `shopDetailsFetchedAt` is null past the 10-minute grace
+   * window (the gap that D2's `merchant.installed` handler's
+   * `enrichInstall {success: false}` branch explicitly defers to
+   * D3). Re-invokes `enrichInstall` per merchant; the function
+   * itself opens tenant scope internally.
+   */
+  enrichment: {
+    sweep: 'enrichment.sweep',
+  },
+  /**
    * Install flow in @winback/shopify. Required because no Merchant row
    * exists yet — the install IS the row-creating write.
    */
@@ -105,6 +128,8 @@ export type SystemScopeReason =
   | (typeof SYSTEM_SCOPE_REASONS.admin)[keyof typeof SYSTEM_SCOPE_REASONS.admin]
   | (typeof SYSTEM_SCOPE_REASONS.gdpr)[keyof typeof SYSTEM_SCOPE_REASONS.gdpr]
   | (typeof SYSTEM_SCOPE_REASONS.outbox)[keyof typeof SYSTEM_SCOPE_REASONS.outbox]
+  | (typeof SYSTEM_SCOPE_REASONS.rollup)[keyof typeof SYSTEM_SCOPE_REASONS.rollup]
+  | (typeof SYSTEM_SCOPE_REASONS.enrichment)[keyof typeof SYSTEM_SCOPE_REASONS.enrichment]
   | (typeof SYSTEM_SCOPE_REASONS.shopify)[keyof typeof SYSTEM_SCOPE_REASONS.shopify]
   | (typeof SYSTEM_SCOPE_REASONS.webhook)[keyof typeof SYSTEM_SCOPE_REASONS.webhook]
   | (typeof SYSTEM_SCOPE_REASONS.healthcheck)[keyof typeof SYSTEM_SCOPE_REASONS.healthcheck]
@@ -115,6 +140,8 @@ export const ALL_SYSTEM_SCOPE_REASONS: ReadonlySet<SystemScopeReason> = new Set(
   ...Object.values(SYSTEM_SCOPE_REASONS.admin),
   ...Object.values(SYSTEM_SCOPE_REASONS.gdpr),
   ...Object.values(SYSTEM_SCOPE_REASONS.outbox),
+  ...Object.values(SYSTEM_SCOPE_REASONS.rollup),
+  ...Object.values(SYSTEM_SCOPE_REASONS.enrichment),
   ...Object.values(SYSTEM_SCOPE_REASONS.shopify),
   ...Object.values(SYSTEM_SCOPE_REASONS.webhook),
   ...Object.values(SYSTEM_SCOPE_REASONS.healthcheck),

@@ -49,6 +49,12 @@ export function getQueues(): Queues {
       attributionCompute: new Queue(QUEUE_NAMES.attribution.compute, {
         connection: sharedClient,
       }),
+      cronRollup: new Queue(QUEUE_NAMES.cron.rollup, {
+        connection: sharedClient,
+      }),
+      cronSweep: new Queue(QUEUE_NAMES.cron.sweep, {
+        connection: sharedClient,
+      }),
     };
   }
   return cachedQueues;
@@ -113,6 +119,8 @@ export async function closeQueues(): Promise<void> {
       await Promise.all([
         cachedQueues.outboxDrain.close(),
         cachedQueues.attributionCompute.close(),
+        cachedQueues.cronRollup.close(),
+        cachedQueues.cronSweep.close(),
       ]);
     }
     if (sharedClient !== null) {

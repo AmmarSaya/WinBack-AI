@@ -89,6 +89,49 @@ importers:
         specifier: 2.1.9
         version: 2.1.9(@types/node@20.19.40)
 
+  apps/scheduler:
+    dependencies:
+      '@prisma/client':
+        specifier: 5.22.0
+        version: 5.22.0(prisma@5.22.0)
+      '@winback/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@winback/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@winback/crypto':
+        specifier: workspace:*
+        version: link:../../packages/crypto
+      '@winback/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@winback/errors':
+        specifier: workspace:*
+        version: link:../../packages/errors
+      '@winback/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
+      '@winback/queue':
+        specifier: workspace:*
+        version: link:../../packages/queue
+      '@winback/shopify':
+        specifier: workspace:*
+        version: link:../../packages/shopify
+      bullmq:
+        specifier: 5.76.8
+        version: 5.76.8
+      ioredis:
+        specifier: 5.10.1
+        version: 5.10.1
+    devDependencies:
+      tsx:
+        specifier: ^4.19.0
+        version: 4.22.0
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@20.19.40)
+
   apps/web:
     dependencies:
       '@prisma/client':

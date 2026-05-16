@@ -78,6 +78,31 @@ export const QUEUE_NAMES = {
      */
     compute: 'attribution.compute',
   },
+  /**
+   * Scheduler / cron queues (D3). Both queues carry BullMQ-repeatable
+   * tick jobs registered by the scheduler process at startup; the
+   * scheduler's Workers consume each tick.
+   */
+  cron: {
+    /**
+     * Hourly UTC rollup tick. Repeatable via `repeat: { pattern: '0 * *
+     * * *' }`. The handler selects merchants whose local midnight
+     * fell in the preceding hour (CP-2 §Q5) and upserts the daily
+     * `MetricsDailyRollup` rows per merchant. D3 ships a STUB handler
+     * (selection query + log only — `MetricsDailyRollup` table doesn't
+     * exist until H1); H1 fills the upsert math.
+     */
+    rollup: 'cron.rollup',
+    /**
+     * Periodic sweep tick. Repeatable via `repeat: { every: 900_000 }`
+     * (15 min). Job name discriminates the sweep type — D3 ships
+     * `'enrichment-sweep'` only (re-invoke `enrichInstall` for
+     * merchants where shopDetailsFetchedAt IS NULL past the 10-min
+     * grace). Future sweep types (idempotency cleanup, backfill
+     * recovery) land on this queue without a new registry entry.
+     */
+    sweep: 'cron.sweep',
+  },
 } as const;
 
 /**
@@ -86,12 +111,14 @@ export const QUEUE_NAMES = {
  */
 export type QueueName =
   | (typeof QUEUE_NAMES.outbox)[keyof typeof QUEUE_NAMES.outbox]
-  | (typeof QUEUE_NAMES.attribution)[keyof typeof QUEUE_NAMES.attribution];
+  | (typeof QUEUE_NAMES.attribution)[keyof typeof QUEUE_NAMES.attribution]
+  | (typeof QUEUE_NAMES.cron)[keyof typeof QUEUE_NAMES.cron];
 
 /** Runtime Set of every registered queue name, for shape tests + iteration. */
 export const ALL_QUEUE_NAMES: ReadonlySet<QueueName> = new Set([
   ...Object.values(QUEUE_NAMES.outbox),
   ...Object.values(QUEUE_NAMES.attribution),
+  ...Object.values(QUEUE_NAMES.cron),
 ] as QueueName[]);
 
 /**

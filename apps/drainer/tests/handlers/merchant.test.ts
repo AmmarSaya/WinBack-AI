@@ -25,22 +25,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 // BackfillRunner so each test can override its behavior.
 let runMock: ReturnType<typeof vi.fn>;
 
-vi.mock('@winback/crypto', async () => {
-  const actual = await vi.importActual<typeof import('@winback/crypto')>('@winback/crypto');
-  return {
-    ...actual,
-    Cipher: vi.fn().mockImplementation(() => ({ __stubCipher: true })),
-    decodeKey: vi.fn().mockImplementation(() => Buffer.alloc(32)),
-  };
-});
-
 vi.mock('@winback/shopify', async () => {
   const actual = await vi.importActual<typeof import('@winback/shopify')>('@winback/shopify');
   return {
     ...actual,
-    AdminClient: vi.fn().mockImplementation(() => ({ __stubAdminClient: true })),
-    CostTracker: vi.fn().mockImplementation(() => ({ __stubTracker: true })),
-    PrismaShopifyTokenResolver: vi.fn().mockImplementation(() => ({ __stubResolver: true })),
+    buildAdminClient: vi.fn().mockImplementation(() => ({ __stubAdminClient: true })),
     CustomerPageFetcher: vi.fn().mockImplementation(() => ({ __stubFetcher: true })),
     CustomerPageProcessor: vi.fn().mockImplementation(() => ({ __stubProcessor: true })),
     BackfillRunner: vi.fn().mockImplementation(() => ({
@@ -100,9 +89,10 @@ describe('handleMerchantInstalled — happy path', () => {
     });
   });
 
-  it('AdminClient is reused: constructed once, passed to both fetcher and enrich', async () => {
+  it('AdminClient is reused: buildAdminClient called once, fetcher constructed once', async () => {
     await handleMerchantInstalled(stubCtx, makeRow(VALID_PAYLOAD));
-    expect(shopifyMod.AdminClient).toHaveBeenCalledTimes(1);
+    expect(shopifyMod.buildAdminClient).toHaveBeenCalledTimes(1);
+    expect(shopifyMod.buildAdminClient).toHaveBeenCalledWith(stubCtx.prisma, stubCtx.shopifyConfig);
     expect(shopifyMod.CustomerPageFetcher).toHaveBeenCalledTimes(1);
   });
 });

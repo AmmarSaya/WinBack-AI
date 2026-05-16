@@ -9,6 +9,7 @@
     { "path": "./packages/db" },
     { "path": "./packages/shopify" },
     { "path": "./packages/queue" },
-    { "path": "./apps/drainer" }
+    { "path": "./apps/drainer" },
+    { "path": "./apps/scheduler" }
   ]
 }

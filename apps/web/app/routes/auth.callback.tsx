@@ -1,11 +1,8 @@
 import { type LoaderFunctionArgs, redirect } from '@remix-run/node';
 import { Session } from '@shopify/shopify-api';
-import { Cipher, decodeKey } from '@winback/crypto';
 import { getLogger } from '@winback/logger';
 import {
-  AdminClient,
-  CostTracker,
-  PrismaShopifyTokenResolver,
+  buildAdminClient,
   completeInstall,
   exchangeCodeForToken,
   getShopifyConfig,
@@ -154,10 +151,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // and a restart wouldn't help (the OAuth code is single-use). The
     // Merchant row alone is not sufficient.
     try {
-      const cipher = new Cipher(decodeKey(config.ENCRYPTION_KEY));
-      const resolver = new PrismaShopifyTokenResolver(getPrisma(), cipher);
-      const tracker = new CostTracker();
-      const adminClient = new AdminClient(resolver, tracker);
+      const adminClient = buildAdminClient(getPrisma(), config);
       const callbackUrl = `${config.SHOPIFY_APP_URL}/webhooks`;
       const subResults = await subscribeAllWebhooks(
         adminClient,

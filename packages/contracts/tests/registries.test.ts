@@ -150,12 +150,14 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     // Same literal, two registries — coincidence, not coupling.
   });
 
-  it('contains the eight reasons currently used across the codebase', () => {
-    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(8);
+  it('contains the ten reasons currently used across the codebase', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(10);
     expect(SYSTEM_SCOPE_REASONS.admin.token_resolve).toBe('admin.token_resolve');
     expect(SYSTEM_SCOPE_REASONS.admin.token_revoke).toBe('admin.token_revoke');
     expect(SYSTEM_SCOPE_REASONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
     expect(SYSTEM_SCOPE_REASONS.outbox.drain).toBe('outbox.drain');
+    expect(SYSTEM_SCOPE_REASONS.rollup.daily).toBe('rollup.daily');
+    expect(SYSTEM_SCOPE_REASONS.enrichment.sweep).toBe('enrichment.sweep');
     expect(SYSTEM_SCOPE_REASONS.shopify.install).toBe('shopify.install');
     expect(SYSTEM_SCOPE_REASONS.webhook.ingest).toBe('webhook.ingest');
     expect(SYSTEM_SCOPE_REASONS.healthcheck.readyz).toBe('healthcheck.readyz');
@@ -188,27 +190,22 @@ describe('QUEUE_NAMES registry', () => {
     for (const value of flattenConst(QUEUE_NAMES)) {
       expect(isQueueName(value)).toBe(true);
     }
-    // D3 will register these at the call site — must not exist yet
-    // (standing rule 36, mirrors the SYSTEM_SCOPE_REASONS pattern).
-    expect(isQueueName('cron.rollup')).toBe(false);
-    expect(isQueueName('cron.sweep')).toBe(false);
     // Regression for Q-1a — single-segment names rejected. Locks the
     // decision that the queue registry uses the dotted format the three
     // other registries use, not the BACKFILL_RESOURCES flat format.
     expect(isQueueName('attribution')).toBe(false);
     expect(isQueueName('outbox')).toBe(false);
+    expect(isQueueName('cron')).toBe(false);
     expect(isQueueName('')).toBe(false);
     expect(isQueueName('Outbox.Drain')).toBe(false); // caps rejected by format
   });
 
-  it('contains the two D1 queues (cron.* deferred to D3 per rule 36)', () => {
-    expect(ALL_QUEUE_NAMES.size).toBe(2);
+  it('contains the four queues currently used across the codebase', () => {
+    expect(ALL_QUEUE_NAMES.size).toBe(4);
     expect(QUEUE_NAMES.outbox.drain).toBe('outbox.drain');
     expect(QUEUE_NAMES.attribution.compute).toBe('attribution.compute');
-  });
-
-  it('does NOT contain a cron.* domain (D3 owns that — register at call site)', () => {
-    expect(Object.keys(QUEUE_NAMES)).not.toContain('cron');
+    expect(QUEUE_NAMES.cron.rollup).toBe('cron.rollup');
+    expect(QUEUE_NAMES.cron.sweep).toBe('cron.sweep');
   });
 });
 
