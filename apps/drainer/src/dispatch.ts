@@ -28,7 +28,7 @@ import {
   handleCustomerRedacted,
   handleShopRedacted,
 } from './handlers/gdpr.js';
-import { handleMerchantInstalled } from './handlers/merchant.js';
+import { handleMerchantInstalled, handleMerchantUninstalled } from './handlers/merchant.js';
 import { handleNoop } from './handlers/noop.js';
 import { handleOrderEvent, handleOrderNoop } from './handlers/order.js';
 
@@ -49,6 +49,7 @@ export async function dispatchEvent(
     case OUTBOX_EVENTS.merchant.installed:
       return handleMerchantInstalled(ctx, row);
     case OUTBOX_EVENTS.merchant.uninstalled:
+      return handleMerchantUninstalled(ctx, row);
     case OUTBOX_EVENTS.merchant.needs_reauth:
     case OUTBOX_EVENTS.merchant.shop_details_fetched:
     case OUTBOX_EVENTS.merchant.backfill_completed:

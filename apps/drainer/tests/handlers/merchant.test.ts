@@ -21,6 +21,18 @@
 import type { OutboxEventRow } from '@winback/db';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+// Mock @winback/db's MerchantRepository BEFORE handler import so the
+// drainer's handleMerchantUninstalled gets the stubbed constructor.
+vi.mock('@winback/db', async () => {
+  const actual = await vi.importActual<typeof import('@winback/db')>('@winback/db');
+  return {
+    ...actual,
+    MerchantRepository: vi.fn().mockImplementation(() => ({
+      markUninstalled: vi.fn().mockResolvedValue({ updatedCount: 1 }),
+    })),
+  };
+});
+
 // We track a single `runMock` for the most-recently-constructed
 // BackfillRunner so each test can override its behavior.
 let runMock: ReturnType<typeof vi.fn>;
@@ -46,7 +58,8 @@ vi.mock('@winback/shopify', async () => {
 });
 
 const shopifyMod = await import('@winback/shopify');
-const { handleMerchantInstalled } = await import('../../src/handlers/merchant.js');
+const dbMod = await import('@winback/db');
+const { handleMerchantInstalled, handleMerchantUninstalled } = await import('../../src/handlers/merchant.js');
 
 function makeRow(payload: unknown): OutboxEventRow {
   return {
@@ -145,5 +158,55 @@ describe('handleMerchantInstalled — payload validation', () => {
       handleMerchantInstalled(stubCtx, makeRow({ shop: 'foo' /* no scope, no reinstall */ })),
     ).rejects.toThrow();
     expect(shopifyMod.enrichInstall).not.toHaveBeenCalled();
+  });
+});
+
+describe('handleMerchantUninstalled', () => {
+  function makeUninstallRow(): OutboxEventRow {
+    return {
+      id: 'row-uninstall',
+      merchantId: 'merchant-1',
+      type: 'merchant.uninstalled',
+      payload: { topic: 'app/uninstalled', webhookId: 'wh-xyz', body: {} },
+      createdAt: new Date(),
+      attempts: 0,
+    };
+  }
+
+  it('constructs MerchantRepository with ctx.prisma and calls markUninstalled(merchantId)', async () => {
+    const markUninstalledMock = vi.fn().mockResolvedValue({ updatedCount: 1 });
+    vi.mocked(dbMod.MerchantRepository).mockImplementationOnce(
+      () => ({ markUninstalled: markUninstalledMock }) as unknown as InstanceType<
+        typeof dbMod.MerchantRepository
+      >,
+    );
+
+    await handleMerchantUninstalled(stubCtx, makeUninstallRow());
+
+    expect(dbMod.MerchantRepository).toHaveBeenCalledWith(stubCtx.prisma);
+    expect(markUninstalledMock).toHaveBeenCalledTimes(1);
+    expect(markUninstalledMock).toHaveBeenCalledWith('merchant-1');
+  });
+
+  it('returns successfully on duplicate delivery (updatedCount: 0)', async () => {
+    const markUninstalledMock = vi.fn().mockResolvedValue({ updatedCount: 0 });
+    vi.mocked(dbMod.MerchantRepository).mockImplementationOnce(
+      () => ({ markUninstalled: markUninstalledMock }) as unknown as InstanceType<
+        typeof dbMod.MerchantRepository
+      >,
+    );
+
+    await expect(handleMerchantUninstalled(stubCtx, makeUninstallRow())).resolves.toBeUndefined();
+  });
+
+  it('bubbles repository throw to caller (drainer dispatch catches → markFailed)', async () => {
+    const markUninstalledMock = vi.fn().mockRejectedValue(new Error('db down'));
+    vi.mocked(dbMod.MerchantRepository).mockImplementationOnce(
+      () => ({ markUninstalled: markUninstalledMock }) as unknown as InstanceType<
+        typeof dbMod.MerchantRepository
+      >,
+    );
+
+    await expect(handleMerchantUninstalled(stubCtx, makeUninstallRow())).rejects.toThrow('db down');
   });
 });

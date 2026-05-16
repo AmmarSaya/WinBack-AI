@@ -167,6 +167,45 @@ export class MerchantRepository {
   }
 
   /**
+   * Sets `uninstalledAt` on the Merchant row, idempotently. Called by the
+   * drainer's `merchant.uninstalled` handler when Shopify emits the
+   * `app/uninstalled` webhook.
+   *
+   * Idempotency. Uses `updateMany` with a `uninstalledAt IS NULL` guard
+   * rather than `update` — duplicate webhook deliveries (or a future D4
+   * replay) re-run safely. The first invocation sets the timestamp; later
+   * invocations match zero rows. Preserves the original uninstall moment
+   * for audit / retention-cron clarity.
+   *
+   * No cascade behavior here. The retention cron (future) uses
+   * `@@index([uninstalledAt])` to find merchants past their retention
+   * window; the GDPR `shop/redact` webhook (Shopify-delivered ~48hrs
+   * after `app/uninstalled`) is the path that actually deletes the
+   * tenant via `processShopRedact`. This handler is just the marker.
+   *
+   * Side effects intentionally NOT done here (M10 candidates):
+   *   - Token revocation (`tokenRevokedAt`) — orthogonal lifecycle field
+   *   - BillingSubscription cancellation — M10 billing
+   *   - Pausing in-flight BackfillJobs — runner handles its own pause path
+   *
+   * Returns the number of rows updated (0 on duplicate, 1 on first).
+   * Works from tenant scope (drainer's `merchant.uninstalled` handler
+   * opens `withTenantScope` before calling) or from system scope (future
+   * operator override).
+   */
+  async markUninstalled(
+    merchantId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<{ updatedCount: number }> {
+    const client = tx ?? this.prisma;
+    const result = await client.merchant.updateMany({
+      where: { id: merchantId, uninstalledAt: null },
+      data: { uninstalledAt: new Date() },
+    });
+    return { updatedCount: result.count };
+  }
+
+  /**
    * Permanently delete a Merchant row. CASCADE removes any remaining
    * tenant-scoped children; SetNull preserves AuditLog + WebhookLog for
    * forensic / compliance retention.

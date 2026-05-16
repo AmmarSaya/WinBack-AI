@@ -32,7 +32,7 @@
  * yet earning an abstraction.
  */
 
-import type { OutboxEventRow } from '@winback/db';
+import { MerchantRepository, type OutboxEventRow, withTenantScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import {
   BackfillRunner,
@@ -123,4 +123,55 @@ export async function handleMerchantInstalled(
     },
     'merchant.installed: customer backfill completed',
   );
+}
+
+/**
+ * `merchant.uninstalled` handler — sets `Merchant.uninstalledAt`.
+ *
+ * Producer: `app/uninstalled` Shopify webhook → outbox via webhook-ingest.
+ *
+ * Idempotency: `MerchantRepository.markUninstalled` uses an `updateMany`
+ * with `uninstalledAt: null` guard, so duplicate deliveries (and future
+ * D4 replays) re-run safely. The first invocation sets the timestamp;
+ * later invocations match zero rows and log accordingly.
+ *
+ * Scope: opens `withTenantScope(row.merchantId)` so the
+ * `MerchantRepository.markUninstalled` write goes through the Prisma
+ * extension's tenant-aware branch. This is the standard tenant-scoped
+ * single-write pattern; no UnitOfWork needed because there's only one
+ * write.
+ *
+ * NOT a `MARK_BEFORE_INVOKE_EVENTS` member — the handler is a single
+ * fast DB update; no long-running work, no cascade-prone behavior.
+ * Runs inside the drainer's tx via the standard dispatch path; throws
+ * bubble up to drainer dispatch → markFailed.
+ *
+ * Pre-D4 fix: prior to this handler, `merchant.uninstalled` routed to
+ * `handleNoop`, leaving `Merchant.uninstalledAt` permanently null and
+ * the future retention cron with nothing to find.
+ */
+export async function handleMerchantUninstalled(
+  ctx: DrainerContext,
+  row: OutboxEventRow,
+): Promise<void> {
+  // Payload from webhook-ingest is `{ topic, webhookId, body }`; the body
+  // shape is Shopify's app/uninstalled webhook payload. We don't read it —
+  // `merchantId` from the outbox row is sufficient.
+
+  await withTenantScope(row.merchantId, async () => {
+    const repo = new MerchantRepository(ctx.prisma);
+    const { updatedCount } = await repo.markUninstalled(row.merchantId);
+
+    if (updatedCount === 0) {
+      log.info(
+        { eventId: row.id, merchantId: row.merchantId },
+        'merchant.uninstalled: already marked (duplicate delivery or replay) — no-op',
+      );
+    } else {
+      log.info(
+        { eventId: row.id, merchantId: row.merchantId },
+        'merchant.uninstalled: uninstalledAt set',
+      );
+    }
+  });
 }

@@ -24,6 +24,7 @@ vi.mock('../src/handlers/gdpr.js', () => ({
 }));
 vi.mock('../src/handlers/merchant.js', () => ({
   handleMerchantInstalled: vi.fn().mockResolvedValue(undefined),
+  handleMerchantUninstalled: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock('../src/handlers/noop.js', () => ({
   handleNoop: vi.fn().mockResolvedValue(undefined),
@@ -75,13 +76,19 @@ describe('dispatchEvent — handler routing', () => {
     expect(merchantMod.handleMerchantInstalled).toHaveBeenCalledTimes(1);
   });
 
-  it('other merchant.* events → handleNoop', async () => {
+  it('merchant.uninstalled → handleMerchantUninstalled (NOT noop — pre-D4 fix)', async () => {
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.uninstalled));
+    expect(merchantMod.handleMerchantUninstalled).toHaveBeenCalledTimes(1);
+    expect(noopMod.handleNoop).not.toHaveBeenCalled();
+  });
+
+  it('other merchant.* events → handleNoop', async () => {
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.needs_reauth));
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.shop_details_fetched));
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.backfill_completed));
-    expect(noopMod.handleNoop).toHaveBeenCalledTimes(4);
+    expect(noopMod.handleNoop).toHaveBeenCalledTimes(3);
     expect(merchantMod.handleMerchantInstalled).not.toHaveBeenCalled();
+    expect(merchantMod.handleMerchantUninstalled).not.toHaveBeenCalled();
   });
 
   it('order.placed → handleOrderEvent with event-type discriminator', async () => {
