@@ -1,11 +1,16 @@
 import { type LoaderFunctionArgs, redirect } from '@remix-run/node';
 import { Session } from '@shopify/shopify-api';
+import { Cipher, decodeKey } from '@winback/crypto';
 import { getLogger } from '@winback/logger';
 import {
+  AdminClient,
+  CostTracker,
+  PrismaShopifyTokenResolver,
   completeInstall,
   exchangeCodeForToken,
   getShopifyConfig,
   isValidShopDomain,
+  subscribeAllWebhooks,
   verifyShopifyOAuthHmac,
 } from '@winback/shopify';
 
@@ -29,12 +34,13 @@ const log = getLogger('web.auth.callback');
  *   6. Exchange code for access token (HTTP to Shopify).
  *   7. completeInstall (atomic Merchant + Settings + Subscription + outbox).
  *   8. storeSession (encrypted access token).
+ *   8b. subscribeAllWebhooks (closes B1 — Merchant + Session both required).
  *   9. Redirect to embedded app.
  *
- * GUARDRAIL #1: a failure at step 6, 7, or 8 sends the merchant back through
- * `/auth?shop=...` — NEVER show a partial UI. Partial installs are worse
- * than no install (inconsistent state, merchant doesn't know why things
- * misbehave). The redirect restarts the flow cleanly.
+ * GUARDRAIL #1: a failure at step 6, 7, 8, or 8b sends the merchant back
+ * through `/auth?shop=...` — NEVER show a partial UI. Partial installs
+ * are worse than no install (inconsistent state, merchant doesn't know
+ * why things misbehave). The redirect restarts the flow cleanly.
  *
  * Step 3 + 4 failures: same redirect.
  */
@@ -132,6 +138,48 @@ export async function loader({ request }: LoaderFunctionArgs) {
       log.error(
         { err, shop, merchantId: installResult.merchantId },
         'callback: session store failed — restarting flow',
+      );
+      return restartFlow(shop);
+    }
+
+    // (8b) Subscribe webhooks — guardrail #1. Any failure → restart.
+    // A merchant without webhook subscriptions is non-functional: they
+    // will never receive orders/create, customers/redact, or the GDPR
+    // topics. Partial subscription is treated as full failure (standing
+    // rule: never partial UI).
+    //
+    // Sequencing: MUST run after storeSession (step 8). The token resolver
+    // reads the encrypted accessToken from the Session row; with no Session
+    // row, every topic subscription would fail with ShopifyTokenRevokedError
+    // and a restart wouldn't help (the OAuth code is single-use). The
+    // Merchant row alone is not sufficient.
+    try {
+      const cipher = new Cipher(decodeKey(config.ENCRYPTION_KEY));
+      const resolver = new PrismaShopifyTokenResolver(getPrisma(), cipher);
+      const tracker = new CostTracker();
+      const adminClient = new AdminClient(resolver, tracker);
+      const callbackUrl = `${config.SHOPIFY_APP_URL}/webhooks`;
+      const subResults = await subscribeAllWebhooks(
+        adminClient,
+        installResult.merchantId,
+        callbackUrl,
+      );
+      const failed = subResults.filter((r) => r.errors.length > 0);
+      if (failed.length > 0) {
+        log.error(
+          { shop, merchantId: installResult.merchantId, failed },
+          'callback: webhook subscription failed — restarting flow',
+        );
+        return restartFlow(shop);
+      }
+      log.info(
+        { shop, merchantId: installResult.merchantId, count: subResults.length },
+        'callback: webhooks subscribed',
+      );
+    } catch (err) {
+      log.error(
+        { err, shop, merchantId: installResult.merchantId },
+        'callback: subscribeAllWebhooks threw — restarting flow',
       );
       return restartFlow(shop);
     }
