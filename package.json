@@ -22,6 +22,8 @@
     "db:migrate:status": "pnpm --filter @winback/db migrate:status",
     "db:migrate:diff": "pnpm --filter @winback/db migrate:diff",
     "db:reset": "pnpm --filter @winback/db db:reset",
+    "db:dev:up": "docker compose -f docker-compose.dev.yml up -d postgres-dev",
+    "db:dev:down": "docker compose -f docker-compose.dev.yml down -v",
     "db:test": "node ./scripts/db-test.mjs",
     "db:test:up": "node ./scripts/db-test.mjs up",
     "db:test:run": "node ./scripts/db-test.mjs run",

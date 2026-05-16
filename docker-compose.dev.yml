@@ -1,0 +1,38 @@
+# Local dev-only Postgres for the AI Customer Winback app.
+#
+# Distinct from docker-compose.test.yml's `postgres` service (which uses
+# port 5433 + database `winback_test` for integration tests). This dev
+# service maps :5432 → container :5432 and uses database `winback`, matching
+# `.env`'s DATABASE_URL. Keeping test and dev isolated prevents the
+# "wait, did the integration suite just nuke my dev seed data?" footgun.
+#
+# Redis is intentionally NOT redefined here — it lives in
+# docker-compose.test.yml on port 6380 and is shared between test and dev.
+# Sharing is safe because (a) only one container can bind 6380 anyway, and
+# (b) the dev app and the test suite never run simultaneously against the
+# same Redis (queue:test FLUSHDBs its way through every test).
+#
+# Started via `pnpm db:dev:up`. Tear down with `pnpm db:dev:down`.
+# Migrations applied via `pnpm db:migrate:dev` (Prisma) AFTER the container
+# is healthy.
+
+services:
+  postgres-dev:
+    image: postgres:16-alpine
+    container_name: winback-dev-postgres
+    environment:
+      POSTGRES_USER: winback
+      POSTGRES_PASSWORD: winback
+      POSTGRES_DB: winback
+    ports:
+      - "5432:5432"
+    volumes:
+      - winback-dev-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U winback -d winback"]
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  winback-dev-pg:
