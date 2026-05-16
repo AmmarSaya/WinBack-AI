@@ -41,17 +41,41 @@ export const AUDIT_ACTIONS = {
     /** shop/redact webhook for a merchant already gone (idempotent ack). */
     shop_redact_idempotent: 'gdpr.shop_redact_idempotent',
   },
+  /**
+   * Outbox operator CLI actions (D4). Written by `apps/cli` in the same
+   * tx as the corresponding `OutboxRepository` mutation. `actorType` is
+   * `operator` for both; `actorId` is captured from `process.env.USER`.
+   */
+  outbox: {
+    /** Operator requeued a dead-lettered event (`pnpm cli:outbox:replay`). */
+    replay: 'outbox.replay',
+    /** Operator force-DLQ'd a stuck event (`pnpm cli:outbox:dead-letter`). */
+    dead_letter_forced: 'outbox.dead_letter_forced',
+  },
 } as const;
 
 /**
  * Flat union of every audit-action literal — the type used for
  * `AuditLog.action`, `AppendAuditLogInput.action`, and `AuditContext.action`.
+ *
+ * [CLEANUP] Asymmetry with `SYSTEM_SCOPE_REASONS` / `QUEUE_NAMES` /
+ * `OUTBOX_EVENTS`: those registries use `Object.values(REGISTRY).flatMap(
+ * Object.values)`-style runtime extraction so the type union derives
+ * itself from the const without per-category spread lines. This file
+ * still requires a hand-edited union spread per new category (added
+ * `outbox` in D4 — manual edit). Refactor candidate: switch this to the
+ * auto-extending pattern so adding a future `billing` or `operator`
+ * category is a const-only change. Out of D4 scope; tracked as a
+ * deferred cleanup item.
  */
-export type AuditAction = (typeof AUDIT_ACTIONS.gdpr)[keyof typeof AUDIT_ACTIONS.gdpr];
+export type AuditAction =
+  | (typeof AUDIT_ACTIONS.gdpr)[keyof typeof AUDIT_ACTIONS.gdpr]
+  | (typeof AUDIT_ACTIONS.outbox)[keyof typeof AUDIT_ACTIONS.outbox];
 
 /** Runtime Set of every registered action, for shape tests + iteration. */
 export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   ...Object.values(AUDIT_ACTIONS.gdpr),
+  ...Object.values(AUDIT_ACTIONS.outbox),
 ] as AuditAction[]);
 
 /**

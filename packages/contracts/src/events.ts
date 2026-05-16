@@ -81,3 +81,24 @@ export const ALL_OUTBOX_EVENT_TYPES: ReadonlySet<OutboxEventType> = new Set([
   ...Object.values(OUTBOX_EVENTS.product),
   ...Object.values(OUTBOX_EVENTS.gdpr),
 ] as OutboxEventType[]);
+
+/**
+ * Maximum number of dispatch attempts before the drainer dead-letters a
+ * row. Compared as `(row.attempts + 1) >= MAX_OUTBOX_ATTEMPTS` BEFORE the
+ * `markFailed` increment runs — i.e. the comparison uses the would-be
+ * NEXT attempts value, not the stored pre-failure value. Off-by-one in
+ * either direction is a real bug (one too early or one too late).
+ *
+ * 10 attempts at the drainer's polling rate (immediate re-claim on
+ * `hasMore`, ~1s idle) is generous for transient faults (network blip,
+ * Shopify hiccup, lock contention) and short enough to surface
+ * genuinely-broken events for operator intervention quickly.
+ *
+ * Operator override: `pnpm cli:outbox:replay $eventId --reason "..."`
+ * requeues a dead-lettered row with `attempts` reset to 0. The MAX
+ * applies fresh after replay.
+ *
+ * Consumed by: apps/drainer/src/drainer.ts (Phase 1 catch); imported
+ * via @winback/contracts to avoid duplicating the literal.
+ */
+export const MAX_OUTBOX_ATTEMPTS = 10;

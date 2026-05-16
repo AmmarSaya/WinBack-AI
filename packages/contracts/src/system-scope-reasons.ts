@@ -52,16 +52,26 @@ export const SYSTEM_SCOPE_REASONS = {
     shop_redact: 'gdpr.shop_redact',
   },
   /**
-   * Outbox drainer (D2). The drainer worker calls
-   * `OutboxRepository.claimBatch` across all tenants — system scope is
-   * how it bypasses the tenant assertion in the Prisma extension.
+   * Outbox drainer (D2) + outbox operator CLI (D4). Cross-tenant scope
+   * for the outbox subsystem.
    *
-   * Note: the literal string `outbox.drain` is also registered as a
-   * `QUEUE_NAMES.outbox.drain` queue name. Two different registries that
-   * happen to share a string — coincidence, not coupling.
+   * `drain` — drainer worker's `OutboxRepository.claimBatch` claim loop.
+   *
+   * `replay` — operator CLI command `pnpm cli:outbox:replay` requeues a
+   * dead-lettered row (`attempts := 0`, `deadLetteredAt := null`).
+   *
+   * `dead_letter` — operator CLI command `pnpm cli:outbox:dead-letter`
+   * forces a stuck row into DLQ state ahead of the natural attempts
+   * ceiling.
+   *
+   * Note: `outbox.drain` is also registered as a `QUEUE_NAMES.outbox.drain`
+   * queue name. Two different registries that happen to share a string —
+   * coincidence, not coupling.
    */
   outbox: {
     drain: 'outbox.drain',
+    replay: 'outbox.replay',
+    dead_letter: 'outbox.dead_letter',
   },
   /**
    * Rollup cron (D3 + H1). The hourly UTC tick selects merchants

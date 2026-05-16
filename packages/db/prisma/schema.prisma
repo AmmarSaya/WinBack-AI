@@ -127,11 +127,17 @@
 //            ON "Customer" ("merchantId", lower(email))
 //            WHERE "deletedAt" IS NULL;
 //
-//   T2 — Partial index on outbox drain path:
+//   T2 — Partial index on outbox drain path. SUPERSEDED at D4: the
+//        original T2 index `outbox_unprocessed_created_at` is dropped in
+//        migration 20260516130200_drop_outbox_unprocessed_idx and
+//        replaced by `outbox_claimable_created_at` (created in migration
+//        20260516130100_add_outbox_claimable_idx). The D4 predicate adds
+//        `deadLetteredAt IS NULL` so dead-lettered rows don't bloat the
+//        active claim path:
 //
-//          CREATE INDEX outbox_unprocessed_created_at
+//          CREATE INDEX outbox_claimable_created_at
 //            ON "OutboxEvent" ("createdAt")
-//            WHERE "processedAt" IS NULL;
+//            WHERE "processedAt" IS NULL AND "deadLetteredAt" IS NULL;
 //
 //   T3 — GIN index for tag membership queries on Customer:
 //
@@ -671,6 +677,35 @@ model OutboxEvent {
   processedAt DateTime?
   attempts    Int       @default(0)
   lastError   String?
+
+  // D4 DLQ. Set when the drainer gives up on a row (either non-retryable
+  // error per @winback/errors `isRetryable`, or `attempts + 1 >=
+  // MAX_OUTBOX_ATTEMPTS` after a retryable failure). Operator's `pnpm
+  // cli:outbox:replay` clears this back to null to requeue the row.
+  // `claimBatch` filters `WHERE deadLetteredAt IS NULL` so dead-lettered
+  // rows are never re-claimed by the drainer.
+  deadLetteredAt DateTime?
+
+  // D4 forensic marker for MARK_BEFORE_INVOKE_EVENTS Phase 2 failures.
+  // The row was marked processed in Phase 1 (correctly, per ordering
+  // policy) but the deferred handler invocation in Phase 2 threw. The
+  // row is logically "done" (processedAt set), but the actual work was
+  // incomplete. Operator visibility only; recovery is manual replay or
+  // operator intervention (the handlers are idempotent by design).
+  //
+  // OPERATOR RUNBOOK — surface rows needing attention:
+  //   SELECT id, "merchantId", type, "deferredFailedAt", "lastError"
+  //   FROM "OutboxEvent"
+  //   WHERE "deferredFailedAt" IS NOT NULL
+  //   ORDER BY "deferredFailedAt" DESC;
+  //
+  // No automatic alerting in D4 — observability is psql-driven. The
+  // handlers identified by this query are gdpr.shop_redacted and
+  // merchant.installed (per MARK_BEFORE_INVOKE_EVENTS). Manual
+  // remediation: re-invoke the handler logic against the row's
+  // merchantId. Both handlers are idempotent — re-running on a
+  // partially-completed state resumes correctly.
+  deferredFailedAt DateTime?
 
   @@index([processedAt, createdAt])
   @@index([merchantId, type, createdAt])

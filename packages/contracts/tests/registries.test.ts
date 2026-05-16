@@ -23,6 +23,7 @@ import {
   ALL_SYSTEM_SCOPE_REASONS,
   AUDIT_ACTIONS,
   BACKFILL_RESOURCES,
+  MAX_OUTBOX_ATTEMPTS,
   OUTBOX_EVENTS,
   QUEUE_NAMES,
   SYSTEM_SCOPE_REASONS,
@@ -73,6 +74,15 @@ describe('OUTBOX_EVENTS registry', () => {
     expect(ALL_OUTBOX_EVENT_TYPES.has(OUTBOX_EVENTS.gdpr.customer_redacted)).toBe(true);
     expect(ALL_OUTBOX_EVENT_TYPES.has(OUTBOX_EVENTS.gdpr.shop_redacted)).toBe(true);
   });
+
+  it('MAX_OUTBOX_ATTEMPTS is exactly 10 (D4 regression lock)', () => {
+    // Locked at 10 per the D4 design pass. Compared at the drainer as
+    // `(row.attempts + 1) >= MAX_OUTBOX_ATTEMPTS` — i.e. the would-be
+    // next attempts value, NOT the stored pre-failure value. If this
+    // value changes, audit every drainer test that constructs a row
+    // with a specific `attempts` field to verify the new boundary.
+    expect(MAX_OUTBOX_ATTEMPTS).toBe(10);
+  });
 });
 
 // ===========================================================================
@@ -105,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the six C6 gdpr.* actions emitted by the compliance processor', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(6);
+  it('contains the eight actions currently emitted (6 C6 gdpr + 2 D4 outbox)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(8);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -115,6 +125,8 @@ describe('AUDIT_ACTIONS registry', () => {
     );
     expect(AUDIT_ACTIONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
     expect(AUDIT_ACTIONS.gdpr.shop_redact_idempotent).toBe('gdpr.shop_redact_idempotent');
+    expect(AUDIT_ACTIONS.outbox.replay).toBe('outbox.replay');
+    expect(AUDIT_ACTIONS.outbox.dead_letter_forced).toBe('outbox.dead_letter_forced');
   });
 });
 
@@ -150,12 +162,14 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     // Same literal, two registries — coincidence, not coupling.
   });
 
-  it('contains the ten reasons currently used across the codebase', () => {
-    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(10);
+  it('contains the twelve reasons currently used across the codebase', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(12);
     expect(SYSTEM_SCOPE_REASONS.admin.token_resolve).toBe('admin.token_resolve');
     expect(SYSTEM_SCOPE_REASONS.admin.token_revoke).toBe('admin.token_revoke');
     expect(SYSTEM_SCOPE_REASONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
     expect(SYSTEM_SCOPE_REASONS.outbox.drain).toBe('outbox.drain');
+    expect(SYSTEM_SCOPE_REASONS.outbox.replay).toBe('outbox.replay');
+    expect(SYSTEM_SCOPE_REASONS.outbox.dead_letter).toBe('outbox.dead_letter');
     expect(SYSTEM_SCOPE_REASONS.rollup.daily).toBe('rollup.daily');
     expect(SYSTEM_SCOPE_REASONS.enrichment.sweep).toBe('enrichment.sweep');
     expect(SYSTEM_SCOPE_REASONS.shopify.install).toBe('shopify.install');

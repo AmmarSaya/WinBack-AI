@@ -1,0 +1,28 @@
+-- @op-applied
+-- This migration uses DROP INDEX CONCURRENTLY and cannot run inside a
+-- transaction. `prisma migrate deploy` will fail on this file. Operator
+-- applies via psql, then marks resolved:
+--
+--   psql "$DATABASE_URL" -f packages/db/prisma/migrations/20260516130200_drop_outbox_unprocessed_idx/migration.sql
+--   pnpm --filter @winback/db prisma migrate resolve --applied 20260516130200_drop_outbox_unprocessed_idx
+--
+-- =============================================================================
+-- 20260516130200_drop_outbox_unprocessed_idx
+--
+-- D4 cleanup: drops the T2 index `outbox_unprocessed_created_at` which is
+-- now superseded by `outbox_claimable_created_at` (created in the paired
+-- migration 20260516130100_add_outbox_claimable_idx). The new index's
+-- partial predicate `WHERE processedAt IS NULL AND deadLetteredAt IS
+-- NULL` is a strict subset of the old `WHERE processedAt IS NULL`, so
+-- every query the old index served is also served (better) by the new
+-- one.
+--
+-- Deploy order: runs AFTER 20260516130100_add_outbox_claimable_idx — the
+-- new index must exist before this DROP runs, otherwise claimBatch is
+-- indexless during the rollout window.
+--
+-- Paired DOWN: rollback.sql (operator-applied; recreates the original
+-- T2 index for emergency rollback to pre-D4 behavior).
+-- =============================================================================
+
+DROP INDEX CONCURRENTLY IF EXISTS "outbox_unprocessed_created_at";

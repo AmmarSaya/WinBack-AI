@@ -43,6 +43,31 @@ importers:
         specifier: ^8.18.0
         version: 8.59.2(eslint@9.39.4)(typescript@5.9.3)
 
+  apps/cli:
+    dependencies:
+      '@prisma/client':
+        specifier: 5.22.0
+        version: 5.22.0(prisma@5.22.0)
+      '@winback/config':
+        specifier: workspace:*
+        version: link:../../packages/config
+      '@winback/contracts':
+        specifier: workspace:*
+        version: link:../../packages/contracts
+      '@winback/db':
+        specifier: workspace:*
+        version: link:../../packages/db
+      '@winback/errors':
+        specifier: workspace:*
+        version: link:../../packages/errors
+      '@winback/logger':
+        specifier: workspace:*
+        version: link:../../packages/logger
+    devDependencies:
+      vitest:
+        specifier: 2.1.9
+        version: 2.1.9(@types/node@20.19.40)
+
   apps/drainer:
     dependencies:
       '@prisma/client':

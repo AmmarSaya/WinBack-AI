@@ -9,6 +9,7 @@ export {
 export {
   OUTBOX_EVENTS,
   ALL_OUTBOX_EVENT_TYPES,
+  MAX_OUTBOX_ATTEMPTS,
   type OutboxEventType,
 } from './events.js';
 

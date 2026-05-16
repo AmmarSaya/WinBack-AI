@@ -1,0 +1,25 @@
+{
+  "name": "@winback/cli-app",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsc -b",
+    "clean": "tsc -b --clean",
+    "outbox:replay": "node dist/outbox.js replay",
+    "outbox:dead-letter": "node dist/outbox.js dead-letter",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@prisma/client": "5.22.0",
+    "@winback/config": "workspace:*",
+    "@winback/contracts": "workspace:*",
+    "@winback/db": "workspace:*",
+    "@winback/errors": "workspace:*",
+    "@winback/logger": "workspace:*"
+  },
+  "devDependencies": {
+    "vitest": "2.1.9"
+  }
+}
