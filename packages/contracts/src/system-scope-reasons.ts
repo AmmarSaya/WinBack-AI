@@ -52,6 +52,18 @@ export const SYSTEM_SCOPE_REASONS = {
     shop_redact: 'gdpr.shop_redact',
   },
   /**
+   * Outbox drainer (D2). The drainer worker calls
+   * `OutboxRepository.claimBatch` across all tenants — system scope is
+   * how it bypasses the tenant assertion in the Prisma extension.
+   *
+   * Note: the literal string `outbox.drain` is also registered as a
+   * `QUEUE_NAMES.outbox.drain` queue name. Two different registries that
+   * happen to share a string — coincidence, not coupling.
+   */
+  outbox: {
+    drain: 'outbox.drain',
+  },
+  /**
    * Install flow in @winback/shopify. Required because no Merchant row
    * exists yet — the install IS the row-creating write.
    */
@@ -92,6 +104,7 @@ export const SYSTEM_SCOPE_REASONS = {
 export type SystemScopeReason =
   | (typeof SYSTEM_SCOPE_REASONS.admin)[keyof typeof SYSTEM_SCOPE_REASONS.admin]
   | (typeof SYSTEM_SCOPE_REASONS.gdpr)[keyof typeof SYSTEM_SCOPE_REASONS.gdpr]
+  | (typeof SYSTEM_SCOPE_REASONS.outbox)[keyof typeof SYSTEM_SCOPE_REASONS.outbox]
   | (typeof SYSTEM_SCOPE_REASONS.shopify)[keyof typeof SYSTEM_SCOPE_REASONS.shopify]
   | (typeof SYSTEM_SCOPE_REASONS.webhook)[keyof typeof SYSTEM_SCOPE_REASONS.webhook]
   | (typeof SYSTEM_SCOPE_REASONS.healthcheck)[keyof typeof SYSTEM_SCOPE_REASONS.healthcheck]
@@ -101,6 +114,7 @@ export type SystemScopeReason =
 export const ALL_SYSTEM_SCOPE_REASONS: ReadonlySet<SystemScopeReason> = new Set([
   ...Object.values(SYSTEM_SCOPE_REASONS.admin),
   ...Object.values(SYSTEM_SCOPE_REASONS.gdpr),
+  ...Object.values(SYSTEM_SCOPE_REASONS.outbox),
   ...Object.values(SYSTEM_SCOPE_REASONS.shopify),
   ...Object.values(SYSTEM_SCOPE_REASONS.webhook),
   ...Object.values(SYSTEM_SCOPE_REASONS.healthcheck),

@@ -8,6 +8,7 @@
     { "path": "./packages/crypto" },
     { "path": "./packages/db" },
     { "path": "./packages/shopify" },
-    { "path": "./packages/queue" }
+    { "path": "./packages/queue" },
+    { "path": "./apps/drainer" }
   ]
 }

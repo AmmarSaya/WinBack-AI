@@ -31,7 +31,9 @@
     "queue:test": "node ./scripts/queue-test.mjs",
     "queue:test:up": "node ./scripts/queue-test.mjs up",
     "queue:test:run": "node ./scripts/queue-test.mjs run",
-    "queue:test:down": "node ./scripts/queue-test.mjs down"
+    "queue:test:down": "node ./scripts/queue-test.mjs down",
+    "drainer:dev": "pnpm --filter @winback/drainer-app dev",
+    "drainer:start": "pnpm --filter @winback/drainer-app start"
   },
   "devDependencies": {
     "@types/node": "^20.14.10",

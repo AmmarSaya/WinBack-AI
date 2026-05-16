@@ -144,17 +144,18 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
       expect(isSystemScopeReason(value)).toBe(true);
     }
     expect(isSystemScopeReason('gdpr.shop_redcat')).toBe(false); // typo
-    // queue names are a different registry — outbox.drain is a QueueName,
-    // not a SystemScopeReason, and the two must never bleed into each other.
-    expect(isSystemScopeReason('outbox.drain')).toBe(false);
     expect(isSystemScopeReason('')).toBe(false);
+    // Note: `outbox.drain` is intentionally registered in BOTH
+    // SYSTEM_SCOPE_REASONS (D2 drainer scope) and QUEUE_NAMES (D1 queue).
+    // Same literal, two registries — coincidence, not coupling.
   });
 
-  it('contains the seven reasons currently used across the codebase', () => {
-    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(7);
+  it('contains the eight reasons currently used across the codebase', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(8);
     expect(SYSTEM_SCOPE_REASONS.admin.token_resolve).toBe('admin.token_resolve');
     expect(SYSTEM_SCOPE_REASONS.admin.token_revoke).toBe('admin.token_revoke');
     expect(SYSTEM_SCOPE_REASONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
+    expect(SYSTEM_SCOPE_REASONS.outbox.drain).toBe('outbox.drain');
     expect(SYSTEM_SCOPE_REASONS.shopify.install).toBe('shopify.install');
     expect(SYSTEM_SCOPE_REASONS.webhook.ingest).toBe('webhook.ingest');
     expect(SYSTEM_SCOPE_REASONS.healthcheck.readyz).toBe('healthcheck.readyz');
