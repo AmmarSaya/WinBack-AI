@@ -21,7 +21,7 @@
     "@winback/logger": "workspace:*",
     "@winback/queue": "workspace:*",
     "@winback/shopify": "workspace:*",
-    "bullmq": "5.76.8",
+    "bullmq": "5.76.10",
     "ioredis": "5.10.1"
   },
   "devDependencies": {
