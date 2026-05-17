@@ -36,3 +36,7 @@ coverage/
 
 # Claude Code session state (worktrees, scratch). Tooling artifact, not source.
 .claude/
+
+# Session-handoff artifacts (local context for new sessions, not source)
+handoff.md
+new-session-prompt.md

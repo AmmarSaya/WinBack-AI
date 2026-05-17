@@ -1,0 +1,14 @@
+# Minimum-viable Dependabot config. Weekly cadence, both ecosystems.
+# Version pins in pnpm.overrides are deliberate (see handoff "Tech Stack");
+# close PRs that conflict with the pin policy. Add `ignore` blocks here once
+# noise patterns emerge.
+version: 2
+updates:
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
