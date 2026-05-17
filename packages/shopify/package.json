@@ -21,7 +21,7 @@
   "dependencies": {
     "@prisma/client": "5.22.0",
     "@shopify/shopify-api": "11.14.1",
-    "@shopify/shopify-app-session-storage": "3.0.20",
+    "@shopify/shopify-app-session-storage": "5.0.0",
     "@shopify/shopify-app-session-storage-prisma": "5.2.3",
     "@winback/config": "workspace:*",
     "@winback/contracts": "workspace:*",
