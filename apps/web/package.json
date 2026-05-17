@@ -20,7 +20,7 @@
     "@shopify/polaris": "^13.9.0",
     "@shopify/shopify-api": "11.14.1",
     "@shopify/shopify-app-remix": "3.8.1",
-    "@shopify/shopify-app-session-storage-prisma": "5.2.3",
+    "@shopify/shopify-app-session-storage-prisma": "9.0.0",
     "@winback/config": "workspace:*",
     "@winback/contracts": "workspace:*",
     "@winback/crypto": "workspace:*",
