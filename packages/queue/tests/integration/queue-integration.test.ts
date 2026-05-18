@@ -82,17 +82,13 @@ describe('@winback/queue — integration', () => {
   it('2. getQueues produces working Queue instances against real Redis', async () => {
     const queues = getQueues();
 
-    // Add a job to each queue with a minimal payload — proves the BullMQ +
-    // ioredis + shared-connection wiring is operational. Returns the
-    // Job object once Redis acknowledges the LPUSH/XADD; an error would
-    // propagate as a rejected promise.
+    // Add a job to the outboxDrain queue with a minimal payload — proves
+    // the BullMQ + ioredis + shared-connection wiring is operational.
+    // Returns the Job object once Redis acknowledges the LPUSH/XADD; an
+    // error would propagate as a rejected promise.
     const outboxJob = await queues.outboxDrain.add('test-2', { ping: 'outbox' });
-    const attribJob = await queues.attributionCompute.add('test-2', {
-      ping: 'attribution',
-    });
 
     expect(outboxJob.id).toBeDefined();
-    expect(attribJob.id).toBeDefined();
   });
 
   it('3. jobs round-trip through Redis with nested-payload integrity preserved (Checkpoint 2)', async () => {
@@ -156,7 +152,8 @@ describe('@winback/queue — integration', () => {
     // waitUntilReady awaits the setup-complete signal.
     await Promise.all([
       queues.outboxDrain.waitUntilReady(),
-      queues.attributionCompute.waitUntilReady(),
+      queues.cronRollup.waitUntilReady(),
+      queues.cronSweep.waitUntilReady(),
     ]);
     expect(captured!.status).toBe('ready');
 

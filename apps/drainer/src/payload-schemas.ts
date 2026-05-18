@@ -69,15 +69,26 @@ export const shopRedactPayloadSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// order.* — producer (webhook ingest) doesn't exist yet. D2 stubs the
-// dispatch; H1 fills the attribution.compute handler. Minimal schema:
-// require `orderId`, allow passthrough so additional fields the future
-// producer adds don't break this without an explicit @v<n> bump.
+// order.* — producer is the webhook ingest at apps/web/app/services/
+// webhook-ingest.server.ts:142-154, which writes `{ topic, webhookId, body }`
+// where `body` is the raw Shopify webhook payload. The handler is a
+// pre-Epic-E stub (see handlers/order.ts header); body validation is loose
+// because the real Order upsert + qualifying-transition check (per CP-2
+// §Q1) lives in Epic E / H1, not here. Keeping `body.id` typed as
+// `number | string | undefined` mirrors what Shopify actually sends
+// without over-constraining the rest of the body shape — additional
+// Shopify fields pass through unaffected.
 // ---------------------------------------------------------------------------
 
 export const orderEventPayloadSchema = z
   .object({
-    orderId: z.string().min(1),
+    topic: z.enum(['orders/create', 'orders/updated']),
+    webhookId: z.string().min(1),
+    body: z
+      .object({
+        id: z.union([z.number(), z.string()]).optional(),
+      })
+      .passthrough(),
   })
   .passthrough();
 

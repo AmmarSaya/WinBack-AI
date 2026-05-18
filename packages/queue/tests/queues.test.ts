@@ -97,17 +97,16 @@ afterEach(async () => {
 });
 
 describe('getQueues + closeQueues', () => {
-  it('1. returns an object with all four Queue instances using QUEUE_NAMES values', () => {
+  it('1. returns an object with all three Queue instances using QUEUE_NAMES values', () => {
     const queues = getQueues();
 
     expect(queues.outboxDrain).toBeDefined();
-    expect(queues.attributionCompute).toBeDefined();
     expect(queues.cronRollup).toBeDefined();
     expect(queues.cronSweep).toBeDefined();
 
-    // BullMQ's Queue constructor was called four times with the canonical
+    // BullMQ's Queue constructor was called three times with the canonical
     // names from the QUEUE_NAMES registry — never string literals.
-    expect(QueueMock).toHaveBeenCalledTimes(4);
+    expect(QueueMock).toHaveBeenCalledTimes(3);
     expect(QueueMock).toHaveBeenNthCalledWith(
       1,
       QUEUE_NAMES.outbox.drain,
@@ -115,16 +114,11 @@ describe('getQueues + closeQueues', () => {
     );
     expect(QueueMock).toHaveBeenNthCalledWith(
       2,
-      QUEUE_NAMES.attribution.compute,
-      expect.objectContaining({ connection: expect.any(Object) }),
-    );
-    expect(QueueMock).toHaveBeenNthCalledWith(
-      3,
       QUEUE_NAMES.cron.rollup,
       expect.objectContaining({ connection: expect.any(Object) }),
     );
     expect(QueueMock).toHaveBeenNthCalledWith(
-      4,
+      3,
       QUEUE_NAMES.cron.sweep,
       expect.objectContaining({ connection: expect.any(Object) }),
     );
@@ -138,9 +132,9 @@ describe('getQueues + closeQueues', () => {
     expect(second).toBe(first);
     expect(third).toBe(first);
 
-    // Queue constructor called exactly four times total (once per queue, on
+    // Queue constructor called exactly three times total (once per queue, on
     // the first getQueues() call only). Subsequent calls hit the cache.
-    expect(QueueMock).toHaveBeenCalledTimes(4);
+    expect(QueueMock).toHaveBeenCalledTimes(3);
 
     // Single shared ioredis client across all Queues — exactly one
     // createRedisClient invocation with the documented connection name.
@@ -148,13 +142,12 @@ describe('getQueues + closeQueues', () => {
     expect(createRedisClientMock).toHaveBeenCalledWith('queues.shared');
   });
 
-  it('3. closeQueues closes all four Queue instances + the shared client, clears the cache, and re-initializes fresh on next getQueues()', async () => {
+  it('3. closeQueues closes all three Queue instances + the shared client, clears the cache, and re-initializes fresh on next getQueues()', async () => {
     const first = getQueues();
 
     // Capture the mock-Queue close fns BEFORE closing — after close, the
     // mocked module state can drift if other tests interleave.
     const outboxClose = (first.outboxDrain as unknown as { close: Mock }).close;
-    const attribClose = (first.attributionCompute as unknown as { close: Mock }).close;
     const rollupClose = (first.cronRollup as unknown as { close: Mock }).close;
     const sweepClose = (first.cronSweep as unknown as { close: Mock }).close;
     // Guard the mock.results[0] access so a "no createRedisClient call was
@@ -170,7 +163,6 @@ describe('getQueues + closeQueues', () => {
 
     // Each Queue's close() was invoked once.
     expect(outboxClose).toHaveBeenCalledTimes(1);
-    expect(attribClose).toHaveBeenCalledTimes(1);
     expect(rollupClose).toHaveBeenCalledTimes(1);
     expect(sweepClose).toHaveBeenCalledTimes(1);
     // Shared client was disconnected (NOT quit — see queues.ts header

@@ -214,10 +214,9 @@ describe('QUEUE_NAMES registry', () => {
     expect(isQueueName('Outbox.Drain')).toBe(false); // caps rejected by format
   });
 
-  it('contains the four queues currently used across the codebase', () => {
-    expect(ALL_QUEUE_NAMES.size).toBe(4);
+  it('contains the three queues currently used across the codebase', () => {
+    expect(ALL_QUEUE_NAMES.size).toBe(3);
     expect(QUEUE_NAMES.outbox.drain).toBe('outbox.drain');
-    expect(QUEUE_NAMES.attribution.compute).toBe('attribution.compute');
     expect(QUEUE_NAMES.cron.rollup).toBe('cron.rollup');
     expect(QUEUE_NAMES.cron.sweep).toBe('cron.sweep');
   });
