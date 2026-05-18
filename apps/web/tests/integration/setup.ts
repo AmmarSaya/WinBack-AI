@@ -49,6 +49,13 @@ export async function resetDb(): Promise<void> {
     await client.customer.deleteMany({});
     await client.billingSubscription.deleteMany({});
     await client.merchantSettings.deleteMany({});
+    // Session is the Shopify SDK adapter table — keyed on shop, NOT
+    // FK'd to Merchant (so merchant.deleteMany doesn't cascade-clean it).
+    // Specific to apps/web tests (only the OAuth callback writes Session
+    // rows); packages/db's resetDb omits this because no db test goes
+    // through install. If sessions persisted across tests, oauth-callback
+    // negative-path assertions ("no Session row should exist") would lie.
+    await client.session.deleteMany({});
     await client.merchant.deleteMany({});
   });
 }
