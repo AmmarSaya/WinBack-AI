@@ -89,15 +89,34 @@ export function enforceTenantScopeOnRead(
   if (scope.kind === 'system') return args;
 
   if (model === 'Merchant') {
+    // In tenant scope, every Merchant read MUST be keyed by id === active
+    // merchant. Two failure modes are blocked here:
+    //
+    //   1. `where` has no `id` (findFirst/findMany OR findUnique-by-shop):
+    //      pre-S-3, findUnique({where:{shop:X}}) silently passed through
+    //      because the `!isFindUnique` exception below treated all
+    //      findUnique calls as already-tenant-bound. That assumption only
+    //      holds for unique tuples that include merchantId; Merchant's
+    //      `shop` unique key does NOT include the tenant. Cross-tenant
+    //      read by shop was the leak the exception enabled. Fixed by
+    //      dropping the exception — `id === undefined` always throws here.
+    //   2. `where.id` is some other merchant's id: cross-tenant read.
+    //
+    // Legitimate `merchant.findUnique({where:{id: scope.merchantId}})`
+    // (self-lookup) still passes — id matches the active scope.
+    //
+    // Cross-tenant Merchant reads (operator dashboards, install lookup
+    // by shop, GDPR processor) MUST open withSystemScope; the early
+    // return at line 89 above handles that path.
     const id = args.where?.['id'];
-    if (id === undefined && !isFindUnique) {
+    if (id === undefined) {
       throw new TenantScopeError(
         `Unscoped Merchant read in tenant scope (${scope.merchantId}). ` +
           'Use withSystemScope for cross-tenant Merchant reads.',
         { context: { model, scope: scope.merchantId } },
       );
     }
-    if (id !== undefined && id !== scope.merchantId) {
+    if (id !== scope.merchantId) {
       throw new TenantScopeError(
         `Cross-tenant Merchant read: scope=${scope.merchantId}, requested=${String(id)}`,
         { context: { model } },

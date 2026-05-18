@@ -55,6 +55,40 @@ describe('tenant scope — reads', () => {
     });
   });
 
+  // ----- S-3 regression coverage -----
+  // Pre-S-3, the Merchant branch skipped its id check when `isFindUnique`
+  // was true — so `findUnique({where:{shop:X}})` in tenant scope silently
+  // returned another tenant's Merchant row. The fix removed that exception;
+  // now every Merchant read in tenant scope requires `where.id ===
+  // scope.merchantId`. The three tests below lock that contract.
+
+  it('S-3: Merchant findUnique-by-shop throws in tenant scope (was silent leak pre-fix)', async () => {
+    await withTenantScope('m_1', async () => {
+      expect(() =>
+        applyReadHooks('Merchant', { where: { shop: 'other.myshopify.com' } }, { findUnique: true }),
+      ).toThrow(TenantScopeError);
+    });
+  });
+
+  it('S-3: Merchant findUnique with cross-tenant id throws in tenant scope', async () => {
+    await withTenantScope('m_1', async () => {
+      expect(() =>
+        applyReadHooks('Merchant', { where: { id: 'm_2' } }, { findUnique: true }),
+      ).toThrow(TenantScopeError);
+    });
+  });
+
+  it('S-3: Merchant findUnique self-lookup (id === scope) still passes', async () => {
+    await withTenantScope('m_1', async () => {
+      const result = applyReadHooks(
+        'Merchant',
+        { where: { id: 'm_1' } },
+        { findUnique: true },
+      );
+      expect(result.where).toMatchObject({ id: 'm_1' });
+    });
+  });
+
   it('UNSCOPED model (Session) passes through untouched', async () => {
     await withTenantScope('m_1', async () => {
       const result = applyReadHooks('Session', { where: { shop: 'foo.myshopify.com' } });
