@@ -9,8 +9,10 @@ import type { Queues } from './types.js';
  * BullMQ queue registry — gives consumers typed Queue handles for every
  * named queue in `QUEUE_NAMES`.
  *
- * Two Queues today (`outbox.drain`, `attribution.compute`), growing
- * additively as D3 registers `cron.*` names. Every Queue here shares ONE
+ * Queues today: `outbox.drain` (D2) + `cron.rollup` / `cron.sweep` (D3).
+ * `attribution.compute` was removed in the C1 fix — CP-2 §Q1 specifies
+ * inline drainer work for attribution, not a separate queue + consumer.
+ * Every Queue here shares ONE
  * ioredis client (the `'queues.shared'` connection, created lazily on
  * first `getQueues()` call). This is safe per BullMQ docs because Queue
  * uses non-blocking commands only.
@@ -44,9 +46,6 @@ export function getQueues(): Queues {
     sharedClient = createRedisClient('queues.shared');
     cachedQueues = {
       outboxDrain: new Queue(QUEUE_NAMES.outbox.drain, {
-        connection: sharedClient,
-      }),
-      attributionCompute: new Queue(QUEUE_NAMES.attribution.compute, {
         connection: sharedClient,
       }),
       cronRollup: new Queue(QUEUE_NAMES.cron.rollup, {
@@ -118,7 +117,6 @@ export async function closeQueues(): Promise<void> {
     if (cachedQueues !== null) {
       await Promise.all([
         cachedQueues.outboxDrain.close(),
-        cachedQueues.attributionCompute.close(),
         cachedQueues.cronRollup.close(),
         cachedQueues.cronSweep.close(),
       ]);

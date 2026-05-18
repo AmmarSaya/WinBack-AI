@@ -11,14 +11,13 @@ import type { Queue } from 'bullmq';
  * rather than inferring `ReturnType<typeof getQueues>`. A stable named
  * export is a stable API surface as the registry grows.
  *
- * When D3 adds cron.* queues, this interface grows additively. Existing
- * consumers that destructure `outboxDrain` / `attributionCompute` stay
- * compatible — they just won't know about the new fields until they're
- * destructured.
+ * The interface grows additively as new queues are registered (cron queues
+ * landed in D3). Removing a field is a coordinated change — the C1 fix
+ * dropped `attributionCompute` after CP-2 §Q1 made the drainer do
+ * attribution work inline rather than via a queue + consumer.
  */
 export interface Queues {
   readonly outboxDrain: Queue;
-  readonly attributionCompute: Queue;
   readonly cronRollup: Queue;
   readonly cronSweep: Queue;
 }

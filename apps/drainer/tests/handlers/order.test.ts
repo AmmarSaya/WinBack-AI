@@ -1,15 +1,20 @@
 /**
  * order.* stub handler tests.
  *
- * For `order.placed` / `order.updated`: verifies the
- * attribution.compute job is enqueued with the v1 payload shape locked
- * in handlers/order.ts.
+ * Pre-Epic-E, `handleOrderEvent` is a documented stub that validates the
+ * producer-shaped payload (see handlers/order.ts header for the CP-2 §Q1
+ * pointer) and logs receipt. These tests cover the validation surface +
+ * the noop variants for cancelled/refunded.
  *
- * For `order.cancelled` / `order.refunded`: noop (logged + returned).
+ * Real ingest → drain → dispatch coverage requires a real-DB drainer
+ * integration harness — flagged in PRE-EPIC-E-AUDIT.md as the highest-
+ * priority test-coverage gap. The producer-vs-consumer payload mismatch
+ * that this stub replaced was exactly the bug class an integration test
+ * would have caught.
  */
 
 import type { OutboxEventRow } from '@winback/db';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 import type { DrainerContext } from '../../src/context.js';
 import { handleOrderEvent, handleOrderNoop } from '../../src/handlers/order.js';
@@ -22,77 +27,119 @@ function makeRow(type: string, payload: unknown): OutboxEventRow {
     payload,
     createdAt: new Date(),
     attempts: 0,
+    deadLetteredAt: null,
+    deferredFailedAt: null,
   };
 }
 
-function makeCtx(addMock: ReturnType<typeof vi.fn>): DrainerContext {
+function makeCtx(): DrainerContext {
   return {
     prisma: {} as DrainerContext['prisma'],
     queues: {
-      attributionCompute: { add: addMock } as unknown as DrainerContext['queues']['attributionCompute'],
       outboxDrain: {} as DrainerContext['queues']['outboxDrain'],
+      cronRollup: {} as DrainerContext['queues']['cronRollup'],
+      cronSweep: {} as DrainerContext['queues']['cronSweep'],
     },
     shopifyConfig: {} as DrainerContext['shopifyConfig'],
   };
 }
 
-describe('handleOrderEvent — order.placed', () => {
-  it('enqueues an attribution.compute@v1 job with the locked payload shape', async () => {
-    const addMock = vi.fn().mockResolvedValue(undefined);
-    const ctx = makeCtx(addMock);
+function producerPayload(args: {
+  topic: 'orders/create' | 'orders/updated';
+  webhookId: string;
+  shopifyOrderId?: number | string;
+}): Record<string, unknown> {
+  return {
+    topic: args.topic,
+    webhookId: args.webhookId,
+    body: args.shopifyOrderId !== undefined ? { id: args.shopifyOrderId } : {},
+  };
+}
 
-    await handleOrderEvent(
-      ctx,
-      makeRow('order.placed', { orderId: 'order-abc' }),
-      'order.placed',
-    );
-
-    expect(addMock).toHaveBeenCalledTimes(1);
-    expect(addMock).toHaveBeenCalledWith('attribution.compute@v1', {
-      merchantId: 'merchant-1',
-      orderId: 'order-abc',
-      eventType: 'order.placed',
-      outboxEventId: 'row-order.placed',
-    });
-  });
-
-  it('enqueues with eventType=order.updated when called with that discriminator', async () => {
-    const addMock = vi.fn().mockResolvedValue(undefined);
-    const ctx = makeCtx(addMock);
-
-    await handleOrderEvent(
-      ctx,
-      makeRow('order.updated', { orderId: 'order-xyz' }),
-      'order.updated',
-    );
-
-    expect(addMock).toHaveBeenCalledWith(
-      'attribution.compute@v1',
-      expect.objectContaining({ eventType: 'order.updated', orderId: 'order-xyz' }),
-    );
-  });
-
-  it('throws zod error on missing orderId', async () => {
-    const addMock = vi.fn().mockResolvedValue(undefined);
-    const ctx = makeCtx(addMock);
-
+describe('handleOrderEvent — order.placed / order.updated (stub)', () => {
+  it('returns without throwing on a producer-shaped order.placed payload', async () => {
+    const ctx = makeCtx();
     await expect(
-      handleOrderEvent(ctx, makeRow('order.placed', {}), 'order.placed'),
+      handleOrderEvent(
+        ctx,
+        makeRow(
+          'order.placed',
+          producerPayload({ topic: 'orders/create', webhookId: 'wh-1', shopifyOrderId: 12345 }),
+        ),
+        'order.placed',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('accepts string-typed Shopify order ids (Shopify sometimes sends strings)', async () => {
+    const ctx = makeCtx();
+    await expect(
+      handleOrderEvent(
+        ctx,
+        makeRow(
+          'order.updated',
+          producerPayload({ topic: 'orders/updated', webhookId: 'wh-2', shopifyOrderId: 'gid://shopify/Order/12345' }),
+        ),
+        'order.updated',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('accepts payloads where body.id is absent (Shopify edge case)', async () => {
+    const ctx = makeCtx();
+    await expect(
+      handleOrderEvent(
+        ctx,
+        makeRow('order.placed', producerPayload({ topic: 'orders/create', webhookId: 'wh-3' })),
+        'order.placed',
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it('throws ZodError when topic is missing — breaks loudly on producer-shape drift', async () => {
+    const ctx = makeCtx();
+    await expect(
+      handleOrderEvent(
+        ctx,
+        makeRow('order.placed', { webhookId: 'wh-4', body: { id: 1 } }),
+        'order.placed',
+      ),
     ).rejects.toThrow();
-    expect(addMock).not.toHaveBeenCalled();
+  });
+
+  it('throws ZodError when webhookId is missing — breaks loudly on producer-shape drift', async () => {
+    const ctx = makeCtx();
+    await expect(
+      handleOrderEvent(
+        ctx,
+        makeRow('order.placed', { topic: 'orders/create', body: { id: 1 } }),
+        'order.placed',
+      ),
+    ).rejects.toThrow();
+  });
+
+  it('throws ZodError when body is missing — breaks loudly on producer-shape drift', async () => {
+    const ctx = makeCtx();
+    await expect(
+      handleOrderEvent(
+        ctx,
+        makeRow('order.placed', { topic: 'orders/create', webhookId: 'wh-5' }),
+        'order.placed',
+      ),
+    ).rejects.toThrow();
   });
 });
 
 describe('handleOrderNoop', () => {
   it('returns without throwing for order.cancelled', async () => {
     await expect(
-      handleOrderNoop(makeRow('order.cancelled', { orderId: 'x' })),
+      handleOrderNoop(makeRow('order.cancelled', { whatever: true })),
     ).resolves.toBeUndefined();
   });
 
   it('returns without throwing for order.refunded', async () => {
     await expect(
-      handleOrderNoop(makeRow('order.refunded', { orderId: 'x' })),
+      handleOrderNoop(makeRow('order.refunded', { whatever: true })),
     ).resolves.toBeUndefined();
   });
 });

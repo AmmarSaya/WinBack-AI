@@ -9,7 +9,8 @@
  * suffix for payload-shape changes):
  *
  *   outbox.drain
- *   attribution.compute
+ *   cron.rollup
+ *   cron.sweep
  *
  * Same canonical format regex as the three existing dotted registries:
  *   /^[a-z][a-z_]*\.[a-z][a-z_0-9]*(@v[0-9]+)?$/
@@ -37,10 +38,14 @@
  *
  * Priority and concurrency budgets are NOT encoded in this registry — they
  * are properties of the Worker that consumes the queue, set at worker
- * construction time. Per CP-2 carry-forward: the `attribution.compute`
- * worker MUST run with a lower BullMQ priority and a separate (smaller)
- * concurrency budget than the `outbox.drain` worker, so heavy attribution
- * computation cannot starve order ingestion under load.
+ * construction time.
+ *
+ * Previously included `attribution.compute`. Removed in the C1 fix —
+ * CP-2 §Q1 specifies that attribution work happens INLINE in the drainer's
+ * `order.placed` / `order.updated` handler (Order upsert + qualifying-
+ * transition check + AttributionEvent insert, all in one tx), not via a
+ * separate queue + consumer. The registration was a D2-stub-era artifact
+ * with no consumer.
  */
 
 export const QUEUE_NAMES = {
@@ -58,25 +63,6 @@ export const QUEUE_NAMES = {
      * the same transaction. High-priority worker pool.
      */
     drain: 'outbox.drain',
-  },
-  /**
-   * Attribution computation (H1) — triggered by `order.placed` /
-   * `order.updated` outbox events that qualify per the CP-2 transition
-   * rules. Lands `AttributionEvent` rows. Lower priority than
-   * `outbox.drain` so heavy attribution work cannot starve order
-   * ingestion under load. Separate concurrency budget per CP-2
-   * carry-forward.
-   */
-  attribution: {
-    /**
-     * Computes an `AttributionEvent` for a single qualifying order.
-     * Idempotent via the `(merchantId, orderId)` unique index on
-     * `AttributionEvent`. H1 wires the actual handler; D2 stubs the
-     * call site, dispatching jobs onto this queue from the outbox
-     * drainer when an `order.*` event satisfies the CP-2 qualifying
-     * transition.
-     */
-    compute: 'attribution.compute',
   },
   /**
    * Scheduler / cron queues (D3). Both queues carry BullMQ-repeatable
@@ -111,13 +97,11 @@ export const QUEUE_NAMES = {
  */
 export type QueueName =
   | (typeof QUEUE_NAMES.outbox)[keyof typeof QUEUE_NAMES.outbox]
-  | (typeof QUEUE_NAMES.attribution)[keyof typeof QUEUE_NAMES.attribution]
   | (typeof QUEUE_NAMES.cron)[keyof typeof QUEUE_NAMES.cron];
 
 /** Runtime Set of every registered queue name, for shape tests + iteration. */
 export const ALL_QUEUE_NAMES: ReadonlySet<QueueName> = new Set([
   ...Object.values(QUEUE_NAMES.outbox),
-  ...Object.values(QUEUE_NAMES.attribution),
   ...Object.values(QUEUE_NAMES.cron),
 ] as QueueName[]);
 

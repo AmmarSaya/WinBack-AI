@@ -12,8 +12,9 @@ import type { ShopifyConfig } from '@winback/shopify';
  *
  * - `prisma`: the extended Prisma client. Handlers pass this to
  *   compliance / shopify functions that take `WinbackPrisma`.
- * - `queues`: BullMQ Queue handles. The order handler enqueues
- *   `attribution.compute` jobs through `queues.attributionCompute`.
+ * - `queues`: BullMQ Queue handles. No order/attribution producer today
+ *   (CP-2 §Q1 makes the drainer do that work inline rather than via a
+ *   queue); the `cron.*` queues remain for the scheduler app.
  * - `shopifyConfig`: source of `ENCRYPTION_KEY` for the per-handler
  *   Cipher + AdminClient construction (merchant handler).
  */
