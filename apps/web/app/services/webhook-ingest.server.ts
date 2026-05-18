@@ -5,7 +5,7 @@ import { getLogger } from '@winback/logger';
 import {
   getOutboxEventForTopic,
   getShopifyConfig,
-  isValidShopDomain,
+  normalizeShopDomain,
   verifyShopifyWebhookHmac,
 } from '@winback/shopify';
 
@@ -58,21 +58,29 @@ export async function ingestWebhook(
   ) {
     return { kind: 'reject', status: 400, reason: 'missing_headers' };
   }
-  if (!isValidShopDomain(args.shop)) {
+  // normalizeShopDomain validates + canonicalizes (lowercase) in one step.
+  // Returns null on malformed input. Defense in depth — Shopify always
+  // sends X-Shopify-Shop-Domain lowercase, but persisting / looking up by
+  // the canonical form guarantees the DB lookup matches whatever install
+  // wrote (install also canonicalizes), regardless of upstream casing
+  // assumptions.
+  const shop = normalizeShopDomain(args.shop);
+  if (shop === null) {
     return { kind: 'reject', status: 400, reason: 'invalid_shop' };
   }
 
-  // 2. HMAC. Sync; no DB.
+  // 2. HMAC. Sync; no DB. Uses args.rawBody + args.hmac — shop case
+  // doesn't enter the HMAC computation.
   const config = getShopifyConfig();
   const webhookSecret = config.SHOPIFY_WEBHOOK_SECRET ?? config.SHOPIFY_API_SECRET;
   if (!verifyShopifyWebhookHmac(webhookSecret, args.rawBody, args.hmac)) {
-    log.warn({ shop: args.shop, topic: args.topic }, 'webhook: HMAC failed');
+    log.warn({ shop, topic: args.topic }, 'webhook: HMAC failed');
     return { kind: 'reject', status: 401, reason: 'hmac' };
   }
 
   // Past this point: request is authenticated. Ack semantics now apply —
   // we must produce a 200 for any condition Shopify shouldn't retry.
-  const { topic, shop, webhookId, rawBody } = args;
+  const { topic, webhookId, rawBody } = args;
   const eventType = getOutboxEventForTopic(topic);
   const parsedBody = tryParseJson(rawBody);
 

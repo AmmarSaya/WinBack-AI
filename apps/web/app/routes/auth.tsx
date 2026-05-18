@@ -3,7 +3,7 @@ import { getLogger } from '@winback/logger';
 import {
   buildAuthRedirectUrl,
   getShopifyConfig,
-  isValidShopDomain,
+  normalizeShopDomain,
 } from '@winback/shopify';
 
 import { generateState } from '~/services/auth-state.server.js';
@@ -25,10 +25,17 @@ const log = getLogger('web.auth.initiate');
 export async function loader({ request }: LoaderFunctionArgs) {
   return withRequest(request, async () => {
     const url = new URL(request.url);
-    const shop = url.searchParams.get('shop');
+    const shopParam = url.searchParams.get('shop');
 
-    if (shop === null || !isValidShopDomain(shop)) {
-      log.warn({ shop }, 'auth: invalid shop param');
+    // normalizeShopDomain validates + canonicalizes (lowercase) in one step.
+    // Returns null on null/malformed input. Persisting / looking up by the
+    // canonical form prevents case-mismatch between install-time and
+    // webhook delivery (Shopify always sends lowercase headers; mixed-case
+    // OAuth shop params would otherwise install under one casing and fail
+    // to match the webhook lookup later).
+    const shop = shopParam !== null ? normalizeShopDomain(shopParam) : null;
+    if (shop === null) {
+      log.warn({ shop: shopParam }, 'auth: invalid shop param');
       throw new Response('Invalid shop parameter', { status: 400 });
     }
 

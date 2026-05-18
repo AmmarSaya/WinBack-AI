@@ -6,7 +6,7 @@ import {
   completeInstall,
   exchangeCodeForToken,
   getShopifyConfig,
-  isValidShopDomain,
+  normalizeShopDomain,
   subscribeAllWebhooks,
   verifyShopifyOAuthHmac,
 } from '@winback/shopify';
@@ -49,11 +49,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       query[k] = v;
     }
 
-    const { shop, code, state, host } = query;
+    const { shop: shopParam, code, state, host } = query;
 
-    // (2) shop validation — never hit Shopify with an unvalidated shop.
-    if (shop === undefined || !isValidShopDomain(shop)) {
-      log.warn({ shop }, 'callback: invalid shop');
+    // (2) shop validation + canonicalization. normalizeShopDomain returns
+    // null if the shape is invalid; otherwise lowercase. Persisting +
+    // looking up by the canonical form keeps install / webhook /
+    // operator-tool lookups aligned regardless of how the merchant
+    // navigated here. HMAC verification (step 4) uses the raw `query`
+    // object — Shopify signs whatever case it sent, so we MUST NOT
+    // mutate `query.shop` for that check.
+    const shop = shopParam !== undefined ? normalizeShopDomain(shopParam) : null;
+    if (shop === null) {
+      log.warn({ shop: shopParam }, 'callback: invalid shop');
       return new Response('Invalid shop', { status: 400 });
     }
 
