@@ -68,3 +68,22 @@ export * from './admin/index.js';
 
 // --- Backfill + install enrichment (C5) ------------------------------------
 export * from './backfill/index.js';
+
+// --- GID wrap helpers (Epic E session 1) -----------------------------------
+export {
+  toShopifyCustomerGid,
+  toShopifyLineItemGid,
+  toShopifyOrderGid,
+  toShopifyProductGid,
+  toShopifyVariantGid,
+} from './gid.js';
+
+// --- Shopify webhook body schemas (Epic E session 1) -----------------------
+export {
+  shopifyCustomerWebhookBodySchema,
+  shopifyOrderWebhookBodySchema,
+  type ShopifyCustomerWebhookBody,
+  type ShopifyMoneySet,
+  type ShopifyOrderLineItem,
+  type ShopifyOrderWebhookBody,
+} from './webhook-bodies.js';

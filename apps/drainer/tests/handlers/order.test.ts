@@ -44,15 +44,39 @@ function makeCtx(): DrainerContext {
   };
 }
 
+/**
+ * Generate a producer-shaped envelope + body that satisfies the post-Epic-E
+ * session 1 `shopifyOrderWebhookBodySchema` (in @winback/shopify). All
+ * required fields are populated with realistic minimums. Tests that want
+ * to exercise specific MAPPED fields override via the `bodyOverrides`
+ * parameter.
+ */
 function producerPayload(args: {
   topic: 'orders/create' | 'orders/updated';
   webhookId: string;
-  shopifyOrderId?: number | string;
+  shopifyOrderId: number | string;
+  bodyOverrides?: Record<string, unknown>;
 }): Record<string, unknown> {
+  const moneySet = {
+    shop_money: { amount: '0.00', currency_code: 'USD' },
+    presentment_money: { amount: '0.00', currency_code: 'USD' },
+  };
+  const body = {
+    id: args.shopifyOrderId,
+    currency: 'USD',
+    subtotal_price_set: moneySet,
+    total_price_set: moneySet,
+    total_tax_set: moneySet,
+    total_discounts_set: moneySet,
+    created_at: '2026-05-19T12:00:00Z',
+    updated_at: '2026-05-19T12:00:00Z',
+    line_items: [],
+    ...(args.bodyOverrides ?? {}),
+  };
   return {
     topic: args.topic,
     webhookId: args.webhookId,
-    body: args.shopifyOrderId !== undefined ? { id: args.shopifyOrderId } : {},
+    body,
   };
 }
 
@@ -85,15 +109,38 @@ describe('handleOrderEvent — order.placed / order.updated (stub)', () => {
     ).resolves.toBeUndefined();
   });
 
-  it('accepts payloads where body.id is absent (Shopify edge case)', async () => {
+  it('throws ZodError when body.id is missing — body.id is required (locked in EPIC-E-FIELD-MAPPING.md row #1)', async () => {
     const ctx = makeCtx();
+    // Hand-build a body without `id` (producerPayload requires shopifyOrderId).
+    const payload = {
+      topic: 'orders/create',
+      webhookId: 'wh-no-id',
+      body: {
+        currency: 'USD',
+        subtotal_price_set: {
+          shop_money: { amount: '0.00', currency_code: 'USD' },
+          presentment_money: { amount: '0.00', currency_code: 'USD' },
+        },
+        total_price_set: {
+          shop_money: { amount: '0.00', currency_code: 'USD' },
+          presentment_money: { amount: '0.00', currency_code: 'USD' },
+        },
+        total_tax_set: {
+          shop_money: { amount: '0.00', currency_code: 'USD' },
+          presentment_money: { amount: '0.00', currency_code: 'USD' },
+        },
+        total_discounts_set: {
+          shop_money: { amount: '0.00', currency_code: 'USD' },
+          presentment_money: { amount: '0.00', currency_code: 'USD' },
+        },
+        created_at: '2026-05-19T12:00:00Z',
+        updated_at: '2026-05-19T12:00:00Z',
+        line_items: [],
+      },
+    };
     await expect(
-      handleOrderEvent(
-        ctx,
-        makeRow('order.placed', producerPayload({ topic: 'orders/create', webhookId: 'wh-3' })),
-        'order.placed',
-      ),
-    ).resolves.toBeUndefined();
+      handleOrderEvent(ctx, makeRow('order.placed', payload), 'order.placed'),
+    ).rejects.toThrow();
   });
 
   it('throws ZodError when topic is missing — breaks loudly on producer-shape drift', async () => {

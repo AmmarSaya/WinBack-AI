@@ -7,9 +7,11 @@ export {
   parseDateOrNull,
   parseGid,
   parseIntOrZero,
-  toCustomerGid,
   type ShopifyCustomerNode,
 } from './customer-backfill.js';
+// `toCustomerGid` was removed from this module in Epic E session 1 and
+// renamed to `toShopifyCustomerGid` in `../gid.js`, exported via the
+// top-level `@winback/shopify` package surface alongside its four siblings.
 export { enrichInstall, type EnrichInstallResult } from './install-enrichment.js';
 export type {
   BackfillRunResult,

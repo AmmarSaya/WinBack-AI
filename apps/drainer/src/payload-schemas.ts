@@ -10,6 +10,10 @@
  * suffix on the event type changes (`@v<n>`) and a new schema lands here.
  */
 
+import {
+  shopifyCustomerWebhookBodySchema,
+  shopifyOrderWebhookBodySchema,
+} from '@winback/shopify';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
@@ -69,27 +73,37 @@ export const shopRedactPayloadSchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// order.* — producer is the webhook ingest at apps/web/app/services/
-// webhook-ingest.server.ts:142-154, which writes `{ topic, webhookId, body }`
-// where `body` is the raw Shopify webhook payload. The handler is a
-// pre-Epic-E stub (see handlers/order.ts header); body validation is loose
-// because the real Order upsert + qualifying-transition check (per CP-2
-// §Q1) lives in Epic E / H1, not here. Keeping `body.id` typed as
-// `number | string | undefined` mirrors what Shopify actually sends
-// without over-constraining the rest of the body shape — additional
-// Shopify fields pass through unaffected.
+// order.* and customer.* — producer is the webhook ingest at
+// apps/web/app/services/webhook-ingest.server.ts:142-154, which writes
+// `{ topic, webhookId, body }` where `body` is the raw Shopify webhook
+// payload. The body's exact shape lives in
+// `@winback/shopify/webhook-bodies.ts` (per EPIC-E-FIELD-MAPPING.md);
+// these envelopes wrap it.
+//
+// Epic E session 1: body validation goes from the post-C-1 loose
+// `{ id? }` to the full producer-shaped Shopify body schemas. Producer
+// drift (e.g. Shopify renames a field in a future API version we adopt)
+// fails parse → drainer markFailed → loud signal. Per CP-2 §Q1, the
+// drainer's order handler now does the real Order upsert + qualifying-
+// transition check; the AttributionEvent insert remains H1's concern.
 // ---------------------------------------------------------------------------
 
 export const orderEventPayloadSchema = z
   .object({
     topic: z.enum(['orders/create', 'orders/updated']),
     webhookId: z.string().min(1),
-    body: z
-      .object({
-        id: z.union([z.number(), z.string()]).optional(),
-      })
-      .passthrough(),
+    body: shopifyOrderWebhookBodySchema,
   })
   .passthrough();
 
 export type OrderEventPayload = z.infer<typeof orderEventPayloadSchema>;
+
+export const customerEventPayloadSchema = z
+  .object({
+    topic: z.enum(['customers/create', 'customers/update', 'customers/delete']),
+    webhookId: z.string().min(1),
+    body: shopifyCustomerWebhookBodySchema,
+  })
+  .passthrough();
+
+export type CustomerEventPayload = z.infer<typeof customerEventPayloadSchema>;

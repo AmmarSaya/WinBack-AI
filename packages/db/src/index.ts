@@ -41,6 +41,9 @@ export {
 // --- Errors -----------------------------------------------------------------
 export { TenantScopeError } from './errors.js';
 
+// --- Money parsing (Epic E session 1) ---------------------------------------
+export { parseMoneyToCents } from './money.js';
+
 // --- Repositories -----------------------------------------------------------
 export * from './repositories/index.js';
 

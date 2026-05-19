@@ -222,10 +222,12 @@ export class CustomerPageProcessor implements PageProcessor<ShopifyCustomerNode>
  *   3. The numeric portion is ambiguous across resources (12345 could be
  *      a Customer, Order, or Product). The full GID disambiguates.
  *
- * Coordination with the (future) D2 webhook drainer: webhook payloads
- * carry the numeric id (`body.id` → e.g. 12345). The drainer MUST wrap
- * before upsert: `toCustomerGid(body.id)` — see `toCustomerGid` below.
- * That single wrap point is the cost of storing GIDs everywhere else.
+ * Coordination with the webhook drainer (Epic E session 1): webhook
+ * payloads carry the numeric id (`body.id` → e.g. 12345). The drainer
+ * MUST wrap before upsert: `toShopifyCustomerGid(body.id)` — see
+ * `packages/shopify/src/gid.ts` for that helper and its four siblings
+ * (`toShopifyOrderGid`, `toShopifyProductGid`, etc.). That single wrap
+ * point is the cost of storing GIDs everywhere else.
  *
  * Callers are expected to skip + log malformed inputs rather than store
  * them — silent passthrough is how corruption spreads.
@@ -234,18 +236,6 @@ const GID_PATTERN = /^gid:\/\/shopify\/[A-Za-z][A-Za-z0-9]*\/(\d+)$/;
 
 export function parseGid(gid: string): string | null {
   return GID_PATTERN.test(gid) ? gid : null;
-}
-
-/**
- * Constructs a Shopify Customer GID from a numeric id (e.g. as received
- * in REST webhook payloads). For use by the webhook drainer when
- * materializing customer upserts from raw webhook bodies. Returns null
- * on non-numeric input — keeps the no-silent-passthrough invariant.
- */
-export function toCustomerGid(numericId: string | number): string | null {
-  const s = String(numericId);
-  if (!/^\d+$/.test(s)) return null;
-  return `gid://shopify/Customer/${s}`;
 }
 
 /**
