@@ -550,11 +550,25 @@ model Order {
   financialStatus   OrderFinancialStatus?
   fulfillmentStatus OrderFulfillmentStatus?
 
+  // Set when Shopify's `test: true` is on the webhook payload. Merchants'
+  // dev-store test orders would otherwise inflate RFM frequency scores;
+  // Epic E session 2's scoring query filters `WHERE isTest = false`.
+  // See EPIC-E-FIELD-MAPPING.md row #81.
+  isTest Boolean @default(false)
+
   // `placedAt` is when the customer placed the order (Shopify created_at).
   // Replaces a redundant shopifyCreatedAt column; the business name is the
   // useful one.
   placedAt    DateTime
   cancelledAt DateTime?
+
+  // Shopify's `processed_at` — the customer-visible order date used by
+  // Shopify analytics. Distinct from `placedAt` (= Shopify created_at)
+  // for draft orders converted to real orders later. Epic E session 2's
+  // RFM recency axis reads `shopifyProcessedAt ?? placedAt`. Nullable
+  // because Shopify doesn't always populate it on synchronous checkouts.
+  // See EPIC-E-FIELD-MAPPING.md row #6.
+  shopifyProcessedAt DateTime?
 
   shopifyUpdatedAt DateTime?
 
