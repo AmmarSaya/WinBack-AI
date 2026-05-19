@@ -19,7 +19,6 @@ import {
   parseDateOrNull,
   parseGid,
   parseIntOrZero,
-  toCustomerGid,
   type ShopifyCustomerNode,
 } from '../src/backfill/customer-backfill.js';
 import type { PageFetcher, PageProcessor, ResourcePage } from '../src/backfill/types.js';
@@ -74,28 +73,10 @@ describe('parseGid (returns full GID on valid, null on malformed)', () => {
 });
 
 // ===========================================================================
-// GID helpers
+// GID helpers — `toCustomerGid` tests moved to `./gid.test.ts` in Epic E
+// session 1 alongside the rename to `toShopifyCustomerGid` and the
+// addition of four sibling helpers (Order, Product, Variant, LineItem).
 // ===========================================================================
-
-describe('toCustomerGid', () => {
-  it('wraps a numeric id (string or number) into a Customer GID', () => {
-    expect(toCustomerGid('12345')).toBe('gid://shopify/Customer/12345');
-    expect(toCustomerGid(67890)).toBe('gid://shopify/Customer/67890');
-  });
-
-  it('returns null on non-numeric input — keeps no-silent-passthrough invariant', () => {
-    expect(toCustomerGid('abc')).toBeNull();
-    expect(toCustomerGid('12.5')).toBeNull();
-    expect(toCustomerGid('')).toBeNull();
-    expect(toCustomerGid('1 2 3')).toBeNull();
-  });
-
-  it('rejects negatives (numeric type → String(-1) = "-1" fails ^\\d+$)', () => {
-    expect(toCustomerGid(-1)).toBeNull();
-    expect(toCustomerGid(-12345)).toBeNull();
-    expect(toCustomerGid('-1')).toBeNull();
-  });
-});
 
 describe('extractNumericIdFromGid', () => {
   it('extracts the digits from a canonical GID', () => {
