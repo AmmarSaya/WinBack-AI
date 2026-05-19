@@ -34,14 +34,15 @@
 - **Resolved:** Merchant branch in `enforceTenantScopeOnRead` now requires `where.id === scope.merchantId` for all tenant-scope reads — the `!isFindUnique` exception removed in `484c51d` (PR `fix/s3-merchant-findunique-tenant-check`). Cross-tenant Merchant reads still legal under `withSystemScope`; verified across all 5 production call sites pre-fix.
 - **Tests:** +3 regression locks in `tenant-scope.test.ts`. 434/434 unit.
 
+### Drainer integration harness — no ingest-to-drain end-to-end coverage
+- **Resolved:** `pnpm drainer:test` harness shipped in `756c489` (PR `feat/drainer-integration-harness`). 8 integration tests covering producer-shape happy paths (the C-1 regression lock channel — payloads match what `webhook-ingest.server.ts:142-154` writes, so any future producer drift fails loudly), MARK_BEFORE_INVOKE policy with real `processShopRedact` cascade + Phase 2 deferred-failure marker semantics, and DLQ logic (non-retryable immediate DLQ, retryable below ceiling → markFailed, retryable AT ceiling → DLQ — the `row.attempts + 1 >= MAX` off-by-one lock). Shared test helpers extracted to `@winback/db/test-utils` (third-caller trigger from session-1 `setup.ts`); `apps/web` and `packages/db` callers updated to thin re-export shims with no behavioral change.
+- **Tests:** +8 drainer integration. Workspace totals: 434/434 unit + 27/27 web + 13/13 db + 8/8 drainer + 4/4 queue = **486 across all suites**.
+
 ---
 
 ## 🔴 Must Fix Before Epic E
 
-### Drainer integration harness — no ingest-to-drain end-to-end coverage
-- **Source:** PRE-EPIC-E-AUDIT.md, Pass 4.
-- **Issue:** C-1 hid for the entire D1–D4 lifecycle because every drainer test mocks Prisma. A `pnpm drainer:test` harness exercising real ingest → outbox → drain → dispatch would have caught it immediately.
-- **Action:** Build `pnpm drainer:test` harness before Epic E. One session. Epic E's order event consumer must have an ingest-to-drain integration test from day one.
+_All pre-Epic-E blockers resolved as of `756c489`. Section retained for future use — when a new must-fix lands during Epic E or after, it goes here. Epic E is unblocked._
 
 ---
 
