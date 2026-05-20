@@ -283,6 +283,9 @@ importers:
       '@winback/logger':
         specifier: workspace:*
         version: link:../logger
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
     devDependencies:
       '@winback/shopify':
         specifier: workspace:*

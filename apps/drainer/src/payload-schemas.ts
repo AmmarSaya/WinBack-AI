@@ -13,7 +13,7 @@
 import {
   shopifyCustomerWebhookBodySchema,
   shopifyOrderWebhookBodySchema,
-} from '@winback/shopify';
+} from '@winback/db';
 import { z } from 'zod';
 
 // ---------------------------------------------------------------------------
