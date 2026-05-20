@@ -11,7 +11,7 @@ on:
       - 'packages/db/prisma/schema.prisma'
       - 'packages/db/prisma/migrations/**'
   push:
-    branches: [master]
+    branches: [main]
     paths:
       - 'packages/db/prisma/schema.prisma'
       - 'packages/db/prisma/migrations/**'
@@ -58,7 +58,12 @@ jobs:
         run: pnpm --filter @winback/db migrate:deploy
 
       - name: Detect drift (schema vs migrations)
-        run: pnpm --filter @winback/db migrate:diff
+        run: |
+          pnpm --filter @winback/db prisma migrate diff \
+            --from-migrations ./prisma/migrations \
+            --to-schema-datamodel ./prisma/schema.prisma \
+            --shadow-database-url "postgresql://ci:ci@localhost:5432/winback_ci_shadow" \
+            --exit-code
 
       - name: Detect drift (migrations vs deployed DB)
         run: |
