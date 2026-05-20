@@ -309,10 +309,18 @@ function parseFulfillmentStatus(
 ): OrderFulfillmentStatus | null {
   if (value === null || value === undefined) return null;
   if (!VALID_FULFILLMENT_STATUSES.has(value)) {
-    throw new ValidationError(`Unknown Shopify fulfillment_status: ${JSON.stringify(value)}`, {
-      code: 'order.invalid_fulfillment_status',
-      fields: { received: value },
-    });
+    // Asymmetry with parseFinancialStatus (which throws): fulfillment
+    // status is informational, NOT gate-critical for CP-2 attribution.
+    // A new Shopify fulfillment status (Shopify has added enum values
+    // without notice historically) should NOT DLQ valid orders. Log at
+    // warn level — operator sees that Shopify drift happened, schema
+    // enum can be extended in a follow-up. financial_status keeps
+    // throwing because it gates the qualifying-transition check.
+    log.warn(
+      { received: value },
+      'unknown Shopify fulfillment_status — storing as null, schema enum may need extension',
+    );
+    return null;
   }
   return value as OrderFulfillmentStatus;
 }

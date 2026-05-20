@@ -292,7 +292,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
 
   // -------- enum + money validation --------
 
-  it('invalid financial_status enum → throws ValidationError', async () => {
+  it('invalid financial_status enum → throws ValidationError (gates CP-2 attribution)', async () => {
     tx.order.findUnique.mockResolvedValue(null);
     await expect(
       repo.upsertFromWebhook({
@@ -301,6 +301,17 @@ describe('OrderRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     ).rejects.toThrow(ValidationError);
+  });
+
+  it('unknown fulfillment_status → stored as null, no throw (asymmetric with financial_status — fulfillment is informational, not gate-critical)', async () => {
+    tx.order.findUnique.mockResolvedValue(null);
+    await repo.upsertFromWebhook({
+      merchantId: MERCHANT_ID,
+      body: makeBody({ fulfillment_status: 'partially_fulfilled' /* Shopify-could-add-later */ }),
+      tx: tx as unknown as Prisma.TransactionClient,
+    });
+    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    expect(upsertCall.create.fulfillmentStatus).toBeNull();
   });
 
   it('malformed money string → throws ValidationError (from parseMoneyToCents)', async () => {
