@@ -69,21 +69,11 @@ export * from './admin/index.js';
 // --- Backfill + install enrichment (C5) ------------------------------------
 export * from './backfill/index.js';
 
-// --- GID wrap helpers (Epic E session 1) -----------------------------------
-export {
-  toShopifyCustomerGid,
-  toShopifyLineItemGid,
-  toShopifyOrderGid,
-  toShopifyProductGid,
-  toShopifyVariantGid,
-} from './gid.js';
-
-// --- Shopify webhook body schemas (Epic E session 1) -----------------------
-export {
-  shopifyCustomerWebhookBodySchema,
-  shopifyOrderWebhookBodySchema,
-  type ShopifyCustomerWebhookBody,
-  type ShopifyMoneySet,
-  type ShopifyOrderLineItem,
-  type ShopifyOrderWebhookBody,
-} from './webhook-bodies.js';
+// NOTE: GID wrap helpers + Shopify webhook body schemas were originally
+// placed in this package (batch 2 of Epic E session 1) but moved to
+// @winback/db in batch 3 to resolve a circular import: @winback/shopify
+// already depends on @winback/db (for WinbackPrisma, repositories,
+// withSystemScope), so repositories in @winback/db cannot import from
+// here. Schemas describe DB-bound data shapes — the data layer is the
+// right place. Import from @winback/db:
+//   import { toShopifyOrderGid, shopifyOrderWebhookBodySchema, ... } from '@winback/db';

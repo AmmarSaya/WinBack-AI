@@ -44,6 +44,29 @@ export { TenantScopeError } from './errors.js';
 // --- Money parsing (Epic E session 1) ---------------------------------------
 export { parseMoneyToCents } from './money.js';
 
+// --- Shopify GID wrap helpers (Epic E session 1) ----------------------------
+// Originally placed in @winback/shopify (batch 2) but moved here in batch 3
+// to resolve the dependency-direction conflict — repositories consume these
+// and @winback/shopify already depends on @winback/db, so the schemas + GID
+// helpers belong on the data-layer side of the boundary.
+export {
+  toShopifyCustomerGid,
+  toShopifyLineItemGid,
+  toShopifyOrderGid,
+  toShopifyProductGid,
+  toShopifyVariantGid,
+} from './gid.js';
+
+// --- Shopify webhook body schemas (Epic E session 1) ------------------------
+export {
+  shopifyCustomerWebhookBodySchema,
+  shopifyOrderWebhookBodySchema,
+  type ShopifyCustomerWebhookBody,
+  type ShopifyMoneySet,
+  type ShopifyOrderLineItem,
+  type ShopifyOrderWebhookBody,
+} from './webhook-bodies.js';
+
 // --- Repositories -----------------------------------------------------------
 export * from './repositories/index.js';
 

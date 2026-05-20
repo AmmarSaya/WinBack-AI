@@ -224,10 +224,13 @@ export class CustomerPageProcessor implements PageProcessor<ShopifyCustomerNode>
  *
  * Coordination with the webhook drainer (Epic E session 1): webhook
  * payloads carry the numeric id (`body.id` → e.g. 12345). The drainer
- * MUST wrap before upsert: `toShopifyCustomerGid(body.id)` — see
- * `packages/shopify/src/gid.ts` for that helper and its four siblings
- * (`toShopifyOrderGid`, `toShopifyProductGid`, etc.). That single wrap
- * point is the cost of storing GIDs everywhere else.
+ * MUST wrap before upsert: `toShopifyCustomerGid(body.id)` — that
+ * helper and its four siblings (`toShopifyOrderGid`, `toShopifyProductGid`,
+ * etc.) live at `packages/db/src/gid.ts`, exported from `@winback/db`
+ * (moved there in batch 3 of Epic E session 1 to resolve a circular
+ * import — repositories in @winback/db were the natural consumers,
+ * and @winback/shopify already depends on @winback/db). That single
+ * wrap point is the cost of storing GIDs everywhere else.
  *
  * Callers are expected to skip + log malformed inputs rather than store
  * them — silent passthrough is how corruption spreads.

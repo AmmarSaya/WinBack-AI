@@ -35,7 +35,8 @@
     "@prisma/client": "5.22.0",
     "@winback/contracts": "workspace:*",
     "@winback/errors": "workspace:*",
-    "@winback/logger": "workspace:*"
+    "@winback/logger": "workspace:*",
+    "zod": "3.25.76"
   },
   "devDependencies": {
     "@winback/shopify": "workspace:*",
