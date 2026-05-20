@@ -73,5 +73,8 @@ export * from './repositories/index.js';
 // --- Outbox event producer schemas (Epic E session 2) -----------------------
 export * from './events/index.js';
 
+// --- Services (Epic E session 2 — CustomerScoreService + pure scoring math) -
+export * from './services/index.js';
+
 // --- Compliance (C6 — GDPR processors) -------------------------------------
 export * from './compliance/index.js';

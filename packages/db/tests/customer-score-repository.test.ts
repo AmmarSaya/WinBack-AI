@@ -112,7 +112,7 @@ describe('CustomerScoreRepository.readCohort', () => {
 
   it('throws TenantScopeError when active scope does not match merchantId', async () => {
     await expect(
-      withTenantScope({ merchantId: 'other-merchant' }, async () =>
+      withTenantScope('other-merchant', async () =>
         repo.readCohort({
           merchantId: MERCHANT_ID,
           now: NOW,
@@ -253,7 +253,7 @@ describe('CustomerScoreRepository.upsertScore', () => {
 
   it('throws TenantScopeError when active scope does not match merchantId', async () => {
     await expect(
-      withTenantScope({ merchantId: 'other-merchant' }, async () =>
+      withTenantScope('other-merchant', async () =>
         repo.upsertScore({
           ...baseArgs,
           tx: tx as unknown as Prisma.TransactionClient,
