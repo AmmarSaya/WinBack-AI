@@ -70,5 +70,8 @@ export {
 // --- Repositories -----------------------------------------------------------
 export * from './repositories/index.js';
 
+// --- Outbox event producer schemas (Epic E session 2) -----------------------
+export * from './events/index.js';
+
 // --- Compliance (C6 — GDPR processors) -------------------------------------
 export * from './compliance/index.js';

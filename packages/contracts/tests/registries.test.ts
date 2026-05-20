@@ -115,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the eight actions currently emitted (6 C6 gdpr + 2 D4 outbox)', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(8);
+  it('contains the nine actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(9);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -127,6 +127,7 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(AUDIT_ACTIONS.gdpr.shop_redact_idempotent).toBe('gdpr.shop_redact_idempotent');
     expect(AUDIT_ACTIONS.outbox.replay).toBe('outbox.replay');
     expect(AUDIT_ACTIONS.outbox.dead_letter_forced).toBe('outbox.dead_letter_forced');
+    expect(AUDIT_ACTIONS.customer.state_changed).toBe('customer.state_changed');
   });
 });
 

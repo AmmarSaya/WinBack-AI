@@ -52,6 +52,16 @@ export const AUDIT_ACTIONS = {
     /** Operator force-DLQ'd a stuck event (`pnpm cli:outbox:dead-letter`). */
     dead_letter_forced: 'outbox.dead_letter_forced',
   },
+  /**
+   * Customer lifecycle actions (Epic E session 2). Written by the scoring
+   * service in the same tx as the `Customer.state` update + outbox event.
+   * `actorType` is `system`; `actorId` is `'drainer'` (the only producer).
+   * See EPIC-E-SESSION-2-DESIGN.md §AUDIT_ACTIONS-additions.
+   */
+  customer: {
+    /** RFM scoring recompute moved the customer between state bands. */
+    state_changed: 'customer.state_changed',
+  },
 } as const;
 
 /**
@@ -70,12 +80,14 @@ export const AUDIT_ACTIONS = {
  */
 export type AuditAction =
   | (typeof AUDIT_ACTIONS.gdpr)[keyof typeof AUDIT_ACTIONS.gdpr]
-  | (typeof AUDIT_ACTIONS.outbox)[keyof typeof AUDIT_ACTIONS.outbox];
+  | (typeof AUDIT_ACTIONS.outbox)[keyof typeof AUDIT_ACTIONS.outbox]
+  | (typeof AUDIT_ACTIONS.customer)[keyof typeof AUDIT_ACTIONS.customer];
 
 /** Runtime Set of every registered action, for shape tests + iteration. */
 export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   ...Object.values(AUDIT_ACTIONS.gdpr),
   ...Object.values(AUDIT_ACTIONS.outbox),
+  ...Object.values(AUDIT_ACTIONS.customer),
 ] as AuditAction[]);
 
 /**

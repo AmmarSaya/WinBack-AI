@@ -345,10 +345,14 @@ class CustomerScoreRepository extends BaseRepository {
    *   WHERE "merchantId" = $1
    *     AND "financialStatus" = 'paid'
    *     AND "isTest" = false
-   *     AND "deletedAt" IS NULL
    *     AND "placedAt" >= now() - INTERVAL '365 days'
    *     AND "customerId" IS NOT NULL
    *   GROUP BY "customerId"
+   *
+   * (NOTE: Order has no `deletedAt` column per schema convention —
+   * orders are immutable; cancel/refund are status changes. Hence the
+   * filter relies on `financialStatus = 'paid' AND isTest = false`,
+   * not on a soft-delete predicate.)
    *
    * Returns at most one row per customer; only customers with ≥1 paid,
    * non-test, in-window order appear. Lurkers (no paid orders) are
