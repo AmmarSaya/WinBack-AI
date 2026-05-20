@@ -73,6 +73,9 @@
 //     Shopify session adapter; not our choice).
 //   Cascade policy (every FK explicitly accounted for):
 //     Merchant → Customer            : CASCADE   (GDPR right-to-erasure)
+//     Merchant → CustomerScore       : CASCADE   (tenant data; session 2)
+//     Customer → CustomerScore       : CASCADE   (score meaningless without
+//                                                 customer; GDPR redact path)
 //     Merchant → Order               : CASCADE
 //     Merchant → Product             : CASCADE
 //     Merchant → ProductVariant      : CASCADE
@@ -166,7 +169,7 @@
 //            CHECK ("aiTone" IS NULL OR jsonb_typeof("aiTone") = 'object');
 //
 // RESERVED FOR LATER SUBSYSTEMS (additive; no churn to v2 tables):
-//   Epic E: CustomerScore, Segment, SegmentMembership
+//   Epic E: Segment, SegmentMembership  (CustomerScore landed in session 2)
 //   Epic F: AiGeneration, AiSpendBucket
 //   Epic G: Suppression, Workflow, WorkflowExecution, WorkflowStepExecution,
 //           Campaign, CampaignTarget, Message, MessageEvent,
@@ -224,6 +227,7 @@ model Merchant {
   updatedAt DateTime @updatedAt
 
   customers           Customer[]
+  customerScores      CustomerScore[]
   orders              Order[]
   orderLineItems      OrderLineItem[]
   products            Product[]
@@ -388,6 +392,11 @@ enum CustomerState {
   at_risk
   dormant
   lost
+  // Added in Epic E session 2. Assigned when the merchant's scorable
+  // cohort has fewer than 5 customers with paid orders in the trailing
+  // 365d window — quintile boundaries can't be meaningfully computed.
+  // See EPIC-E-SESSION-2-DESIGN.md §S-4, §S-5.
+  insufficient_data
 }
 
 model Customer {
@@ -426,12 +435,83 @@ model Customer {
   deletedAt DateTime?
 
   orders Order[]
+  // 1:1 with the per-customer RFM score row written by Epic E session 2's
+  // scoring service. Nullable on the relation side because lurkers without
+  // a recompute pass yet have no row; once `customerScoreService.recompute`
+  // runs, every Customer has exactly one CustomerScore.
+  customerScore CustomerScore?
 
   @@unique([merchantId, shopifyCustomerId])
   @@index([merchantId, state])
   @@index([merchantId, lastOrderAt])
   @@index([merchantId, acceptsMarketing]) // hot path: campaign audience build
   @@index([merchantId, isVip])
+}
+
+// =============================================================================
+// Customer score (Epic E session 2)
+//
+// Per-customer RFM aggregates + quintile scoring + churn risk. One row per
+// Customer (single-row scheme — Q3 lock). History lives in `AuditLog` rows
+// (action `customer.state_changed`) and `OutboxEvent` rows of the same name.
+//
+// Recompute is inline in the drainer's order + customer upsert handlers,
+// SAME transaction as the business write. Reads the merchant's scorable
+// cohort live via raw-SQL aggregation against `Order` (NOT against
+// CustomerScore — that would be circular). See EPIC-E-SESSION-2-DESIGN.md
+// §S-1 through §S-11 for the full contract.
+//
+// All quintile + churn columns are nullable: lurkers and members of an
+// `insufficient_data` cohort (<5 scorable customers) get a row with raw R/F/M
+// values but null quintiles (§S-4, §S-6).
+//
+// `churnRiskScore` is Float8 (`@db.DoublePrecision`), not Float4, so the
+// 0.0–1.0 range has full mantissa precision. Per-row revenue decisions
+// downstream (Epic G/F) deserve the precision; Float4 (Postgres default for
+// `Float`) loses past ~7 significant digits.
+//
+// Cascade policy:
+//   Merchant → CustomerScore : CASCADE (tenant data; GDPR right-to-erasure)
+//   Customer → CustomerScore : CASCADE (score has no meaning without its
+//                                       customer; GDPR redact propagates)
+// =============================================================================
+
+model CustomerScore {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+  // `@unique` here (not composite `@@unique([merchantId, customerId])`)
+  // because cuid PKs are globally unique — adding merchantId to the index
+  // doesn't change the uniqueness invariant, and Prisma's 1:1 relation
+  // parser requires a field-level @unique on the referencing side.
+  // Tenant safety on cross-tenant CustomerScore writes is enforced by the
+  // tenant-scope Prisma extension at the query layer, same as Order.customerId.
+  customerId String   @unique
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // RFM raw values (always populated)
+  rDays    Int    // Days since last paid order; account-age fallback for lurkers (§S-6).
+  fCount   Int    // Paid, non-test orders in trailing 365d.
+  mCents   BigInt // SUM(Order.totalAmountCents) in trailing 365d. Shop currency.
+  currency String @db.Char(3) // Snapshot of Merchant.shopCurrency at computedAt (§S-11).
+
+  // RFM quintiles — null for lurkers and insufficient_data cohorts (§S-4, §S-6)
+  rQuintile      Int?
+  fQuintile      Int?
+  mQuintile      Int?
+  // 0.0 = best (lowest churn risk), 1.0 = worst. Derived from quintiles.
+  // Null whenever any quintile is null. Float8 / double precision per above.
+  churnRiskScore Float? @db.DoublePrecision
+
+  computedAt DateTime
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Dashboard query: "show me my top at-risk customers." DESC sort is
+  // pre-baked into the index so the planner avoids a separate sort step.
+  @@index([merchantId, churnRiskScore(sort: Desc)])
+  // Staleness scans for the future operator bulk-rescore command (§S-9).
+  @@index([merchantId, computedAt])
 }
 
 // =============================================================================
