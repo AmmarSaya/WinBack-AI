@@ -83,33 +83,127 @@ async function seedOutboxEvent(
   });
 }
 
+const ZERO_MONEY_SET = {
+  shop_money: { amount: '0.00', currency_code: 'USD' },
+  presentment_money: { amount: '0.00', currency_code: 'USD' },
+};
+
 /**
- * Producer-shaped payload for an order event. Matches webhook-ingest.
+ * Producer-shaped payload for an order event. Matches what
+ * apps/web/app/services/webhook-ingest.server.ts writes — full body
+ * satisfying `shopifyOrderWebhookBodySchema` (post-batch-2 tight schema).
+ * `bodyOverrides` lets tests target specific MAPPED fields.
  */
 function orderPayload(args: {
   topic: 'orders/create' | 'orders/updated';
   webhookId: string;
   shopifyOrderId: number | string;
+  bodyOverrides?: Record<string, unknown>;
 }): Record<string, unknown> {
+  const body = {
+    id: args.shopifyOrderId,
+    financial_status: 'paid',
+    currency: 'USD',
+    subtotal_price_set: {
+      shop_money: { amount: '100.00', currency_code: 'USD' },
+      presentment_money: { amount: '100.00', currency_code: 'USD' },
+    },
+    total_price_set: {
+      shop_money: { amount: '110.00', currency_code: 'USD' },
+      presentment_money: { amount: '110.00', currency_code: 'USD' },
+    },
+    total_tax_set: {
+      shop_money: { amount: '10.00', currency_code: 'USD' },
+      presentment_money: { amount: '10.00', currency_code: 'USD' },
+    },
+    total_discounts_set: ZERO_MONEY_SET,
+    created_at: '2026-05-19T12:00:00Z',
+    updated_at: '2026-05-19T12:00:00Z',
+    line_items: [],
+    ...(args.bodyOverrides ?? {}),
+  };
+  return { topic: args.topic, webhookId: args.webhookId, body };
+}
+
+/**
+ * Producer-shaped payload for a customer event. Full body satisfying
+ * `shopifyCustomerWebhookBodySchema`.
+ */
+function customerPayload(args: {
+  topic?: 'customers/create' | 'customers/update' | 'customers/delete';
+  webhookId: string;
+  shopifyCustomerId: number | string;
+  bodyOverrides?: Record<string, unknown>;
+}): Record<string, unknown> {
+  const body = {
+    id: args.shopifyCustomerId,
+    email: 'test@example.com',
+    created_at: '2026-05-19T12:00:00Z',
+    updated_at: '2026-05-19T12:00:00Z',
+    ...(args.bodyOverrides ?? {}),
+  };
   return {
-    topic: args.topic,
+    topic: args.topic ?? 'customers/create',
     webhookId: args.webhookId,
-    body: { id: args.shopifyOrderId, financial_status: 'paid' },
+    body,
   };
 }
 
 /**
- * Producer-shaped payload for a customers/create event.
+ * Seeds a Product + ProductVariant for tests that exercise line-item
+ * FK resolution. Returns the local cuids of both.
  */
-function customerPayload(args: {
-  webhookId: string;
-  shopifyCustomerId: number | string;
-}): Record<string, unknown> {
-  return {
-    topic: 'customers/create',
-    webhookId: args.webhookId,
-    body: { id: args.shopifyCustomerId, email: 'test@example.com' },
-  };
+async function createTestProductWithVariant(args: {
+  merchantId: string;
+  shopifyProductId: string;
+  shopifyVariantId: string;
+}): Promise<{ productId: string; variantId: string }> {
+  return withSystemScope('test.setup_product', async () => {
+    const product = await getTestClient().product.create({
+      data: {
+        merchantId: args.merchantId,
+        shopifyProductId: args.shopifyProductId,
+        title: 'Test Product',
+        status: 'active',
+      },
+      select: { id: true },
+    });
+    const variant = await getTestClient().productVariant.create({
+      data: {
+        merchantId: args.merchantId,
+        productId: product.id,
+        shopifyVariantId: args.shopifyVariantId,
+        title: 'Test Variant',
+        priceCents: 1000n,
+        currency: 'USD',
+      },
+      select: { id: true },
+    });
+    return { productId: product.id, variantId: variant.id };
+  });
+}
+
+/**
+ * Seeds a Customer row directly (bypasses the customers/* webhook flow)
+ * so tests that need a pre-existing customer for FK resolution can
+ * set one up without going through the drainer twice.
+ */
+async function createTestCustomer(args: {
+  merchantId: string;
+  shopifyCustomerId: string;
+  email?: string;
+}): Promise<string> {
+  return withSystemScope('test.setup_customer', async () => {
+    const customer = await getTestClient().customer.create({
+      data: {
+        merchantId: args.merchantId,
+        shopifyCustomerId: args.shopifyCustomerId,
+        email: args.email ?? 'pre-seeded@example.com',
+      },
+      select: { id: true },
+    });
+    return customer.id;
+  });
 }
 
 describe('drainer integration (real Postgres)', () => {
@@ -342,6 +436,397 @@ describe('drainer integration (real Postgres)', () => {
       expect(event?.deadLetteredAt).not.toBeNull(); // DLQ'd this tick
       expect(event?.attempts).toBe(MAX_OUTBOX_ATTEMPTS); // incremented to MAX
       expect(event?.lastError).toContain('ceiling hit');
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Epic E session 1 — real data writers
+  //
+  // Tests covering the new Order + Customer upsert paths against real
+  // Postgres. These exercise the full ingest → drain → upsert flow,
+  // validating that the rows land with the right MAPPED fields and that
+  // FK resolution / soft-delete / qualifying-transition logic behaves
+  // end-to-end. The earlier "happy path" tests in this file assert
+  // OutboxEvent state (processed / not DLQ'd); these assert the actual
+  // data side effects.
+  // ---------------------------------------------------------------------
+
+  describe('Epic E session 1 — Order upsert (real DB)', () => {
+    it('orders/create → Order row lands with mapped fields (financialStatus, totalAmountCents, currency, placedAt, shopifyProcessedAt, isTest=false)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-1',
+          shopifyOrderId: 10001,
+          bodyOverrides: {
+            processed_at: '2026-05-19T13:00:00Z', // distinct from created_at
+          },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      expect(orders).toHaveLength(1);
+      const order = orders[0]!;
+      expect(order.shopifyOrderId).toBe('gid://shopify/Order/10001');
+      expect(order.financialStatus).toBe('paid');
+      expect(order.totalAmountCents).toBe(11000n); // 110.00 → 11000 cents
+      expect(order.subtotalAmountCents).toBe(10000n);
+      expect(order.totalTaxCents).toBe(1000n);
+      expect(order.totalDiscountCents).toBe(0n);
+      expect(order.currency).toBe('USD');
+      expect(order.isTest).toBe(false);
+      expect(order.placedAt.toISOString()).toBe('2026-05-19T12:00:00.000Z');
+      expect(order.shopifyProcessedAt?.toISOString()).toBe('2026-05-19T13:00:00.000Z');
+    });
+
+    it('orders/updated with prior=pending + new=paid → Order.financialStatus updated to paid (qualifying-transition paid_continued)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      // Pre-seed an existing order with financialStatus=pending.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-2a',
+          shopifyOrderId: 20002,
+          bodyOverrides: { financial_status: 'pending' },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      // Now an orders/updated event flipping to paid.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.updated,
+        orderPayload({
+          topic: 'orders/updated',
+          webhookId: 'wh-e-2b',
+          shopifyOrderId: 20002,
+          bodyOverrides: { financial_status: 'paid' },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId, shopifyOrderId: 'gid://shopify/Order/20002' } }),
+      );
+      expect(orders).toHaveLength(1); // upsert was idempotent
+      expect(orders[0]?.financialStatus).toBe('paid');
+    });
+
+    it('orders/create with body.test=true → Order.isTest=true (locks the new column)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-3',
+          shopifyOrderId: 30003,
+          bodyOverrides: { test: true },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      expect(orders[0]?.isTest).toBe(true);
+    });
+
+    it('orders/create with processed_at distinct from created_at → both columns distinct (locks shopifyProcessedAt)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-4',
+          shopifyOrderId: 40004,
+          bodyOverrides: {
+            created_at: '2026-01-15T08:00:00Z', // draft order created earlier
+            processed_at: '2026-05-19T14:00:00Z', // converted to real order later
+          },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      const order = orders[0]!;
+      expect(order.placedAt.toISOString()).toBe('2026-01-15T08:00:00.000Z');
+      expect(order.shopifyProcessedAt?.toISOString()).toBe('2026-05-19T14:00:00.000Z');
+      expect(order.placedAt.getTime()).not.toBe(order.shopifyProcessedAt?.getTime());
+    });
+
+    it('orders/create idempotent replay → only one Order row after two ingests of same shopifyOrderId', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({ topic: 'orders/create', webhookId: 'wh-e-5a', shopifyOrderId: 50005 }),
+      );
+      await runDrainTick(makeCtx());
+
+      // Second event same Shopify order id (Shopify retry, replay, etc.).
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({ topic: 'orders/create', webhookId: 'wh-e-5b', shopifyOrderId: 50005 }),
+      );
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId, shopifyOrderId: 'gid://shopify/Order/50005' } }),
+      );
+      expect(orders).toHaveLength(1); // composite (merchantId, shopifyOrderId) unique held
+    });
+
+    it('orders/create with line items + valid product/variant FKs → OrderLineItem rows have FKs set', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const { productId, variantId } = await createTestProductWithVariant({
+        merchantId,
+        shopifyProductId: 'gid://shopify/Product/60001',
+        shopifyVariantId: 'gid://shopify/ProductVariant/60002',
+      });
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-6',
+          shopifyOrderId: 60010,
+          bodyOverrides: {
+            line_items: [
+              {
+                id: 60100,
+                product_id: 60001,
+                variant_id: 60002,
+                title: 'Widget',
+                quantity: 2,
+                price: '10.00',
+                price_set: {
+                  shop_money: { amount: '10.00', currency_code: 'USD' },
+                  presentment_money: { amount: '10.00', currency_code: 'USD' },
+                },
+              },
+            ],
+          },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const lineItems = await assertRead(() =>
+        getTestClient().orderLineItem.findMany({ where: { merchantId } }),
+      );
+      expect(lineItems).toHaveLength(1);
+      const li = lineItems[0]!;
+      expect(li.productId).toBe(productId);
+      expect(li.productVariantId).toBe(variantId);
+      expect(li.quantity).toBe(2);
+      expect(li.unitPriceCents).toBe(1000n);
+      expect(li.currency).toBe('USD'); // sourced from parent Order
+    });
+
+    it('orders/create with line items but unknown product/variant FKs → null FKs, OrderLineItem still inserted', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      // NO Product / ProductVariant seeded.
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-7',
+          shopifyOrderId: 70010,
+          bodyOverrides: {
+            line_items: [
+              {
+                id: 70100,
+                product_id: 79991, // not in DB
+                variant_id: 79992, // not in DB
+                title: 'Mystery item',
+                quantity: 1,
+                price: '5.00',
+                price_set: {
+                  shop_money: { amount: '5.00', currency_code: 'USD' },
+                  presentment_money: { amount: '5.00', currency_code: 'USD' },
+                },
+              },
+            ],
+          },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const lineItems = await assertRead(() =>
+        getTestClient().orderLineItem.findMany({ where: { merchantId } }),
+      );
+      expect(lineItems).toHaveLength(1);
+      expect(lineItems[0]?.productId).toBeNull();
+      expect(lineItems[0]?.productVariantId).toBeNull();
+    });
+
+    it('orders/create with body.customer.id matching local Customer → Order.customerId set', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const localCustomerId = await createTestCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/80001',
+      });
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-11',
+          shopifyOrderId: 80010,
+          bodyOverrides: { customer: { id: 80001 } },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      expect(orders[0]?.customerId).toBe(localCustomerId);
+    });
+
+    it('orders/create with body.customer.id but unknown local customer → Order.customerId null (P-10 out-of-order delivery)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      // NO local Customer seeded for shopify id 90001.
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-e-12',
+          shopifyOrderId: 90010,
+          bodyOverrides: { customer: { id: 90001 } },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      expect(orders[0]?.customerId).toBeNull(); // null, not error
+    });
+  });
+
+  describe('Epic E session 1 — Customer upsert + softDelete (real DB)', () => {
+    it('customers/create → Customer row lands with mapped fields', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.created,
+        customerPayload({
+          webhookId: 'wh-e-8',
+          shopifyCustomerId: 80001,
+          bodyOverrides: {
+            email: 'jane@example.com',
+            phone: '+15551234567',
+            first_name: 'Jane',
+            last_name: 'Doe',
+            tags: 'vip, repeat-buyer',
+            email_marketing_consent: { state: 'subscribed' },
+            sms_marketing_consent: { state: 'not_subscribed' },
+            orders_count: 5,
+          },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const customers = await assertRead(() =>
+        getTestClient().customer.findMany({ where: { merchantId } }),
+      );
+      expect(customers).toHaveLength(1);
+      const c = customers[0]!;
+      expect(c.shopifyCustomerId).toBe('gid://shopify/Customer/80001');
+      expect(c.email).toBe('jane@example.com');
+      expect(c.phone).toBe('+15551234567');
+      expect(c.firstName).toBe('Jane');
+      expect(c.lastName).toBe('Doe');
+      expect(c.tags).toEqual(['vip', 'repeat-buyer']);
+      expect(c.acceptsMarketing).toBe(true); // derived from consent state
+      expect(c.acceptsSms).toBe(false); // default; not_subscribed doesn't override
+      expect(c.ordersCount).toBe(5);
+    });
+
+    it('customers/update on existing customer → single row, email updated', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      // Pre-seed via customers/create event.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.created,
+        customerPayload({
+          webhookId: 'wh-e-9a',
+          shopifyCustomerId: 90001,
+          bodyOverrides: { email: 'old@example.com' },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      // Now update.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.updated,
+        customerPayload({
+          topic: 'customers/update',
+          webhookId: 'wh-e-9b',
+          shopifyCustomerId: 90001,
+          bodyOverrides: { email: 'new@example.com' },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const customers = await assertRead(() =>
+        getTestClient().customer.findMany({ where: { merchantId } }),
+      );
+      expect(customers).toHaveLength(1);
+      expect(customers[0]?.email).toBe('new@example.com');
+    });
+
+    it('customers/delete on existing customer → Customer.deletedAt set, row preserved (soft-delete)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.created,
+        customerPayload({ webhookId: 'wh-e-10a', shopifyCustomerId: 100001 }),
+      );
+      await runDrainTick(makeCtx());
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.deleted,
+        customerPayload({
+          topic: 'customers/delete',
+          webhookId: 'wh-e-10b',
+          shopifyCustomerId: 100001,
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      // The Prisma soft-delete extension filters deletedAt IS NULL by
+      // default on findMany; query with explicit deletedAt to see the
+      // soft-deleted row.
+      const customers = await assertRead(() =>
+        getTestClient().customer.findMany({
+          where: { merchantId, deletedAt: { not: null } },
+        }),
+      );
+      expect(customers).toHaveLength(1);
+      expect(customers[0]?.deletedAt).toBeInstanceOf(Date);
     });
   });
 });
