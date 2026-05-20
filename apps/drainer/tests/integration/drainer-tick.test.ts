@@ -206,6 +206,51 @@ async function createTestCustomer(args: {
   });
 }
 
+/**
+ * Seeds a Customer + one paid, non-test Order for that customer.  Used
+ * by Epic E session 2 integration tests to build a scorable cohort
+ * without going through the webhook handlers (each handler call would
+ * trigger recompute and skew the test setup).
+ *
+ * The order's `financialStatus = 'paid'` AND `isTest = false` makes it
+ * eligible for the §S-1 cohort filter; `placedAt` controls R.
+ */
+async function seedScorableCustomer(args: {
+  merchantId: string;
+  shopifyCustomerId: string;
+  shopifyOrderId: string;
+  placedAt: Date;
+  totalCents: bigint;
+  email?: string;
+}): Promise<{ customerId: string; orderId: string }> {
+  return withSystemScope('test.seed_scorable', async () => {
+    const client = getTestClient();
+    const customer = await client.customer.create({
+      data: {
+        merchantId: args.merchantId,
+        shopifyCustomerId: args.shopifyCustomerId,
+        email: args.email ?? `seed-${args.shopifyCustomerId}@example.com`,
+      },
+      select: { id: true },
+    });
+    const order = await client.order.create({
+      data: {
+        merchantId: args.merchantId,
+        customerId: customer.id,
+        shopifyOrderId: args.shopifyOrderId,
+        currency: 'USD',
+        subtotalAmountCents: args.totalCents,
+        totalAmountCents: args.totalCents,
+        financialStatus: 'paid',
+        isTest: false,
+        placedAt: args.placedAt,
+      },
+      select: { id: true },
+    });
+    return { customerId: customer.id, orderId: order.id };
+  });
+}
+
 describe('drainer integration (real Postgres)', () => {
   beforeEach(async () => {
     await resetDb();
@@ -827,6 +872,565 @@ describe('drainer integration (real Postgres)', () => {
       );
       expect(customers).toHaveLength(1);
       expect(customers[0]?.deletedAt).toBeInstanceOf(Date);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // Epic E session 2 — CustomerScoreService end-to-end (real DB)
+  //
+  // The drainer handlers (order + customer) now invoke
+  // CustomerScoreService.recompute inline.  These tests cover the six
+  // end-to-end contracts from the design-doc review:
+  //   1. Paid order → 4 writes in one tx (CustomerScore + Customer.state
+  //      + AuditLog + OutboxEvent).
+  //   2. customer.created on a fresh merchant → lurker scoring fires.
+  //   3. State-band transition with a full cohort + Q6 payload shape.
+  //   4. Lurker scoring inside a ≥5 cohort → null quintiles + account-age R.
+  //   5. Insufficient cohort (<5) → insufficient_data state for the
+  //      triggering customer.
+  //   6. Guest checkout → scoring SKIPPED.
+  //   7. Idempotent replay → no duplicate rows; computedAt refreshes.
+  //   8. customer.deleted → no scoring; existing CustomerScore preserved.
+  //
+  // Helpers are direct-Prisma seeders under `withSystemScope` (the
+  // `test.seed_scorable` template-literal reason).
+  // ---------------------------------------------------------------------
+
+  describe('Epic E session 2 — CustomerScoreService end-to-end (real DB)', () => {
+    it('1. paid order arrival → CustomerScore + Customer.state + AuditLog + OutboxEvent all in one tx', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const customerGid = 'gid://shopify/Customer/200001';
+      await createTestCustomer({ merchantId, shopifyCustomerId: customerGid });
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-1',
+          shopifyOrderId: 200010,
+          bodyOverrides: { customer: { id: 200001 } },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      // (a) CustomerScore row created.
+      const scores = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scores).toHaveLength(1);
+      // Single-customer cohort → insufficient → quintiles null, raw R/F/M present.
+      expect(scores[0]?.rQuintile).toBeNull();
+      expect(scores[0]?.fQuintile).toBeNull();
+      expect(scores[0]?.mQuintile).toBeNull();
+      expect(scores[0]?.churnRiskScore).toBeNull();
+      expect(scores[0]?.fCount).toBe(1);
+      expect(scores[0]?.mCents).toBe(11_000n); // default total_price 110.00 → 11000 cents
+      expect(scores[0]?.currency).toBe('USD');
+
+      // (b) Customer.state moved from 'active' (default) to 'insufficient_data'.
+      const customer = await assertRead(() =>
+        getTestClient().customer.findUnique({
+          where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: customerGid } },
+        }),
+      );
+      expect(customer?.state).toBe('insufficient_data');
+
+      // (c) AuditLog row written in the same tx.
+      const audit = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audit).toHaveLength(1);
+      expect(audit[0]?.actorType).toBe('system');
+      expect(audit[0]?.actorId).toBe('drainer');
+      expect(audit[0]?.targetType).toBe('customer');
+      expect(audit[0]?.targetId).toBe(customer?.id);
+
+      // (d) OutboxEvent for `customer.state_changed` emitted.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(1);
+    });
+
+    it('2. customer.created on fresh merchant → lurker scoring fires (no order required)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.created,
+        customerPayload({ webhookId: 'wh-s2-2', shopifyCustomerId: 210001 }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      // CustomerScore row created for the lurker.
+      const scores = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scores).toHaveLength(1);
+      expect(scores[0]?.fCount).toBe(0);
+      expect(scores[0]?.mCents).toBe(0n);
+      expect(scores[0]?.rQuintile).toBeNull();
+      expect(scores[0]?.fQuintile).toBeNull();
+      expect(scores[0]?.mQuintile).toBeNull();
+      expect(scores[0]?.churnRiskScore).toBeNull();
+
+      // Cohort = 0 (no scorable customers) → insufficient_data.
+      const customers = await assertRead(() =>
+        getTestClient().customer.findMany({ where: { merchantId } }),
+      );
+      expect(customers).toHaveLength(1);
+      expect(customers[0]?.state).toBe('insufficient_data');
+
+      // OutboxEvent emitted (state changed active → insufficient_data).
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(1);
+    });
+
+    it('3. state-band transition active→at_risk with full cohort + Q6 payload shape', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const now = Date.now();
+      // Seed 5 scorable customers spanning the quintile range.
+      const seedDefs = [
+        { shopify: 220001, rDaysAgo: 5, mCents: 1_000n },
+        { shopify: 220002, rDaysAgo: 20, mCents: 3_000n },
+        { shopify: 220003, rDaysAgo: 50, mCents: 5_000n },
+        { shopify: 220004, rDaysAgo: 150, mCents: 20_000n },
+        { shopify: 220005, rDaysAgo: 300, mCents: 50_000n },
+      ];
+      for (const def of seedDefs) {
+        await seedScorableCustomer({
+          merchantId,
+          shopifyCustomerId: `gid://shopify/Customer/${def.shopify}`,
+          shopifyOrderId: `gid://shopify/Order/${def.shopify * 10}`,
+          placedAt: new Date(now - def.rDaysAgo * 86_400_000),
+          totalCents: def.mCents,
+        });
+      }
+
+      // Target customer: paid order 100d ago → R=100 → at_risk band.
+      const targetGid = 'gid://shopify/Customer/220100';
+      await createTestCustomer({ merchantId, shopifyCustomerId: targetGid });
+      const placedAt = new Date(now - 100 * 86_400_000);
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-3',
+          shopifyOrderId: 220100,
+          bodyOverrides: {
+            customer: { id: 220100 },
+            created_at: placedAt.toISOString(),
+            updated_at: placedAt.toISOString(),
+            // Default total_price_set is 110.00 → mCents=11000 (lands in
+            // the middle of the seeded M spread).
+          },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      // Find the target customer's score.
+      const targetCustomer = await assertRead(() =>
+        getTestClient().customer.findUnique({
+          where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: targetGid } },
+        }),
+      );
+      expect(targetCustomer?.state).toBe('at_risk');
+
+      const targetScore = await assertRead(() =>
+        getTestClient().customerScore.findUnique({
+          where: { customerId: targetCustomer!.id },
+        }),
+      );
+      // Cohort = 6 → quintile math runs.  Target's quintiles MUST be populated.
+      expect(targetScore?.rQuintile).not.toBeNull();
+      expect(targetScore?.fQuintile).not.toBeNull();
+      expect(targetScore?.mQuintile).not.toBeNull();
+      expect(targetScore?.churnRiskScore).not.toBeNull();
+      // R ≈ 100; some millisecond drift is fine — we only assert the band.
+      expect(targetScore?.rDays).toBeGreaterThanOrEqual(99);
+      expect(targetScore?.rDays).toBeLessThanOrEqual(101);
+      expect(targetScore?.fCount).toBe(1);
+      expect(targetScore?.mCents).toBe(11_000n);
+
+      // Q6 OutboxEvent payload shape — locked surface for Epic G consumers.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      // 5 seeded scorable customers + target = 6 customers; we triggered
+      // scoring ONLY for the target's order (the seeded ones bypassed
+      // the handler).  Exactly one OutboxEvent.
+      expect(events).toHaveLength(1);
+      const payload = events[0]!.payload as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        merchantId,
+        customerId: targetCustomer!.id,
+        shopifyCustomerId: targetGid,
+        oldState: 'active',
+        newState: 'at_risk',
+      });
+      // computedAt is an ISO 8601 UTC string.
+      expect(typeof payload.computedAt).toBe('string');
+      expect(payload.computedAt).toMatch(/Z$/);
+      // rfmScore shape per Q6.
+      const rfm = payload.rfmScore as Record<string, unknown>;
+      expect(typeof rfm.rDays).toBe('number');
+      expect(typeof rfm.fCount).toBe('number');
+      // mCents is a DECIMAL-DIGIT STRING per rule #19 (BigInt JSON serialisation).
+      expect(typeof rfm.mCents).toBe('string');
+      expect(rfm.mCents).toBe('11000');
+      expect(typeof rfm.rQuintile).toBe('number');
+      expect(typeof rfm.fQuintile).toBe('number');
+      expect(typeof rfm.mQuintile).toBe('number');
+    });
+
+    it('4. lurker scoring inside ≥5 cohort → account-age R + null quintiles', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const now = Date.now();
+      // Seed 5 scorable customers to make cohort ≥ threshold.
+      for (let i = 0; i < 5; i++) {
+        await seedScorableCustomer({
+          merchantId,
+          shopifyCustomerId: `gid://shopify/Customer/${230001 + i}`,
+          shopifyOrderId: `gid://shopify/Order/${(230001 + i) * 10}`,
+          placedAt: new Date(now - (10 + i * 10) * 86_400_000),
+          totalCents: BigInt(1000 + i * 1000),
+        });
+      }
+
+      // Lurker — customer with NO paid order.  Account age = 100 days
+      // → state should land in `at_risk` band (since cohort is sufficient
+      // and the lurker's account-age R falls in (90, 180]).
+      const lurkerGid = 'gid://shopify/Customer/230100';
+      const lurkerCreatedAt = new Date(now - 100 * 86_400_000).toISOString();
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.created,
+        customerPayload({
+          webhookId: 'wh-s2-4',
+          shopifyCustomerId: 230100,
+          bodyOverrides: {
+            created_at: lurkerCreatedAt,
+            updated_at: lurkerCreatedAt,
+          },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      const lurkerCustomer = await assertRead(() =>
+        getTestClient().customer.findUnique({
+          where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: lurkerGid } },
+        }),
+      );
+      expect(lurkerCustomer?.state).toBe('at_risk');
+
+      const lurkerScore = await assertRead(() =>
+        getTestClient().customerScore.findUnique({
+          where: { customerId: lurkerCustomer!.id },
+        }),
+      );
+      // Lurker characteristics: null quintiles, fCount=0, mCents=0, R from account-age.
+      expect(lurkerScore?.rQuintile).toBeNull();
+      expect(lurkerScore?.fQuintile).toBeNull();
+      expect(lurkerScore?.mQuintile).toBeNull();
+      expect(lurkerScore?.churnRiskScore).toBeNull();
+      expect(lurkerScore?.fCount).toBe(0);
+      expect(lurkerScore?.mCents).toBe(0n);
+      expect(lurkerScore?.rDays).toBeGreaterThanOrEqual(99);
+      expect(lurkerScore?.rDays).toBeLessThanOrEqual(101);
+    });
+
+    it('5. insufficient cohort (4 scorable on trigger) → insufficient_data + null quintiles', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const now = Date.now();
+      // Seed 3 scorable customers (below the threshold of 5 on its own).
+      for (let i = 0; i < 3; i++) {
+        await seedScorableCustomer({
+          merchantId,
+          shopifyCustomerId: `gid://shopify/Customer/${240001 + i}`,
+          shopifyOrderId: `gid://shopify/Order/${(240001 + i) * 10}`,
+          placedAt: new Date(now - (10 + i * 10) * 86_400_000),
+          totalCents: BigInt(1000 + i * 1000),
+        });
+      }
+
+      // 4th customer — pre-existing locally so the order's FK lookup resolves.
+      const targetGid = 'gid://shopify/Customer/240100';
+      await createTestCustomer({ merchantId, shopifyCustomerId: targetGid });
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-5',
+          shopifyOrderId: 240100,
+          bodyOverrides: { customer: { id: 240100 } },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      // Cohort = 4 (3 seeded + the just-upserted order) < 5 → insufficient.
+      const targetCustomer = await assertRead(() =>
+        getTestClient().customer.findUnique({
+          where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: targetGid } },
+        }),
+      );
+      expect(targetCustomer?.state).toBe('insufficient_data');
+
+      const targetScore = await assertRead(() =>
+        getTestClient().customerScore.findUnique({
+          where: { customerId: targetCustomer!.id },
+        }),
+      );
+      // Raw R/F/M present; quintiles + churn null per §S-4 insufficient path.
+      expect(targetScore?.rQuintile).toBeNull();
+      expect(targetScore?.fQuintile).toBeNull();
+      expect(targetScore?.mQuintile).toBeNull();
+      expect(targetScore?.churnRiskScore).toBeNull();
+      expect(targetScore?.fCount).toBe(1);
+
+      // State changed active → insufficient_data → exactly one OutboxEvent.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(1);
+      const payload = events[0]!.payload as Record<string, unknown>;
+      expect(payload).toMatchObject({
+        oldState: 'active',
+        newState: 'insufficient_data',
+      });
+    });
+
+    it('6. guest checkout (body.customer absent) → scoring SKIPPED entirely', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+
+      // Order body with NO `customer` key — guest checkout.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-6',
+          shopifyOrderId: 250010,
+          // No `customer` override → key absent → schema's optional .customer.
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      // Order DID land — guest orders are not blocked by the scoring path.
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      expect(orders).toHaveLength(1);
+      expect(orders[0]?.customerId).toBeNull();
+
+      // NO CustomerScore row.
+      const scores = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scores).toHaveLength(0);
+
+      // NO customer.state_changed OutboxEvent.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(0);
+
+      // NO customer.state_changed AuditLog.
+      const audit = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audit).toHaveLength(0);
+    });
+
+    it('7. idempotent replay → single CustomerScore row, computedAt refreshes, no duplicate OutboxEvent', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const customerGid = 'gid://shopify/Customer/260001';
+      await createTestCustomer({ merchantId, shopifyCustomerId: customerGid });
+
+      // First arrival of the order.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-7a',
+          shopifyOrderId: 260010,
+          bodyOverrides: { customer: { id: 260001 } },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const firstScore = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(firstScore).toHaveLength(1);
+      const firstComputedAt = firstScore[0]!.computedAt;
+
+      // Tiny delay so the second recompute's `now = new Date()` is strictly
+      // greater than the first — required for the computedAt-refresh assertion.
+      await new Promise((resolve) => setTimeout(resolve, 5));
+
+      // Second arrival with same order id but different webhook id —
+      // production replay path (Shopify retries with the same X-Shopify-
+      // Webhook-Id; here we simulate two distinct deliveries of the same
+      // logical event).
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-7b',
+          shopifyOrderId: 260010,
+          bodyOverrides: { customer: { id: 260001 } },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      // Still exactly one Order, one CustomerScore.
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId } }),
+      );
+      expect(orders).toHaveLength(1);
+      const scoresAfter = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scoresAfter).toHaveLength(1);
+      // computedAt MUST be ≥ first run's value (refreshed in place).
+      expect(scoresAfter[0]!.computedAt.getTime()).toBeGreaterThan(firstComputedAt.getTime());
+
+      // State didn't change on the second run (already insufficient_data) →
+      // exactly ONE state-changed OutboxEvent total, from the first run.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(1);
+
+      // Same for the AuditLog (state-changed action is only logged on
+      // actual transitions).
+      const audit = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audit).toHaveLength(1);
+    });
+
+    it('8. customer.deleted → NO scoring fires; existing CustomerScore preserved (§S-7 forensic)', async () => {
+      const merchantId = await createTestMerchant(SHOP);
+      const customerGid = 'gid://shopify/Customer/270001';
+      await createTestCustomer({ merchantId, shopifyCustomerId: customerGid });
+
+      // Step 1: paid order arrives → scoring writes a CustomerScore row.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-s2-8a',
+          shopifyOrderId: 270010,
+          bodyOverrides: { customer: { id: 270001 } },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const scoresBefore = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scoresBefore).toHaveLength(1);
+      const scoreIdBefore = scoresBefore[0]!.id;
+      const stateBefore = (await assertRead(() =>
+        getTestClient().customer.findUnique({
+          where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: customerGid } },
+        }),
+      ))?.state;
+      expect(stateBefore).toBe('insufficient_data');
+
+      const eventsBefore = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(eventsBefore).toHaveLength(1);
+      const auditBefore = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(auditBefore).toHaveLength(1);
+
+      // Step 2: customers/delete arrives → soft delete; scoring MUST be
+      // skipped per §S-7.
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.customer.deleted,
+        customerPayload({
+          topic: 'customers/delete',
+          webhookId: 'wh-s2-8b',
+          shopifyCustomerId: 270001,
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      // CustomerScore row STILL exists (forensic).
+      const scoresAfter = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scoresAfter).toHaveLength(1);
+      expect(scoresAfter[0]!.id).toBe(scoreIdBefore);
+
+      // Customer is soft-deleted.
+      const deletedCustomer = await assertRead(() =>
+        getTestClient().customer.findFirst({
+          where: { merchantId, shopifyCustomerId: customerGid, deletedAt: { not: null } },
+        }),
+      );
+      expect(deletedCustomer?.deletedAt).toBeInstanceOf(Date);
+      // State unchanged from pre-delete.
+      expect(deletedCustomer?.state).toBe('insufficient_data');
+
+      // NO new state-changed OutboxEvent + NO new AuditLog row from the
+      // deletion path — the existing single rows from step 1 remain.
+      const eventsAfter = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(eventsAfter).toHaveLength(1);
+      const auditAfter = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(auditAfter).toHaveLength(1);
     });
   });
 });
