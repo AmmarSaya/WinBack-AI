@@ -18,6 +18,12 @@ export {
   type UpsertCustomerFromWebhookResult,
 } from './customer.repository.js';
 export {
+  CustomerScoreRepository,
+  type CustomerScoreCohortRow,
+  type UpsertCustomerScoreArgs,
+  type UpsertCustomerScoreResult,
+} from './customer-score.repository.js';
+export {
   OrderRepository,
   type QualifyingTransition,
   type UpsertOrderFromWebhookArgs,
