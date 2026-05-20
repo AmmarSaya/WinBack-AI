@@ -340,7 +340,7 @@ class CustomerScoreRepository extends BaseRepository {
    *   SELECT "customerId",
    *          FLOOR(EXTRACT(EPOCH FROM (now() - MAX(COALESCE("shopifyProcessedAt", "placedAt")))) / 86400)::int AS "rDays",
    *          COUNT(*)::int AS "fCount",
-   *          SUM("totalAmountCents") AS "mCents"
+   *          SUM("totalAmountCents")::bigint AS "mCents"
    *   FROM "Order"
    *   WHERE "merchantId" = $1
    *     AND "financialStatus" = 'paid'

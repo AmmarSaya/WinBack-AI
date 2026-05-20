@@ -72,7 +72,11 @@ export async function dispatchEvent(
       // scope. GDPR redaction goes through `gdpr.customer_redacted`.
       return handleNoop(row);
     case OUTBOX_EVENTS.customer.state_changed:
-      // Producer + consumer land in Epic E session 2's scoring writer.
+      // Epic E session 2 lands the PRODUCER (the scoring service emits
+      // this event when RFM recompute crosses a state band).  The
+      // consumer is Epic G's winback campaign engine — until that
+      // ships, the drainer absorbs the event with a noop.  Routing is
+      // here so future Epic G work just replaces this case body.
       return handleNoop(row);
 
     // --- order ------------------------------------------------------------

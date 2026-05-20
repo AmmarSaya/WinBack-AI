@@ -46,6 +46,7 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'MerchantSettings',
   'BillingSubscription',
   'Customer',
+  'CustomerScore', // Epic E session 2 — per-customer RFM/state row
   'Product',
   'ProductVariant',
   'Order',
