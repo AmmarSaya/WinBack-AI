@@ -51,10 +51,19 @@ export class CustomerScoreRepository extends BaseRepository {
    * quintile math, and makes the method deterministic under unit test.
    *
    * Result row types:
-   *   - `customerId` TEXT  → `string`
-   *   - `rDays`      INT   → `number`
-   *   - `fCount`     INT   → `number`
-   *   - `mCents`     BIGINT → `bigint`  (Prisma 5 maps BIGINT to BigInt)
+   *   - `customerId` TEXT             → `string`
+   *   - `rDays`      INT (cast in SQL) → `number`
+   *   - `fCount`     INT (cast in SQL) → `number`
+   *   - `mCents`     BIGINT (cast in SQL) → `bigint`
+   *
+   * Why the explicit `::bigint` cast on the SUM: Postgres widens
+   * `SUM(bigint)` to `numeric` to avoid overflow on huge sums. Prisma
+   * deserializes `numeric` as `Decimal` (not BigInt), and feeding a
+   * `Decimal` to `tx.customerScore.upsert({ mCents })` throws
+   * `PrismaClientValidationError: Expected BigInt, provided Float`.
+   * The `::bigint` cast keeps the column-native type end-to-end and
+   * is safe because no realistic single-customer 365d sum approaches
+   * `bigint` max (~9.2 × 10¹⁸ cents = $92 quintillion).
    *
    * No `deletedAt` predicate: `Order` is immutable in this schema
    * (cancel / refund are status changes, not soft deletes) — see
@@ -74,7 +83,7 @@ export class CustomerScoreRepository extends BaseRepository {
       SELECT "customerId",
              FLOOR(EXTRACT(EPOCH FROM (${now}::timestamptz - MAX(COALESCE("shopifyProcessedAt", "placedAt")))) / 86400)::int AS "rDays",
              COUNT(*)::int AS "fCount",
-             SUM("totalAmountCents") AS "mCents"
+             SUM("totalAmountCents")::bigint AS "mCents"
       FROM "Order"
       WHERE "merchantId" = ${merchantId}
         AND "financialStatus" = 'paid'

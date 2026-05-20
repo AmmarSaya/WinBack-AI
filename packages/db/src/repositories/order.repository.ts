@@ -45,6 +45,14 @@ export interface UpsertOrderFromWebhookArgs {
 
 export interface UpsertOrderFromWebhookResult {
   readonly orderId: string;
+  /**
+   * Local Customer.id resolved from the embedded `body.customer` per P-10.
+   * Null on guest checkout OR when the customer hasn't been ingested locally
+   * yet (out-of-order webhook delivery — rule #22).  Surfaced here so the
+   * Epic E session 2 scoring service can be invoked inline at the same call
+   * site without a second customer lookup.
+   */
+  readonly customerId: string | null;
   readonly isNewOrder: boolean;
   readonly qualifyingTransition: QualifyingTransition;
   readonly previousFinancialStatus: OrderFinancialStatus | null;
@@ -250,6 +258,7 @@ export class OrderRepository {
 
     return {
       orderId,
+      customerId,
       isNewOrder: existing === null,
       qualifyingTransition,
       previousFinancialStatus,
