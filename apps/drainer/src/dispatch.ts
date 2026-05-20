@@ -24,6 +24,11 @@ import { ValidationError } from '@winback/errors';
 
 import type { DrainerContext } from './context.js';
 import {
+  handleCustomerCreated,
+  handleCustomerDeleted,
+  handleCustomerUpdated,
+} from './handlers/customer.js';
+import {
   handleCustomerDataRequested,
   handleCustomerRedacted,
   handleShopRedacted,
@@ -57,10 +62,17 @@ export async function dispatchEvent(
 
     // --- customer ---------------------------------------------------------
     case OUTBOX_EVENTS.customer.created:
+      return handleCustomerCreated(ctx, row);
     case OUTBOX_EVENTS.customer.updated:
+      return handleCustomerUpdated(ctx, row);
     case OUTBOX_EVENTS.customer.deleted:
+      return handleCustomerDeleted(ctx, row);
     case OUTBOX_EVENTS.customer.redacted:
+      // No producer for the non-GDPR `customer.redacted` event in current
+      // scope. GDPR redaction goes through `gdpr.customer_redacted`.
+      return handleNoop(row);
     case OUTBOX_EVENTS.customer.state_changed:
+      // Producer + consumer land in Epic E session 2's scoring writer.
       return handleNoop(row);
 
     // --- order ------------------------------------------------------------

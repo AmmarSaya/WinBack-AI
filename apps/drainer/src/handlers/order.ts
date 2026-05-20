@@ -1,4 +1,5 @@
-import type { OutboxEventRow } from '@winback/db';
+import type { Prisma } from '@prisma/client';
+import { type OutboxEventRow, OrderRepository, withTenantScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
 
 import type { DrainerContext } from '../context.js';
@@ -9,52 +10,53 @@ const log = getLogger('drainer.handler.order');
 /**
  * Handler for `order.placed` / `order.updated` outbox events.
  *
- * STUB — pre-Epic-E. Parses the producer-shaped payload (so a future
- * webhook-ingest shape change breaks loudly here, not silently downstream),
- * logs the receipt with the Shopify order id, and returns successfully.
- * No queue enqueue, no Order upsert, no attribution work.
+ * Validates the producer-shaped payload via `orderEventPayloadSchema`
+ * (which references the authoritative `shopifyOrderWebhookBodySchema`
+ * in @winback/db). Opens `withTenantScope(row.merchantId)` and
+ * `prisma.$transaction`, then delegates to `OrderRepository.upsertFromWebhook`
+ * for the atomic Order + OrderLineItem upsert + CP-2 §Q1 qualifying-
+ * transition computation. The transition result is logged but NOT acted
+ * on here — H1 will add the AttributionEvent insert inline at this same
+ * call site once the AttributionEvent table lands.
  *
- * Real work lands in Epic E/H1 — see CP-2 §Q1. The drainer will upsert
- * the Order row, run the qualifying-transition check, and insert the
- * AttributionEvent inline in a single transaction. No separate consumer.
- *
- * History: pre-C1-fix this handler enqueued an `attribution.compute@v1`
- * job onto a BullMQ queue that had no consumer (H1 hadn't shipped), and
- * crucially the payload shape it expected (`{orderId}`) did not match
- * the producer (which writes `{topic, webhookId, body}`). Every real
- * Shopify order webhook would have failed the Zod parse and DLQ'd. The
- * mismatch hid because (a) drainer unit tests used fabricated payloads
- * matching the schema not the producer, and (b) there was no real-DB
- * integration test exercising ingest → drain → dispatch end-to-end.
- * The `attribution.compute` queue itself is removed in the same fix —
- * CP-2 §Q1 obsoleted the queue-and-consumer model in favor of inline
- * drainer work.
+ * History — pre-Epic-E session 1 this handler was a documented stub
+ * (C-1 fix removed the obsolete `attribution.compute` enqueue). Batch 4
+ * of Epic E session 1 made it real.
  */
 export async function handleOrderEvent(
   ctx: DrainerContext,
   row: OutboxEventRow,
   eventType: 'order.placed' | 'order.updated',
 ): Promise<void> {
-  // Silence the unused-parameter warning while keeping the ctx in the
-  // signature — the real implementation in Epic E/H1 will read from
-  // ctx.prisma to upsert Order and check the qualifying transition.
-  void ctx;
-
   const payload = orderEventPayloadSchema.parse(row.payload);
 
-  log.info(
-    {
-      eventId: row.id,
-      merchantId: row.merchantId,
-      eventType,
-      topic: payload.topic,
-      shopifyWebhookId: payload.webhookId,
-      shopifyOrderId: payload.body.id ?? null,
-    },
-    'order event received (stub — Epic E/H1 will land real upsert + attribution)',
-  );
+  await withTenantScope(row.merchantId, async () => {
+    const result = await ctx.prisma.$transaction(async (extendedTx) => {
+      // Prisma 5 typing gap — same cast pattern as
+      // apps/drainer/src/drainer.ts:119 and packages/shopify/src/install.ts:74.
+      const tx = extendedTx as unknown as Prisma.TransactionClient;
+      const repo = new OrderRepository(ctx.prisma);
+      return repo.upsertFromWebhook({
+        merchantId: row.merchantId,
+        body: payload.body,
+        tx,
+      });
+    });
 
-  return Promise.resolve();
+    log.info(
+      {
+        eventId: row.id,
+        merchantId: row.merchantId,
+        eventType,
+        orderId: result.orderId,
+        isNewOrder: result.isNewOrder,
+        qualifyingTransition: result.qualifyingTransition,
+        previousFinancialStatus: result.previousFinancialStatus,
+        shopifyWebhookId: payload.webhookId,
+      },
+      'order event processed',
+    );
+  });
 }
 
 /**
