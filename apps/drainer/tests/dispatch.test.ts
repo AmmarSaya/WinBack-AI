@@ -17,6 +17,11 @@ import { ValidationError } from '@winback/errors';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // Mock every handler module BEFORE importing dispatchEvent.
+vi.mock('../src/handlers/customer.js', () => ({
+  handleCustomerCreated: vi.fn().mockResolvedValue(undefined),
+  handleCustomerUpdated: vi.fn().mockResolvedValue(undefined),
+  handleCustomerDeleted: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../src/handlers/gdpr.js', () => ({
   handleCustomerDataRequested: vi.fn().mockResolvedValue(undefined),
   handleCustomerRedacted: vi.fn().mockResolvedValue(undefined),
@@ -36,6 +41,7 @@ vi.mock('../src/handlers/order.js', () => ({
 
 // Imports AFTER mocks so dispatch sees the mocked handlers.
 const { dispatchEvent } = await import('../src/dispatch.js');
+const customerMod = await import('../src/handlers/customer.js');
 const gdprMod = await import('../src/handlers/gdpr.js');
 const merchantMod = await import('../src/handlers/merchant.js');
 const noopMod = await import('../src/handlers/noop.js');
@@ -115,11 +121,29 @@ describe('dispatchEvent — handler routing', () => {
     expect(orderMod.handleOrderNoop).toHaveBeenCalledTimes(2);
   });
 
-  it('all customer.* events → handleNoop', async () => {
-    for (const t of Object.values(OUTBOX_EVENTS.customer)) {
-      await dispatchEvent(stubCtx, makeRow(t));
-    }
-    expect(noopMod.handleNoop).toHaveBeenCalledTimes(Object.values(OUTBOX_EVENTS.customer).length);
+  it('customer.created → handleCustomerCreated', async () => {
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.created));
+    expect(customerMod.handleCustomerCreated).toHaveBeenCalledTimes(1);
+    expect(noopMod.handleNoop).not.toHaveBeenCalled();
+  });
+
+  it('customer.updated → handleCustomerUpdated', async () => {
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.updated));
+    expect(customerMod.handleCustomerUpdated).toHaveBeenCalledTimes(1);
+  });
+
+  it('customer.deleted → handleCustomerDeleted (non-GDPR soft-delete path)', async () => {
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.deleted));
+    expect(customerMod.handleCustomerDeleted).toHaveBeenCalledTimes(1);
+  });
+
+  it('customer.redacted (non-GDPR; no producer) + customer.state_changed (Epic E session 2 owns) → handleNoop', async () => {
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.redacted));
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.state_changed));
+    expect(noopMod.handleNoop).toHaveBeenCalledTimes(2);
+    expect(customerMod.handleCustomerCreated).not.toHaveBeenCalled();
+    expect(customerMod.handleCustomerUpdated).not.toHaveBeenCalled();
+    expect(customerMod.handleCustomerDeleted).not.toHaveBeenCalled();
   });
 
   it('all product.* events → handleNoop', async () => {
