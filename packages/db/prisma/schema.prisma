@@ -169,11 +169,15 @@
 //            CHECK ("aiTone" IS NULL OR jsonb_typeof("aiTone") = 'object');
 //
 // RESERVED FOR LATER SUBSYSTEMS (additive; no churn to v2 tables):
-//   Epic E: Segment, SegmentMembership  (CustomerScore landed in session 2)
+//   Epic E: CLOSED — CustomerScore + state machine + outbox producer +
+//           UI all shipped in session 2 + the UI session.  Originally
+//           also listed Segment / SegmentMembership; those moved to
+//           Epic G below because campaign-audience-building is the
+//           consumer of segments, not RFM scoring.
 //   Epic F: AiGeneration, AiSpendBucket
-//   Epic G: Suppression, Workflow, WorkflowExecution, WorkflowStepExecution,
-//           Campaign, CampaignTarget, Message, MessageEvent,
-//           MessageQuotaBucket
+//   Epic G: Segment, SegmentMembership, Suppression, Workflow,
+//           WorkflowExecution, WorkflowStepExecution, Campaign,
+//           CampaignTarget, Message, MessageEvent, MessageQuotaBucket
 //   Epic H: AttributionEvent, AttributionWindow, MetricsDailyRollup,
 //           CustomerCurrencyTotal
 // =============================================================================
