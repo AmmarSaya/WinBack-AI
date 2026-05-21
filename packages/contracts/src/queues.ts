@@ -89,6 +89,28 @@ export const QUEUE_NAMES = {
      */
     sweep: 'cron.sweep',
   },
+  /**
+   * AI generation pipeline (Epic F). The `customer.state_changed` drainer
+   * handler pre-creates an `AiGeneration` row + draft `Message` row in one
+   * tx, then enqueues an `ai.generate` job carrying `{ aiGenerationId,
+   * merchantId, customerId }`. The AI Worker (separate BullMQ Worker
+   * instance inside `apps/drainer`) consumes the queue, calls the active
+   * provider via `packages/ai`, and mutates both rows to completed/failed
+   * + increments today's `AiSpendBucket` via SELECT FOR UPDATE. Per-
+   * merchant concurrency = 1 to respect Shopify Admin API leaky-bucket
+   * limits during prompt-context reads. See EPIC-F-DESIGN.md §F-8.
+   */
+  ai: {
+    /**
+     * One job per LLM call. BullMQ job ID = `aiGenerationId` (the pre-
+     * created DB row's PK) for idempotent replay — if the Worker picks
+     * up a job whose AiGeneration.status is no longer `pending`, it
+     * no-ops. Retryable on provider 429 / 503 with exponential backoff
+     * (max 3 attempts); non-retryable on content-filter / auth /
+     * invalid-request / spend-ceiling rejections.
+     */
+    generate: 'ai.generate',
+  },
 } as const;
 
 /**
@@ -97,12 +119,14 @@ export const QUEUE_NAMES = {
  */
 export type QueueName =
   | (typeof QUEUE_NAMES.outbox)[keyof typeof QUEUE_NAMES.outbox]
-  | (typeof QUEUE_NAMES.cron)[keyof typeof QUEUE_NAMES.cron];
+  | (typeof QUEUE_NAMES.cron)[keyof typeof QUEUE_NAMES.cron]
+  | (typeof QUEUE_NAMES.ai)[keyof typeof QUEUE_NAMES.ai];
 
 /** Runtime Set of every registered queue name, for shape tests + iteration. */
 export const ALL_QUEUE_NAMES: ReadonlySet<QueueName> = new Set([
   ...Object.values(QUEUE_NAMES.outbox),
   ...Object.values(QUEUE_NAMES.cron),
+  ...Object.values(QUEUE_NAMES.ai),
 ] as QueueName[]);
 
 /**

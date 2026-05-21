@@ -53,6 +53,9 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'OrderLineItem',
   'OutboxEvent',
   'IdempotencyKey',
+  'AiGeneration',  // Epic F batch 1 — one row per LLM call
+  'Message',       // Epic F batch 1 — minimal draft row; Epic G extends
+  'AiSpendBucket', // Epic F batch 1 — daily per-merchant LLM spend ledger
 ]);
 
 /**

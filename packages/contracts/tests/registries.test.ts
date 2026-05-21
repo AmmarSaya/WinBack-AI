@@ -215,11 +215,16 @@ describe('QUEUE_NAMES registry', () => {
     expect(isQueueName('Outbox.Drain')).toBe(false); // caps rejected by format
   });
 
-  it('contains the three queues currently used across the codebase', () => {
-    expect(ALL_QUEUE_NAMES.size).toBe(3);
+  it('contains the four queues currently used across the codebase', () => {
+    expect(ALL_QUEUE_NAMES.size).toBe(4);
     expect(QUEUE_NAMES.outbox.drain).toBe('outbox.drain');
     expect(QUEUE_NAMES.cron.rollup).toBe('cron.rollup');
     expect(QUEUE_NAMES.cron.sweep).toBe('cron.sweep');
+    // Epic F batch 1 — `ai.generate` BullMQ queue. Producer = drainer
+    // `customer.state_changed` handler (batch 4). Consumer = AI Worker
+    // inside `apps/drainer` (batch 4). Carries `{ aiGenerationId,
+    // merchantId, customerId }`.
+    expect(QUEUE_NAMES.ai.generate).toBe('ai.generate');
   });
 });
 

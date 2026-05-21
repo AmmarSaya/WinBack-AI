@@ -96,6 +96,17 @@
 //     Product  → OrderLineItem       : SetNull   (product gone but line item
 //                                                 retained for revenue)
 //     ProductVariant → OrderLineItem : SetNull
+//     Merchant → AiGeneration        : CASCADE   (Epic F; tenant data)
+//     Merchant → Message             : CASCADE   (Epic F; tenant data — G extends
+//                                                 with Campaign/WorkflowStepExec FKs)
+//     Merchant → AiSpendBucket       : CASCADE   (Epic F; platform-internal cost
+//                                                 ledger; no PII)
+//     Customer → AiGeneration        : CASCADE   (Epic F; generated text references
+//                                                 customer PII — GDPR redact propagates)
+//     Customer → Message             : CASCADE   (Epic F; generatedText denormalised
+//                                                 from AiGeneration — same GDPR rationale)
+//     AiGeneration → Message         : CASCADE   (Epic F; 1:1 ownership — generation
+//                                                 deletion removes its draft Message)
 //
 // ENCRYPTION
 //   Session.accessToken stores AES-256-GCM CIPHERTEXT (not plaintext).
@@ -174,10 +185,13 @@
 //           also listed Segment / SegmentMembership; those moved to
 //           Epic G below because campaign-audience-building is the
 //           consumer of segments, not RFM scoring.
-//   Epic F: AiGeneration, AiSpendBucket
+//   Epic F: AiGeneration, AiSpendBucket, Message (minimal — G extends
+//           with Campaign/WorkflowStepExecution FKs + extends
+//           MessageStatus enum via ALTER TYPE ADD VALUE).  Ships in
+//           F batch 1 alongside EPIC-F-DESIGN.md.
 //   Epic G: Segment, SegmentMembership, Suppression, Workflow,
 //           WorkflowExecution, WorkflowStepExecution, Campaign,
-//           CampaignTarget, Message, MessageEvent, MessageQuotaBucket
+//           CampaignTarget, MessageEvent, MessageQuotaBucket
 //   Epic H: AttributionEvent, AttributionWindow, MetricsDailyRollup,
 //           CustomerCurrencyTotal
 // =============================================================================
@@ -241,6 +255,10 @@ model Merchant {
   idempotencyKeys     IdempotencyKey[]
   auditLogs           AuditLog[]
   backfillJobs        BackfillJob[]
+  // Epic F — AI generation pipeline.
+  aiGenerations       AiGeneration[]
+  messages            Message[]
+  aiSpendBuckets      AiSpendBucket[]
   settings            MerchantSettings?
   billingSubscription BillingSubscription?
 
@@ -444,6 +462,10 @@ model Customer {
   // a recompute pass yet have no row; once `customerScoreService.recompute`
   // runs, every Customer has exactly one CustomerScore.
   customerScore CustomerScore?
+  // Epic F — AI generation pipeline. One row per LLM call triggered by a
+  // state transition; one minimal Message draft row per generation.
+  aiGenerations AiGeneration[]
+  messages      Message[]
 
   @@unique([merchantId, shopifyCustomerId])
   @@index([merchantId, state])
@@ -931,4 +953,189 @@ model BackfillJob {
 
   @@unique([merchantId, resource])
   @@index([status])
+}
+
+// =============================================================================
+// AI generation pipeline (Epic F)
+//
+// Three additive tables backing the multi-provider LLM call site. See
+// EPIC-F-DESIGN.md for the full contract (Q1–Q10 + F-1..F-12).
+//
+//   AiGeneration   — one row per LLM call. Pre-created (status=pending) by
+//                    the `customer.state_changed` drainer handler before the
+//                    BullMQ `ai.generate` job is enqueued. AI Worker mutates
+//                    to completed/failed. Stores prompts + response + cost.
+//                    costMicrocents is BigInt MICROCENTS (1 USD = 100_000_000)
+//                    — modern LLM pricing is fractions of a cent per token.
+//   Message        — minimal F-batch-1 columns only. Epic G's batch 1 ALTERs
+//                    to add Campaign / WorkflowStepExecution FKs + extends
+//                    MessageStatus enum via ALTER TYPE ADD VALUE (sent,
+//                    suppressed, failed, bounced, opened, clicked).
+//                    1:1 with AiGeneration; aiGenerationId is @unique.
+//                    generatedText is denormalised from AiGeneration so G's
+//                    dispatch worker reads it without a JOIN.
+//   AiSpendBucket  — daily per-merchant platform LLM spend. Pre-call ceiling
+//                    check sums the current calendar-month-UTC buckets vs
+//                    MerchantSettings.monthlyAiSpendCapCents (cents → micro-
+//                    cents at compare time). Post-call SELECT FOR UPDATE +
+//                    increment serialises concurrent jobs for the same
+//                    merchant per F-6.
+//
+// Cascade chain (GDPR-critical link is the third):
+//   Merchant → AiGeneration/Message/AiSpendBucket : CASCADE
+//   Customer → AiGeneration/Message               : CASCADE
+//   AiGeneration → Message                        : CASCADE
+//
+// Customer redact fires Customer→AiGeneration:CASCADE which transitively
+// removes Message via the AiGeneration→Message arrow. The direct Customer→
+// Message arrow is redundant safety — same atomic DELETE statement.
+//
+// All three tables MUST be added to TENANT_SCOPED_MODELS in
+// packages/db/src/tenant-scope.ts (locked decision #24). Without that, the
+// extension passes their reads + writes through without tenant injection —
+// tenant-safety bug, same class as Epic E session 2's pre-fix CustomerScore.
+// =============================================================================
+
+enum AiGenerationStatus {
+  pending
+  completed
+  failed
+}
+
+enum MessageStatus {
+  draft
+  // Epic G's batch 1 extends via ALTER TYPE ADD VALUE:
+  //   sent, suppressed, failed, bounced, opened, clicked
+  // Postgres enum extension is non-breaking — same mechanism Epic E used
+  // to add `insufficient_data` to CustomerState in session 2.
+}
+
+model AiGeneration {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // Trigger context — snapshot at generation time. Future RFM recomputes
+  // do NOT retroactively update these fields. Stored as String (not the
+  // CustomerState enum) because EPIC-F-DESIGN.md keeps the column shape
+  // resilient to future CustomerState extensions without an ALTER TABLE.
+  triggerState   String
+  previousState  String
+  rDays          Int
+  fCount         Int
+  mCents         BigInt
+  currency       String @db.Char(3)
+  churnRiskScore Float?
+
+  // Provider + model locked at generation time for forensics + cost
+  // reconciliation. NOT a FK — provider config is platform env, not a DB
+  // entity. Values: 'deepseek' | 'openai' | 'anthropic' (the union shipped
+  // in `packages/ai` batch 2; not enum-constrained at the DB layer because
+  // operator-led provider additions should not need DDL).
+  provider String
+  modelId  String
+
+  // Prompts stored for auditability + prompt regression testing.
+  systemPrompt String @db.Text
+  userPrompt   String @db.Text
+
+  // LLM response. Null until status = completed.
+  generatedText String? @db.Text
+  inputTokens   Int?
+  outputTokens  Int?
+  totalTokens   Int?
+  latencyMs     Int?
+
+  // Cost in microcents (billionths of a dollar) — BigInt for precision.
+  // 1 USD = 100 cents = 100_000_000 microcents. Microcents (not cents)
+  // because modern LLM pricing is in fractions of a cent per token.
+  // Aggregated into cents only at the AiSpendBucket rollup layer.
+  // Null until completed.
+  costMicrocents BigInt?
+
+  status    AiGenerationStatus @default(pending)
+  failedAt  DateTime?
+  lastError String?
+
+  createdAt   DateTime  @default(now())
+  completedAt DateTime?
+
+  // 1:1 — every AiGeneration has at most one Message. Message.aiGenerationId
+  // is the @unique field on the other side (same pattern as
+  // CustomerScore.customerId @unique).
+  message Message?
+
+  @@index([merchantId, createdAt])
+  @@index([merchantId, customerId])
+  @@index([status, createdAt]) // AI Worker stale-pending scan (M10 sweep)
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  // 1:1 with AiGeneration — every Message originates from one LLM call.
+  // @unique gives the relation parser the field-level unique it needs
+  // for 1:1; same convention as CustomerScore.customerId @unique. Cuid
+  // is globally unique, single-column @unique is sufficient.
+  aiGenerationId String       @unique
+  aiGeneration   AiGeneration @relation(fields: [aiGenerationId], references: [id], onDelete: Cascade)
+
+  // Denormalised for fast read at send time — G's dispatch worker reads
+  // this without joining back to AiGeneration. Same write-side snapshot
+  // pattern CP-2 §Q3 uses for `messageSentAt`.
+  generatedText String @db.Text
+
+  status MessageStatus @default(draft)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Epic G's batch 1 migration adds:
+  //   campaignId String?
+  //   campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  //   workflowStepExecutionId String?
+  //   workflowStepExecution   WorkflowStepExecution? @relation(fields: [workflowStepExecutionId], references: [id], onDelete: SetNull)
+  //   channel    MessageChannel  // enum: email, sms, whatsapp
+  //   sentAt     DateTime?
+  //   provider   String?         // SendGrid, Twilio, etc.
+  // Documented here so F-batch-1 reviewers see the planned shape.
+
+  @@index([merchantId, status])
+  @@index([merchantId, customerId])
+  @@index([merchantId, createdAt])
+}
+
+model AiSpendBucket {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  // Day in UTC. Stored as UTC midnight (e.g. 2026-06-15T00:00:00Z for
+  // June 15 2026 UTC). Merchant timezone is NOT used for bucket period —
+  // the monthly cap is calendar-month UTC, the daily-bucket key is UTC
+  // date. Operator merchant-local rollup dashboards convert at read time.
+  date DateTime
+
+  // Running total in microcents for this day. Incremented atomically
+  // (SELECT FOR UPDATE on the bucket row) when each AiGeneration completes.
+  spentMicrocents BigInt @default(0)
+
+  // Generation count for this day — denormalised for cheap
+  // "generations per merchant per day" observability without an
+  // AiGeneration COUNT(*) scan.
+  generationCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([merchantId, date])
+  @@index([merchantId, date])
 }
