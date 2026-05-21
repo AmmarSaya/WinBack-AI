@@ -70,6 +70,12 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 - **Fix:** Add `scope?.kind === 'system'` guard at top of each mark-* method, mirroring `claimBatch`.
 - **Action:** M10 hardening. Drainer is the only caller today and is correctly scoped.
 
+### M-1 [LOW] — `MerchantRepository.hardDelete` has documented scope contract but no assertion
+- **Source:** POST-EPIC-E-AUDIT.md, Pass 2, LOW-4.
+- **Issue:** Method docstring says "MUST be called from system scope" but no top-of-method assertion enforces it. Same footgun pattern as C-5 — the Prisma extension's Merchant branch in tenant scope would assert `where.id === scope.merchantId` (structurally allowed), but the semantics of "deleting the row that defines the active scope" are wrong. Caller-only enforcement breaks the moment a future caller forgets.
+- **Fix:** Add `const scope = getTenantScope(); if (scope?.kind !== 'system') throw new Error('hardDelete requires system scope')` at the top of `hardDelete`, mirroring `OutboxRepository.claimBatch`. One-liner.
+- **Action:** M10 hardening. Only legitimate caller today is `gdpr-processor.processShopRedact`, which is correctly in system scope. Same risk profile as C-5 — bundle the two fixes in one cleanup pass.
+
 ### CI-1 [LOW] — `drift-check` is advisory, not required, on PRs
 - **Source:** Branch protection rollout for `ci.yml` (commit `4c30b56`).
 - **Issue:** `migrate-diff.yml` filters on `paths: [packages/db/prisma/schema.prisma, packages/db/prisma/migrations/**]` — so the `drift-check` job doesn't run on non-DB PRs.  Adding it to the required-status-checks list traps non-DB PRs at "Expected — waiting for status to be reported" forever.  We removed it from the required list (functional unblock) so it now runs + is visible on DB-touching PRs but is advisory, not blocking.  A DB-touching PR with a failing drift-check COULD be merged if the developer ignores the visible red ❌.
