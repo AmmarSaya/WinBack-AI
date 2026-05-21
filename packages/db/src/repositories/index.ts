@@ -20,6 +20,9 @@ export {
 export {
   CustomerScoreRepository,
   type CustomerScoreCohortRow,
+  type ListCustomerScoresArgs,
+  type ListCustomerScoresResult,
+  type ListedCustomerScore,
   type UpsertCustomerScoreArgs,
   type UpsertCustomerScoreResult,
 } from './customer-score.repository.js';
