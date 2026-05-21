@@ -42,6 +42,12 @@
 - **Resolved:** Migration `20260521120000_orderlineitem_tenant_unique` swaps `@@unique([orderId, shopifyLineItemId])` for `@@unique([merchantId, orderId, shopifyLineItemId])`. DROP + CREATE in one tx (atomic; no window without a unique guard). Repository's `tx.orderLineItem.upsert` `where` accessor updated to `merchantId_orderId_shopifyLineItemId`. Behaviorally identical for uniqueness (orderId → merchantId is 1:1 via FK); structurally consistent with the rest of the schema's tenant-scoped composite uniques.
 - **Tests:** +1 unit regression test locking the new `where` shape via `toEqual` (catches both key-rename and field-drop regressions). db unit 279 → 280. db int 12/13 (T1 planner flake unrelated). web int 31/31. drainer int 28/28.
 
+### 4. No CI/CD Pipeline Running Tests on PRs
+- **Resolved:** `.github/workflows/ci.yml` shipped (commit `4c30b56`). Single-job pipeline runs `pnpm build` → `pnpm -r test` → `prisma migrate deploy` → db/web/drainer/queue integration suites against Postgres + Redis service containers. Triggers on every PR against `main` and every push to `main`. Branch protection ruleset wired in GitHub UI post-merge requiring both `CI / build + test` and `migration-drift / drift-check` status checks. Old `integration.yml` (master-targeted, no Redis, never gated) deleted in the same commit. T1 smoke-test planner flake fixed in the same change (`SET LOCAL enable_seqscan = OFF` before EXPLAIN) so the gate's not pre-flaky.
+
+### 5. `ENCRYPTION_KEY` Boot Validation
+- **Resolved (already in place — entry was stale documentation):** [packages/shopify/src/config.ts:39-48](packages/shopify/src/config.ts) — `getShopifyConfig`'s Zod schema validates `ENCRYPTION_KEY` (`.min(1)` + `.refine(base64-decoded length === 32)`). Validation runs at process boot in all three long-running apps: [apps/web/app/entry.server.tsx:24-25](apps/web/app/entry.server.tsx) calls `getCoreConfig()` + `getShopifyConfig()` at module load (before binding the HTTP port); [apps/drainer/src/index.ts](apps/drainer/src/index.ts) + [apps/scheduler/src/index.ts](apps/scheduler/src/index.ts) call `getShopifyConfig()` in `main()` before constructing Workers. Apps that don't touch Session encryption (`apps/cli`) intentionally skip. Original entry was written before the boot paths were wired; never got updated when they shipped.
+
 ---
 
 ## 🔴 Must Fix Before Epic E
@@ -63,14 +69,6 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 - **Issue:** `markProcessed`, `markFailed`, `markDeadLettered`, `markDeferredFailed` rely on caller being in system scope. No guard at method level. Latent footgun if a future caller invokes from tenant scope.
 - **Fix:** Add `scope?.kind === 'system'` guard at top of each mark-* method, mirroring `claimBatch`.
 - **Action:** M10 hardening. Drainer is the only caller today and is correctly scoped.
-
-### 4. No CI/CD Pipeline Running Tests on PRs
-- **Issue:** Workflow exists but does not gate PRs. Bad push can merge without running tests.
-- **Action:** Wire workflow to run `pnpm build`, `pnpm -r test`, `pnpm db:test`, `pnpm web:test:run` on every PR. Add branch protection status check requirement.
-
-### 5. `ENCRYPTION_KEY` Boot Validation
-- **Issue:** No hard-throw if `ENCRYPTION_KEY` is missing or under 32 bytes at startup.
-- **Action:** Add explicit validation in `packages/config/src/index.ts`.
 
 ### 10. Prisma 5.22.0 — No Upgrade Plan
 - **Action:** Quarterly review note in `CONTRIBUTING.md`. One PR per major dep upgrade, never opportunistic bumps.
