@@ -70,12 +70,18 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 - **Fix:** Add `scope?.kind === 'system'` guard at top of each mark-* method, mirroring `claimBatch`.
 - **Action:** M10 hardening. Drainer is the only caller today and is correctly scoped.
 
+### CI-1 [LOW] — `drift-check` is advisory, not required, on PRs
+- **Source:** Branch protection rollout for `ci.yml` (commit `4c30b56`).
+- **Issue:** `migrate-diff.yml` filters on `paths: [packages/db/prisma/schema.prisma, packages/db/prisma/migrations/**]` — so the `drift-check` job doesn't run on non-DB PRs.  Adding it to the required-status-checks list traps non-DB PRs at "Expected — waiting for status to be reported" forever.  We removed it from the required list (functional unblock) so it now runs + is visible on DB-touching PRs but is advisory, not blocking.  A DB-touching PR with a failing drift-check COULD be merged if the developer ignores the visible red ❌.
+- **Fix (option C from the rollout conversation):** Fold the drift-check job INTO `ci.yml` as a step (drops the path-filter trap entirely; `ci.yml` always runs, drift-check always runs as part of it).  Delete `migrate-diff.yml`.  Re-add `CI / build + test` as the single required check (already required).  ~10 lines of YAML, no workflow restructure.
+- **Action:** M10 hardening.  The drift it catches (schema vs migrations divergence) is a low-frequency failure mode on a monorepo with disciplined committers; advisory red ❌ in practice catches it.  Not blocking any current work.
+
 ### 10. Prisma 5.22.0 — No Upgrade Plan
 - **Action:** Quarterly review note in `CONTRIBUTING.md`. One PR per major dep upgrade, never opportunistic bumps.
 
 ### 11. Shopify Scopes — Audit Before First Merchant
-- **Issue:** Current scopes likely incomplete for Epics F and G. Post-install scope additions force re-authorization.
-- **Action:** Enumerate final scope requirements across all epics before any merchant installs.
+- **Resolved (audit doc):** `SHOPIFY-SCOPES-AUDIT.md` shipped + approved 2026-05-21.  Locks the full Epic A–H scope union at 8 scopes: `read_customers, read_orders, read_products, read_inventory, read_price_rules, write_discounts, write_marketing_events, read_marketing_events`.  Per-epic rationale + deferred scopes (`read_locations`, `read_locales`) + rejected scopes (`read_shopify_payments_disputes`, `write_customers`) all documented.  Migration strategy locked: pre-launch full union (the only path that avoids the re-auth gauntlet).
+- **Remaining pre-launch operational work (NOT part of the audit deliverable):** update `SHOPIFY_SCOPES` env in deploy config, sync the Partners-portal app config, update `apps/web/.env` template + handoff docs, update `.github/workflows/ci.yml` env block.  These tasks reference the audit doc but ship as separate pre-launch commits — they are not gated by the audit and not blocking any current epic.
 
 ### 13. No `CONTRIBUTING.md`
 - **Action:** Create with standing rules, registry-first pattern, ALS discipline, BigInt boundary rule, commit convention.
