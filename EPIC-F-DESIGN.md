@@ -322,6 +322,37 @@ Output: `{ systemPrompt: string, userPrompt: string }`.
 
 **Test surface in `packages/ai/tests/build-winback-prompt.test.ts`:** tone injection, null firstName fallback, state-appropriate framing, empty products list, no price rules, brand voice sample present vs absent, emoji policy `none` vs `liberal`, customer with zero orders (lurker, although triggers only fire on state transitions away from `active`/`insufficient_data` so this is defensive).
 
+### F-7.5 — Discount placeholder tokens (Lock V9)
+
+Pulled forward from `POST-EPIC-F-CONSCIOUS-DECISION.md` Lock V9 into Epic F batch 2 — the prompt builder is the natural home, and writing it twice (once token-free in F, once token-aware after V9 lands) is waste. The substitutor + Shopify discount creation + cleanup cron stay in Section 4 of the post-Epic-F arc; batch 2 ships only the prompt-side instruction.
+
+**The rule.** AI never writes a raw discount code or percentage. The prompt instructs the LLM to emit two literal placeholder tokens — `{{DISCOUNT_CODE}}` and `{{DISCOUNT_VALUE_PERCENT}}` — wherever a discount needs to be referenced. A deterministic post-processor (Section 4 batch 4.1) substitutes the real values from the Shopify-created discount row at send time.
+
+**`WinbackPromptArgs` extension.** The interface gains:
+
+```typescript
+discount: { code: string; valuePercent: number } | null;
+```
+
+Caller passes `null` when no discount is being offered. The prompt-builder branches on it:
+
+- `discount === null` → the entire discount-context section is omitted from BOTH the system prompt and the user prompt. The LLM gets NO instruction about discounts at all, eliminating any chance of it inventing one.
+- `discount !== null` → the system prompt includes a V9 instruction block ("Reference the code by writing EXACTLY this placeholder token..."), and the user prompt's discount-context section uses the literal placeholder strings. The `code` and `valuePercent` values themselves are NEVER rendered into either prompt — they flow through to `AiGeneration` storage (Section 4 batch 4.2 schema addition) but the LLM only sees the placeholders.
+
+**What batch 2 prompt-builder does NOT own:**
+
+- Shopify discount creation — Section 4 batch 4.2 (`packages/shopify/src/discounts.ts`, AI Worker creates discount before building prompt).
+- Substitution of real values into `Message.generatedText` — Section 4 batch 4.1 (`packages/ai/src/discount-substitutor.ts`, AI Worker calls after the LLM response and before the Message write).
+- Expiry cleanup cron — Section 4 batch 4.3.
+- `AiGeneration.discountCode` + `AiGeneration.discountValuePercent` + `AiGeneration.shopifyDiscountId` columns — Section 4 batch 4.2 migration.
+
+**Test surface additions in `build-winback-prompt.test.ts`:**
+
+- `discount === null` → neither prompt contains the V9 tokens or "Discount" sections.
+- `discount` provided → both placeholder tokens appear in the user prompt, exactly once.
+- `discount` provided → the real `code` and `valuePercent` values do NOT appear anywhere in either prompt (V9 invariant).
+- `discount` + `emojiPolicy === 'none'` → tokens still emit cleanly with no style-config leakage.
+
 ### F-8 — AI Worker: BullMQ job structure
 
 New queue: `QUEUE_NAMES.ai.generate` (registered in `@winback/contracts/src/queue-names.ts`). Job payload:
@@ -389,62 +420,83 @@ The handler creates both `AiGeneration` AND `Message` rows in the same tx (Q7 lo
 
 Stored in `packages/ai/src/cost-rates.ts`. Operator updates the const when providers change pricing — no DB migration needed. Hardcoded for v1 (Q9 light lock); operator-editable table deferred to M10 if pricing churn outpaces PR cadence.
 
+**Verified against vendor pricing pages 2026-05-21** (see also the file header in `cost-rates.ts` for the exact URLs and the quarterly re-verification cadence).
+
 ```typescript
 // Microcents per 1M tokens (input / output separately).
 // 1 USD = 100_000_000 microcents.  $5 per 1M tokens = 500_000_000 microcents.
-export const PROVIDER_COST_RATES: Record<
-  string,
-  Record<string, { inputPer1M: bigint; outputPer1M: bigint }>
-> = {
+//
+// 8 entries — only the models we would ship to a paying merchant in the
+// next 90 days. Legacy entries are NOT kept as "supported defaults" — they
+// become attractive footguns the moment an operator's typo lands on one.
+// See cost-rates.ts header for the full exclusion register.
+export const PROVIDER_COST_RATES: Record<AiProviderName, Record<string, ModelCostRate>> = {
   openai: {
-    'gpt-4o':            { inputPer1M: 500_000_000n, outputPer1M: 1_500_000_000n }, // $5/$15
-    'gpt-4o-mini':       { inputPer1M:  15_000_000n, outputPer1M:    60_000_000n }, // $0.15/$0.60
+    'gpt-4.1':      { inputPer1M: 500_000_000n, outputPer1M: 1_500_000_000n }, // $5    / $15
+    'gpt-4.1-mini': { inputPer1M:  40_000_000n, outputPer1M:   160_000_000n }, // $0.40 / $1.60
+    'gpt-4.1-nano': { inputPer1M:  10_000_000n, outputPer1M:    40_000_000n }, // $0.10 / $0.40
   },
   anthropic: {
-    'claude-sonnet-4-6': { inputPer1M: 300_000_000n, outputPer1M: 1_500_000_000n }, // $3/$15
-    'claude-haiku-4-5':  { inputPer1M:  80_000_000n, outputPer1M:   400_000_000n }, // $0.80/$4
+    'claude-opus-4-7':   { inputPer1M: 500_000_000n, outputPer1M: 2_500_000_000n }, // $5 / $25
+    'claude-sonnet-4-6': { inputPer1M: 300_000_000n, outputPer1M: 1_500_000_000n }, // $3 / $15
+    'claude-haiku-4-5':  { inputPer1M: 100_000_000n, outputPer1M:   500_000_000n }, // $1 / $5
   },
   deepseek: {
-    'deepseek-chat':     { inputPer1M:  14_000_000n, outputPer1M:   280_000_000n }, // $0.14/$2.80 (cache miss)
+    'deepseek-v4-flash': { inputPer1M:  14_000_000n, outputPer1M:    28_000_000n }, // $0.14 / $0.28
+    'deepseek-v4-pro':   { inputPer1M: 174_000_000n, outputPer1M:   348_000_000n }, // $1.74 / $3.48 (full post-discount)
   },
 };
 
 export function estimateCostMicrocents(
-  provider: string,
+  provider: AiProviderName,
   model: string,
   inputTokens: number,
   outputTokens: number,
 ): bigint {
-  const rates = PROVIDER_COST_RATES[provider]?.[model];
-  if (rates === undefined) {
-    throw new Error(`Unknown provider/model: ${provider}/${model}`);
-  }
-  return (
-    (BigInt(inputTokens) * rates.inputPer1M) / 1_000_000n
-    + (BigInt(outputTokens) * rates.outputPer1M) / 1_000_000n
-  );
+  // ... see cost-rates.ts for the implementation. BigInt arithmetic throughout.
 }
 ```
 
 All BigInt arithmetic — no float anywhere near money.
 
+**Excluded by design** (see `cost-rates.ts` header for the full list):
+- `gpt-4o` / `gpt-4o-mini` — grandfathered legacy as of 2026-Q1, replaced by the gpt-4.1 family. Drop entirely rather than mislead operators with a stale entry.
+- `deepseek-chat` — deprecating alias. DeepSeek's docs warn the name is going away. `getAiConfig` rejects it at boot with a friendly message pointing to `deepseek-v4-flash`.
+- GPT-5 family — overkill for short winback prompts.
+- Cache-hit DeepSeek pricing — winback prompts are first-touch per-customer; no cache hits to exploit.
+- DeepSeek v4-pro's temporary 75%-off promo (expires 2026-05-31) — the table carries the FULL post-discount price so the constant doesn't silently triple when the promo expires.
+
+**Original draft had two errors** that were corrected during F batch 2 verification:
+- `claude-haiku-4-5` was listed at $0.80/$4. Actual is **$1/$5** (per Anthropic's current docs). The under-stated price would have caused spend-ceiling math to under-count by 25%.
+- `deepseek-chat` was listed at $0.14/$**2.80** output. Actual is $0.14/$**0.28** output (10× error in the draft). Same direction-of-bug as Haiku — would have over-counted output cost by an order of magnitude, prematurely tripping the spend ceiling.
+
+Lesson for the next iteration: every provider rate added to this table MUST be backed by a corresponding anchored-value unit test in `cost-rates.test.ts` so a quiet refactor that changes `100_000_000n` to `100_000n` (off by 1000×) fails CI rather than ships silently.
+
 ### F-11 — Env vars
 
-New env vars (added to `packages/config`):
+New env vars (added to **`packages/ai/src/config.ts`** — NOT `packages/config`; the cross-cutting core/Redis config lives there, but provider selection + per-provider API keys are an `@winback/ai` concern. The earlier "added to packages/config" phrasing in this section was stale and was corrected in F batch 2. Pattern mirrors `packages/shopify/src/config.ts`):
 
 ```
-AI_PROVIDER=deepseek              # active provider; 'deepseek' | 'openai' | 'anthropic'
-AI_MODEL=deepseek-chat            # active model for the active provider
-OPENAI_API_KEY=sk-...             # required if AI_PROVIDER=openai
-ANTHROPIC_API_KEY=sk-ant-...      # required if AI_PROVIDER=anthropic
-DEEPSEEK_API_KEY=sk-...           # required if AI_PROVIDER=deepseek
-AI_MAX_TOKENS=300                 # max output tokens per generation (default 300)
-AI_TEMPERATURE=0.7                # generation temperature (default 0.7)
+# Lock V7 (POST-EPIC-F-CONSCIOUS-DECISION.md) — launch defaults:
+AI_PROVIDER=deepseek              # 'deepseek' | 'openai' | 'anthropic'
+AI_MODEL=deepseek-v4-flash        # per-provider whitelist (see config.ts)
+AI_MAX_TOKENS=300                 # max output tokens (1..4096, default 300)
+AI_TEMPERATURE=0.7                # sampling temperature (0..2, default 0.7)
+OPENAI_API_KEY=sk-...             # required iff AI_PROVIDER=openai
+ANTHROPIC_API_KEY=sk-ant-...      # required iff AI_PROVIDER=anthropic
+DEEPSEEK_API_KEY=sk-...           # required iff AI_PROVIDER=deepseek
 ```
 
-**Boot validation** (same pattern as `ENCRYPTION_KEY`): if `AI_PROVIDER` is set but the corresponding API key is missing or empty, throw `ConfigError` at startup. The AI Worker process won't start with a misconfigured provider. Validation happens in `getAiConfig()` — called at boot in `apps/drainer/src/index.ts` (alongside `getShopifyConfig()`).
+**Allowed `AI_MODEL` per provider** (Zod `discriminatedUnion` enforces this at boot — see `config.ts`):
+- `openai` → `gpt-4.1`, `gpt-4.1-mini`, `gpt-4.1-nano`
+- `anthropic` → `claude-opus-4-7`, `claude-sonnet-4-6`, `claude-haiku-4-5`
+- `deepseek` → `deepseek-v4-flash`, `deepseek-v4-pro`
 
-**CI:** `AI_PROVIDER=deepseek` set in `ci.yml` but every LLM call is mocked in unit + integration tests — no real API calls in CI. A dedicated end-to-end LLM test (gated behind `RUN_LLM_E2E=true` env var) runs locally when validating provider switching.
+**Deprecated values** rejected at boot with operator-friendly messages (see `DEPRECATED_MODELS` in `cost-rates.ts`): `deepseek-chat`, `gpt-4o`, `gpt-4o-mini`.
+
+**Boot validation** (same pattern as `ENCRYPTION_KEY`): only the ACTIVE provider's API key is required at boot. `AI_PROVIDER=deepseek` with no `OPENAI_API_KEY` set boots cleanly (per L6 — lazy provider construction means an unused provider's key is irrelevant). `getAiConfig()` throws `ConfigError` synchronously on misconfiguration; the AI Worker process won't start with a misconfigured active provider. Called at boot in `apps/drainer/src/index.ts` (alongside `getShopifyConfig()`) when batch 4 wires the AI Worker.
+
+**CI:** `AI_PROVIDER=deepseek` + `AI_MODEL=deepseek-v4-flash` + a placeholder `DEEPSEEK_API_KEY` set in `ci.yml` solely for boot validation — no real LLM calls in CI; every provider is mocked in unit + integration tests. A dedicated end-to-end LLM test (gated behind `RUN_LLM_E2E=true` env var) runs locally when validating provider switching.
 
 ### F-12 — GDPR implications
 

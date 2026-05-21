@@ -294,15 +294,18 @@ model MerchantSettings {
   monthlySendsCap        Int    @default(1000)
 
   // Structured tone configuration merged into AI prompts (Epic F).
-  // Shape (locked here for B1; exact zod schema owned by F2 in
-  // @winback/contracts):
+  // Shape (matches the enforced `aiToneSchema` Zod in
+  // `@winback/contracts/src/ai-tone.ts` — see that file for the source of
+  // truth). Comment kept in sync with the Zod schema; divergence between
+  // the two is a bug (escalated and resolved 2026-05-21 in Epic F batch 2).
+  //
   //   {
-  //     "style":             "formal" | "casual" | "playful" | "professional",
-  //     "avoid":             string[],   // banned words / phrases
-  //     "emphasize":         string[],   // brand values to lean into
-  //     "emojiPolicy":       "none" | "minimal" | "liberal",
-  //     "brandVoiceSample":  string,     // optional 100-word sample
-  //     "customInstructions": string     // free-form additional rules
+  //     "style":             "formal" | "casual" | "playful" | "professional",  // required
+  //     "avoid":             string[],                                          // required (defaults to []), each item 1–100 chars, max 50 items
+  //     "emphasize":         string[],                                          // required (defaults to []), each item 1–100 chars, max 50 items
+  //     "emojiPolicy":       "none" | "minimal" | "liberal",                    // required (defaults to "minimal")
+  //     "brandVoiceSample":  string                                             // OPTIONAL — max 2000 chars
+  //     "customInstructions": string                                            // OPTIONAL — max 2000 chars
   //   }
   //
   // Enforcement (two-layer; see also T5 in header):
@@ -310,7 +313,9 @@ model MerchantSettings {
   //   · Repository chokepoint: MerchantSettingsRepository.update() in
   //     @winback/db accepts a typed `AiTone` parameter, NOT raw Json. The
   //     typed parameter is parsed/validated by @winback/contracts' zod
-  //     schema. There is no untyped write path.
+  //     schema. Reads use `parseAiTone(unknown): AiTone | null` from
+  //     `@winback/contracts` — null when the column is null, throws ZodError
+  //     on malformed JSON. There is no untyped write path.
   aiTone Json?
 
   createdAt DateTime @default(now())
