@@ -8,7 +8,11 @@
 
 ## Currently in production
 
-Three scopes, sourced from `SHOPIFY_SCOPES` in:
+> **Status reference at audit approval (2026-05-21):** the three-scope baseline below was what the codebase + Partners portal carried when this audit was approved. After the pre-launch expansion commit, the `.env.example` template and `.github/workflows/ci.yml` env block carry the 8-scope union (see Migration strategy section below for live status). The deployed app's Partners-portal config remains a manual operator step until completed.
+>
+> **For current live status (post-this-doc-approval), see the Migration strategy section's ✅/⚠️ checklist — that is the authoritative source.**
+
+Audit-time baseline — three scopes, sourced from `SHOPIFY_SCOPES` in:
 
 - `apps/web/.env` (dev template — handoff `New Session Bootstrap Prompt`)
 - `.github/workflows/ci.yml:46` (CI run-time)
@@ -116,11 +120,13 @@ Two scopes considered + rejected:
 
 This is the only path that avoids the re-auth gauntlet.  Concrete tasks:
 
-1. Update `SHOPIFY_SCOPES` env in production deploy config.  Five new scopes appended to the comma-list.
-2. Update Partners-portal app config to match (Shopify's manual sync requirement).
-3. Update `apps/web/.env` template + handoff docs to reflect the full union.
-4. Update `.github/workflows/ci.yml` env block.
-5. Update CLAUDE.md project instructions if they reference the scope set.
+1. ⚠️ **OUTSTANDING — manual step required before first merchant install.** Update `SHOPIFY_SCOPES` env in production deploy config (Vercel / Fly / wherever the deployed app reads its env from). The `.env.example` template change in this commit does NOT propagate to production — deploy configs are managed independently.
+2. ⚠️ **OUTSTANDING — manual step required before first merchant install.** Update Partners-portal app config to match the 8-scope union (Shopify's manual sync requirement). Without this, the OAuth install flow requests the 8-scope union but Shopify rejects scopes the app config doesn't declare.
+3. ✅ `.env.example` template updated. `handoff.md` is gitignored; user maintains locally.
+4. ✅ `.github/workflows/ci.yml` env block updated.
+5. ✅ No CLAUDE.md tracked references to the scope set; nothing to update.
+
+**The two ⚠️ OUTSTANDING tasks are blockers for the first paying-merchant install.** They cannot ship from this repo — they require operator action in Vercel/Fly (item 1) and the Shopify Partner Dashboard (item 2). Audit-trail this commit's SHA wherever you log those steps when they complete.
 
 **Post-launch staged (rejected):** ship narrow now, expand per-epic.  Each expansion forces every existing merchant to re-OAuth.  Terrible UX, real merchant attrition risk.
 

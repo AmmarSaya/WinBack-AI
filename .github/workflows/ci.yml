@@ -44,7 +44,7 @@ jobs:
       SHOPIFY_API_KEY: ci-test-api-key
       SHOPIFY_API_SECRET: ci-test-api-secret
       SHOPIFY_APP_URL: https://ci.test.invalid
-      SHOPIFY_SCOPES: read_customers,read_orders,write_discounts
+      SHOPIFY_SCOPES: read_customers,read_orders,read_products,read_inventory,read_price_rules,write_discounts,write_marketing_events,read_marketing_events
       SHOPIFY_API_VERSION: 2026-04
       # 32-byte base64 placeholder — NOT a real secret; no production data
       # is encrypted in CI.  Real key lives in deployed env only.
