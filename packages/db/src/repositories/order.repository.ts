@@ -229,7 +229,17 @@ export class OrderRepository {
         };
 
         await tx.orderLineItem.upsert({
-          where: { orderId_shopifyLineItemId: { orderId, shopifyLineItemId } },
+          // S-4: merchantId-prefixed composite key.  `lineItemShared`
+          // already carries merchantId (built at line ~218).  The Prisma
+          // extension can now validate the lookup against the active
+          // tenant scope before the row reads.
+          where: {
+            merchantId_orderId_shopifyLineItemId: {
+              merchantId,
+              orderId,
+              shopifyLineItemId,
+            },
+          },
           create: {
             orderId,
             shopifyLineItemId,

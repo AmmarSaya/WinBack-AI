@@ -290,6 +290,44 @@ describe('OrderRepository.upsertFromWebhook', () => {
     expect(liCall.create.productVariantId).toBeNull();
   });
 
+  it('orderLineItem.upsert keyed on (merchantId, orderId, shopifyLineItemId) — S-4 tenant-safety lock', async () => {
+    tx.order.findUnique.mockResolvedValue(null);
+    await repo.upsertFromWebhook({
+      merchantId: MERCHANT_ID,
+      body: makeBody({
+        customer: { id: 12345 },
+        line_items: [
+          {
+            id: 999,
+            product_id: 501,
+            variant_id: 601,
+            title: 'Regression-lock widget',
+            quantity: 1,
+            price: '10.00',
+            price_set: {
+              shop_money: { amount: '10.00', currency_code: 'USD' },
+              presentment_money: { amount: '10.00', currency_code: 'USD' },
+            },
+          },
+        ],
+      }),
+      tx: tx as unknown as Prisma.TransactionClient,
+    });
+
+    // S-4: the where MUST carry merchantId so the Prisma extension's
+    // findUnique-skip path can't be exploited by a future caller writing
+    // outside the active tenant scope.  Locked here so a refactor that
+    // drops merchantId from the composite-key accessor fails loud.
+    const liCall = tx.orderLineItem.upsert.mock.calls[0][0];
+    expect(liCall.where).toEqual({
+      merchantId_orderId_shopifyLineItemId: {
+        merchantId: MERCHANT_ID,
+        orderId: expect.any(String),
+        shopifyLineItemId: 'gid://shopify/LineItem/999',
+      },
+    });
+  });
+
   // -------- enum + money validation --------
 
   it('invalid financial_status enum → throws ValidationError (gates CP-2 attribution)', async () => {
