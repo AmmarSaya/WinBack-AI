@@ -129,16 +129,31 @@ describe('M3-Smoke', () => {
     });
 
     // EXPLAIN the exact query shape that CustomerRepository.findByEmail
-    // issues. Verify the partial-functional index is chosen.
-    const plan = await withSystemScope('test.assert_plan', () =>
-      prisma.$queryRaw<{ 'QUERY PLAN': string }[]>`
-        EXPLAIN SELECT *
-        FROM "Customer"
-        WHERE "merchantId" = ${merchantId}
-          AND lower(email) = lower(${'test.user@example.com'})
-          AND "deletedAt" IS NULL
-        LIMIT 1
-      `,
+    // issues.  Verify the partial-functional index is chosen.
+    //
+    // SET LOCAL enable_seqscan = OFF forces the planner to consider the
+    // T1 index even when the Customer table has very few rows (typical
+    // in test isolation — beforeEach resets and this test inserts one
+    // row).  Without this, Postgres correctly picks Seq Scan on cost
+    // grounds, missing the actual unit-under-test.  SET LOCAL is scoped
+    // to the tx, so other tests in the same suite are unaffected.
+    //
+    // Wrapping SET LOCAL + EXPLAIN in `$transaction([...])` runs both
+    // statements on the same connection; a plain `$queryRaw` opens its
+    // own implicit tx so the SET LOCAL wouldn't carry over.  The
+    // destructuring `[, plan]` skips the executeRaw row-count result.
+    const [, plan] = await withSystemScope('test.assert_plan', async () =>
+      prisma.$transaction([
+        prisma.$executeRawUnsafe('SET LOCAL enable_seqscan = OFF'),
+        prisma.$queryRaw<{ 'QUERY PLAN': string }[]>`
+          EXPLAIN SELECT *
+          FROM "Customer"
+          WHERE "merchantId" = ${merchantId}
+            AND lower(email) = lower(${'test.user@example.com'})
+            AND "deletedAt" IS NULL
+          LIMIT 1
+        `,
+      ]),
     );
     const planText = plan.map((row) => row['QUERY PLAN']).join('\n');
     expect(planText).toMatch(/customer_merchant_email_lower/i);
