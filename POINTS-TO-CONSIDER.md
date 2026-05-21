@@ -54,6 +54,12 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 - **Fix:** Change to `@@unique([merchantId, orderId, shopifyLineItemId])` in a future migration.
 - **Action:** M10 hardening. Risk does not increase with Epic E.
 
+### S-5 [LOW] — `web.index_lookup` system-scope reason reused across multiple loaders
+- **Source:** Epic E UI session audit (2026-05-21).
+- **Issue:** The `/customers` and `/settings` loaders both reuse `SYSTEM_SCOPE_REASONS.web.index_lookup` for their pre-tenant Merchant.findUnique. Operations are functionally identical (look up Merchant by `shop`), so the reuse is correct, but a log line tagged `web.index_lookup` no longer disambiguates which route triggered the lookup — muddies the audit trail.
+- **Fix:** Either register a generic `web.shop_lookup` reason that all three loaders use, OR register per-route reasons (`web.customers_lookup`, `web.settings_lookup`). Either is one-line addition in `@winback/contracts/src/system-scope-reasons.ts`.
+- **Action:** M10 hardening. Auditability concern, not correctness — no runtime error path.
+
 ### C-5 [LOW] — `OutboxRepository` mark-* methods have no scope assertion
 - **Source:** PRE-EPIC-E-AUDIT.md, Pass 2.
 - **Issue:** `markProcessed`, `markFailed`, `markDeadLettered`, `markDeferredFailed` rely on caller being in system scope. No guard at method level. Latent footgun if a future caller invokes from tenant scope.
