@@ -58,6 +58,28 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 
 ## 🟡 Fix Before M10 (Hardening Pass)
 
+### P-1 [LOW] — Prisma `@updatedAt` columns lack DB-level DEFAULT
+
+- **Source:** Epic F batch 1 anomaly (c), surfaced during batch 2 audit.
+- **Issue:** Prisma generates `NOT NULL` columns without a DB-level `DEFAULT CURRENT_TIMESTAMP` for `@updatedAt` fields. Inserts via the Prisma client work (the client sets the value on every write); raw SQL `INSERT` statements that omit the column fail with a NOT NULL violation. Doesn't bite production code today (every write path goes through Prisma), but it's a footgun for any future raw-SQL fixture, manual operator hotfix, or migration that backfills via `INSERT ... SELECT`.
+- **Affected columns** (audited 2026-05-21 against `schema.prisma` HEAD):
+    - `Merchant.updatedAt`
+    - `MerchantSettings.updatedAt`
+    - `BillingSubscription.updatedAt`
+    - `Session.updatedAt`
+    - `Customer.updatedAt`
+    - `CustomerScore.updatedAt`
+    - `Product.updatedAt`
+    - `ProductVariant.updatedAt`
+    - `Order.updatedAt`
+    - `OrderLineItem.updatedAt`
+    - `BackfillJob.updatedAt`
+    - `Message.updatedAt` (Epic F batch 1)
+    - `AiSpendBucket.updatedAt` (Epic F batch 1)
+- **`@default(now())` createdAt columns** — verified safe; Prisma DOES emit `DEFAULT CURRENT_TIMESTAMP` for those. Only `@updatedAt` is affected.
+- **Fix:** single migration adding `DEFAULT CURRENT_TIMESTAMP` to each `@updatedAt` column in one transaction. Idempotent — re-running is a no-op (`ALTER COLUMN ... SET DEFAULT` is idempotent). Verify no integration-test path relies on Prisma's setting behaviour in a way the SQL default would break.
+- **Action:** M10 hardening. Bundle with the S-5 / C-5 / M-1 scope-assertion cleanup pass.
+
 ### S-5 [LOW] — `web.index_lookup` system-scope reason reused across multiple loaders
 - **Source:** Epic E UI session audit (2026-05-21).
 - **Issue:** The `/customers` and `/settings` loaders both reuse `SYSTEM_SCOPE_REASONS.web.index_lookup` for their pre-tenant Merchant.findUnique. Operations are functionally identical (look up Merchant by `shop`), so the reuse is correct, but a log line tagged `web.index_lookup` no longer disambiguates which route triggered the lookup — muddies the audit trail.

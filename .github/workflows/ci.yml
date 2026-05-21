@@ -49,6 +49,13 @@ jobs:
       # 32-byte base64 placeholder — NOT a real secret; no production data
       # is encrypted in CI.  Real key lives in deployed env only.
       ENCRYPTION_KEY: dGVzdGtleTAxMjM0NTY3ODlhYmNkZWZnaGlqa2xtbm9wcXJzdHU=
+      # AI provider config — placeholder values for boot validation.
+      # No real LLM calls in CI; all providers mocked in unit + integration tests.
+      AI_PROVIDER: deepseek
+      AI_MODEL: deepseek-v4-flash
+      AI_MAX_TOKENS: 300
+      AI_TEMPERATURE: 0.7
+      DEEPSEEK_API_KEY: ci-test-deepseek-key-not-real
 
     steps:
       - uses: actions/checkout@v4

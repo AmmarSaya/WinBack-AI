@@ -2,6 +2,7 @@ export {
   AI_TONE_STYLES,
   AI_TONE_EMOJI_POLICIES,
   aiToneSchema,
+  parseAiTone,
   type AiTone,
   type AiToneInput,
 } from './ai-tone.js';
