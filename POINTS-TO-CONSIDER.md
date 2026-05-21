@@ -38,6 +38,10 @@
 - **Resolved:** `pnpm drainer:test` harness shipped in `756c489` (PR `feat/drainer-integration-harness`). 8 integration tests covering producer-shape happy paths (the C-1 regression lock channel — payloads match what `webhook-ingest.server.ts:142-154` writes, so any future producer drift fails loudly), MARK_BEFORE_INVOKE policy with real `processShopRedact` cascade + Phase 2 deferred-failure marker semantics, and DLQ logic (non-retryable immediate DLQ, retryable below ceiling → markFailed, retryable AT ceiling → DLQ — the `row.attempts + 1 >= MAX` off-by-one lock). Shared test helpers extracted to `@winback/db/test-utils` (third-caller trigger from session-1 `setup.ts`); `apps/web` and `packages/db` callers updated to thin re-export shims with no behavioral change.
 - **Tests:** +8 drainer integration. Workspace totals: 434/434 unit + 27/27 web + 13/13 db + 8/8 drainer + 4/4 queue = **486 across all suites**.
 
+### S-4 [MEDIUM] — `OrderLineItem` unique constraint missing `merchantId`
+- **Resolved:** Migration `20260521120000_orderlineitem_tenant_unique` swaps `@@unique([orderId, shopifyLineItemId])` for `@@unique([merchantId, orderId, shopifyLineItemId])`. DROP + CREATE in one tx (atomic; no window without a unique guard). Repository's `tx.orderLineItem.upsert` `where` accessor updated to `merchantId_orderId_shopifyLineItemId`. Behaviorally identical for uniqueness (orderId → merchantId is 1:1 via FK); structurally consistent with the rest of the schema's tenant-scoped composite uniques.
+- **Tests:** +1 unit regression test locking the new `where` shape via `toEqual` (catches both key-rename and field-drop regressions). db unit 279 → 280. db int 12/13 (T1 planner flake unrelated). web int 31/31. drainer int 28/28.
+
 ---
 
 ## 🔴 Must Fix Before Epic E
@@ -47,12 +51,6 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 ---
 
 ## 🟡 Fix Before M10 (Hardening Pass)
-
-### S-4 [MEDIUM] — `OrderLineItem` unique constraint missing `merchantId`
-- **Source:** PRE-EPIC-E-AUDIT.md, Pass 1.
-- **Issue:** Every other tenant-scoped model uses `@@unique([merchantId, shopifyXxxId])`. `OrderLineItem` uses `@@unique([orderId, shopifyLineItemId])`. Extension's findUnique skip is unsafe for this model.
-- **Fix:** Change to `@@unique([merchantId, orderId, shopifyLineItemId])` in a future migration.
-- **Action:** M10 hardening. Risk does not increase with Epic E.
 
 ### S-5 [LOW] — `web.index_lookup` system-scope reason reused across multiple loaders
 - **Source:** Epic E UI session audit (2026-05-21).

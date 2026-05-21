@@ -200,16 +200,16 @@ model Merchant {
   shop          String  @unique // "foo.myshopify.com"
   shopifyShopId String? @unique
 
-  email   String?
-  name    String?
-  country String? @db.Char(2)
+  email       String?
+  name        String?
+  country     String? @db.Char(2)
   // Store's default currency. NOT used to denormalize aggregate totals —
   // multi-currency stores carry presentment fields on Order; per-currency
   // rollups live in Epic H.
-  currency String? @db.Char(3)
+  currency    String? @db.Char(3)
   // IANA tz (e.g. "America/Los_Angeles"). Used for all merchant-local
   // window computations (dormancy, send-time scheduling).
-  timezone String?
+  timezone    String?
   // Documented values: "basic" | "shopify" | "advanced" | "plus" |
   // "partner_test" | "affiliate". Kept String, not enum, because Shopify
   // adds tiers without notice. Repository wraps with a typed accessor.
@@ -315,11 +315,11 @@ enum BillingSubscriptionStatus {
 }
 
 enum BillingHoldReason {
-  shop_on_hold   // Shopify reported the shop itself is on hold
+  shop_on_hold // Shopify reported the shop itself is on hold
   payment_failed // Recurring charge attempt failed
-  plan_change    // Mid-transition between plans
-  manual_pause   // Operator intervention
-  fraud_review   // Internal review
+  plan_change // Mid-transition between plans
+  manual_pause // Operator intervention
+  fraud_review // Internal review
 }
 
 model BillingSubscription {
@@ -438,7 +438,7 @@ model Customer {
   // a customers/redact GDPR webhook fires. Repository auto-filters.
   deletedAt DateTime?
 
-  orders Order[]
+  orders        Order[]
   // 1:1 with the per-customer RFM score row written by Epic E session 2's
   // scoring service. Nullable on the relation side because lurkers without
   // a recompute pass yet have no row; once `customerScoreService.recompute`
@@ -494,8 +494,8 @@ model CustomerScore {
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   // RFM raw values (always populated)
-  rDays    Int    // Days since last paid order; account-age fallback for lurkers (§S-6).
-  fCount   Int    // Paid, non-test orders in trailing 365d.
+  rDays    Int // Days since last paid order; account-age fallback for lurkers (§S-6).
+  fCount   Int // Paid, non-test orders in trailing 365d.
   mCents   BigInt // SUM(Order.totalAmountCents) in trailing 365d. Shop currency.
   currency String @db.Char(3) // Snapshot of Merchant.shopCurrency at computedAt (§S-11).
 
@@ -670,7 +670,7 @@ model Order {
 }
 
 model OrderLineItem {
-  id String @id @default(cuid())
+  id         String   @id @default(cuid())
   // Proper FK to Merchant. Postgres handles the transitive cascade path
   // (Merchant → Order → OrderLineItem AND Merchant → OrderLineItem) just
   // fine — the row is deleted exactly once. The point is DB-ENFORCED tenant
@@ -696,7 +696,12 @@ model OrderLineItem {
 
   createdAt DateTime @default(now())
 
-  @@unique([orderId, shopifyLineItemId])
+  // S-4: merchantId-prefixed so the Prisma extension's findUnique-skip
+  // path can't be exploited by a caller outside the active tenant scope.
+  // Behaviorally identical for uniqueness (orderId→merchantId is 1:1 via
+  // FK); structurally consistent with the rest of the schema's tenant-
+  // scoped composite uniques.  See POINTS-TO-CONSIDER S-4 entry.
+  @@unique([merchantId, orderId, shopifyLineItemId])
   @@index([merchantId, productId])
   @@index([productVariantId])
 }
@@ -735,9 +740,9 @@ model WebhookLog {
   errorCode    String?
   errorMessage String?
 
-  payload     Json?   // stored inline when small
+  payload     Json? // stored inline when small
   payloadUrl  String? // object storage reference when offloaded
-  payloadSize Int?    // original size in bytes
+  payloadSize Int? // original size in bytes
 
   receivedAt  DateTime  @default(now())
   processedAt DateTime?
