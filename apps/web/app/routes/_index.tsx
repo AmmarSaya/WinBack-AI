@@ -44,7 +44,12 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const host = url.searchParams.get('host') ?? '';
 
     if (shop === null || !isValidShopDomain(shop)) {
-      return new Response('Missing shop', { status: 400 });
+      // `throw` (not `return`) so Remix routes this through the error
+      // boundary instead of attempting to render the default component
+      // with `undefined` loader data. The component's `data.stateBandCounts`
+      // access would throw a less-helpful TypeError under SSR. Hit in
+      // production by Render's `HEAD /` health probe (no query params).
+      throw new Response('Missing shop', { status: 400 });
     }
 
     const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.web.index_lookup, async () => {
@@ -143,7 +148,7 @@ export default function Index() {
                       {BAND_COPY[band].heading}
                     </Text>
                     <Text as="p" variant="heading2xl">
-                      {data.stateBandCounts[band].toLocaleString()}
+                      {(data.stateBandCounts?.[band] ?? 0).toLocaleString()}
                     </Text>
                     <Text as="p" variant="bodyMd" tone="subdued">
                       {BAND_COPY[band].description}
