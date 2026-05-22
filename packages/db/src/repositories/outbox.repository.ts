@@ -100,6 +100,10 @@ export class OutboxRepository {
   }
 
   async markProcessed(tx: Prisma.TransactionClient, id: string): Promise<void> {
+    const scope = getTenantScope();
+    if (scope?.kind !== 'system') {
+      throw new Error('OutboxRepository.markProcessed requires system scope');
+    }
     await tx.outboxEvent.update({
       where: { id },
       data: { processedAt: new Date() },
@@ -111,6 +115,10 @@ export class OutboxRepository {
     id: string,
     error: string,
   ): Promise<void> {
+    const scope = getTenantScope();
+    if (scope?.kind !== 'system') {
+      throw new Error('OutboxRepository.markFailed requires system scope');
+    }
     await tx.outboxEvent.update({
       where: { id },
       data: { attempts: { increment: 1 }, lastError: error.slice(0, 1000) },
@@ -152,6 +160,10 @@ export class OutboxRepository {
     id: string,
     error: string,
   ): Promise<{ wasAlreadyDeadLettered: boolean }> {
+    const scope = getTenantScope();
+    if (scope?.kind !== 'system') {
+      throw new Error('OutboxRepository.markDeadLettered requires system scope');
+    }
     const result = await tx.outboxEvent.updateMany({
       where: { id, deadLetteredAt: null },
       data: {
@@ -183,6 +195,10 @@ export class OutboxRepository {
     id: string,
     error: string,
   ): Promise<void> {
+    const scope = getTenantScope();
+    if (scope?.kind !== 'system') {
+      throw new Error('OutboxRepository.markDeferredFailed requires system scope');
+    }
     await tx.outboxEvent.update({
       where: { id },
       data: {
@@ -224,6 +240,10 @@ export class OutboxRepository {
     tx: Prisma.TransactionClient,
     id: string,
   ): Promise<{ wasDeadLettered: boolean }> {
+    const scope = getTenantScope();
+    if (scope?.kind !== 'system') {
+      throw new Error('OutboxRepository.requeueDeadLettered requires system scope');
+    }
     const result = await tx.outboxEvent.updateMany({
       where: { id, deadLetteredAt: { not: null } },
       data: {

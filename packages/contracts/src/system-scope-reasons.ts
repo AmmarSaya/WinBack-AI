@@ -127,6 +127,19 @@ export const SYSTEM_SCOPE_REASONS = {
      * exercised that route, which is how the bug shipped to master.
      */
     index_lookup: 'web.index_lookup',
+    /**
+     * Pre-tenant Merchant.findUnique inside the `/customers` route loader.
+     * Per-route reason (was `web.index_lookup` reused — S-5 in
+     * POINTS-TO-CONSIDER) so log lines surfacing the scope can
+     * disambiguate which loader opened the scope.
+     */
+    customers_lookup: 'web.customers_lookup',
+    /**
+     * Pre-tenant Merchant.findUnique inside the `/settings` route loader.
+     * Per-route reason — see `customers_lookup` for the disambiguation
+     * rationale.
+     */
+    settings_lookup: 'web.settings_lookup',
   },
 } as const;
 

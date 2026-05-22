@@ -1,8 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { ALL_SYSTEM_SCOPE_REASONS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
+import { describe, expect, it, vi } from 'vitest';
 
 import { TenantScopeError } from '../src/errors.js';
 import { applyReadHooks, applyWriteHooks } from '../src/extensions/hooks.js';
+import { OutboxRepository } from '../src/repositories/outbox.repository.js';
 import { withSystemScope, withTenantScope } from '../src/tenant-scope.js';
+import type { WinbackPrisma } from '../src/client.js';
 
 describe('tenant scope — reads', () => {
   it('throws when no scope is active', () => {
@@ -235,5 +238,128 @@ describe('AuditLog write enforcement (TENANT_OPTIONAL_READ_MODELS)', () => {
       expect(b.data).toEqual({ merchantId: null, action: 'x.y' });
       expect(c.data).toEqual({ merchantId: 'm_42', action: 'x.y' });
     });
+  });
+});
+
+// ===========================================================================
+// C-5 regression locks — OutboxRepository.mark-* + requeueDeadLettered
+// require system scope. POINTS-TO-CONSIDER C-5. The pre-fix methods would
+// pass under tenant scope (the extension's tenant injection allowed the
+// update to apply, just on the wrong row-set if a tenant could be tricked
+// into the call path). Guard now blocks the bad pattern at the repo layer
+// before the query fires.
+// ===========================================================================
+
+function makeOutboxRepo(): OutboxRepository {
+  // Stub Prisma — guard fires BEFORE the tx.outboxEvent call, so the mock
+  // never needs to handle real Prisma calls.
+  const prisma = {} as unknown as WinbackPrisma;
+  return new OutboxRepository(prisma);
+}
+
+function makeOutboxTx(): never {
+  // Same — guard short-circuits, tx is never used.
+  return { outboxEvent: { update: vi.fn(), updateMany: vi.fn() } } as never;
+}
+
+describe('OutboxRepository — system-scope guards (C-5 regression locks)', () => {
+  it('markProcessed throws when called from tenant scope', async () => {
+    const repo = makeOutboxRepo();
+    await expect(
+      withTenantScope('m_1', async () => {
+        await repo.markProcessed(makeOutboxTx(), 'e_1');
+      }),
+    ).rejects.toThrow(/OutboxRepository\.markProcessed requires system scope/);
+  });
+
+  it('markFailed throws when called from tenant scope', async () => {
+    const repo = makeOutboxRepo();
+    await expect(
+      withTenantScope('m_1', async () => {
+        await repo.markFailed(makeOutboxTx(), 'e_1', 'err');
+      }),
+    ).rejects.toThrow(/OutboxRepository\.markFailed requires system scope/);
+  });
+
+  it('markDeadLettered throws when called from tenant scope', async () => {
+    const repo = makeOutboxRepo();
+    await expect(
+      withTenantScope('m_1', async () => {
+        await repo.markDeadLettered(makeOutboxTx(), 'e_1', 'err');
+      }),
+    ).rejects.toThrow(/OutboxRepository\.markDeadLettered requires system scope/);
+  });
+
+  it('markDeferredFailed throws when called from tenant scope', async () => {
+    const repo = makeOutboxRepo();
+    await expect(
+      withTenantScope('m_1', async () => {
+        await repo.markDeferredFailed(makeOutboxTx(), 'e_1', 'err');
+      }),
+    ).rejects.toThrow(/OutboxRepository\.markDeferredFailed requires system scope/);
+  });
+
+  it('requeueDeadLettered throws when called from tenant scope', async () => {
+    const repo = makeOutboxRepo();
+    await expect(
+      withTenantScope('m_1', async () => {
+        await repo.requeueDeadLettered(makeOutboxTx(), 'e_1');
+      }),
+    ).rejects.toThrow(/OutboxRepository\.requeueDeadLettered requires system scope/);
+  });
+
+  it('all five methods throw when called with no scope at all', async () => {
+    const repo = makeOutboxRepo();
+    const tx = makeOutboxTx();
+    await expect(repo.markProcessed(tx, 'e_1')).rejects.toThrow(/system scope/);
+    await expect(repo.markFailed(tx, 'e_1', 'err')).rejects.toThrow(/system scope/);
+    await expect(repo.markDeadLettered(tx, 'e_1', 'err')).rejects.toThrow(/system scope/);
+    await expect(repo.markDeferredFailed(tx, 'e_1', 'err')).rejects.toThrow(/system scope/);
+    await expect(repo.requeueDeadLettered(tx, 'e_1')).rejects.toThrow(/system scope/);
+  });
+});
+
+// ===========================================================================
+// S-5 regression lock — per-route SYSTEM_SCOPE_REASONS.web entries exist
+// in the registry. Previously `/customers` and `/settings` loaders reused
+// `web.index_lookup`, muddying log-line disambiguation. Per-route reasons
+// land in this commit; this test pins them so a future refactor that
+// removes them fails CI.
+// ===========================================================================
+
+describe('SYSTEM_SCOPE_REASONS.web — per-route entries (S-5 regression lock)', () => {
+  it('exposes web.customers_lookup', () => {
+    expect(SYSTEM_SCOPE_REASONS.web.customers_lookup).toBe('web.customers_lookup');
+  });
+
+  it('exposes web.settings_lookup', () => {
+    expect(SYSTEM_SCOPE_REASONS.web.settings_lookup).toBe('web.settings_lookup');
+  });
+
+  it('preserves the original web.index_lookup entry', () => {
+    // The /_index loader still uses this reason. Removing it would
+    // break the index route — pin it so a future "cleanup" doesn't.
+    expect(SYSTEM_SCOPE_REASONS.web.index_lookup).toBe('web.index_lookup');
+  });
+
+  it('both new reasons are members of ALL_SYSTEM_SCOPE_REASONS', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.has('web.customers_lookup')).toBe(true);
+    expect(ALL_SYSTEM_SCOPE_REASONS.has('web.settings_lookup')).toBe(true);
+  });
+
+  it('both new reasons pass the withSystemScope runtime regex (smoke check)', async () => {
+    // If a registered reason failed the SYSTEM_REASON_PATTERN, the regex
+    // would reject it at runtime — same class of bug that hit
+    // `web.index.lookup` (two dots) in step-2.
+    await expect(
+      withSystemScope(SYSTEM_SCOPE_REASONS.web.customers_lookup, async () => {
+        return undefined;
+      }),
+    ).resolves.toBeUndefined();
+    await expect(
+      withSystemScope(SYSTEM_SCOPE_REASONS.web.settings_lookup, async () => {
+        return undefined;
+      }),
+    ).resolves.toBeUndefined();
   });
 });

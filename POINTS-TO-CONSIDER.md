@@ -48,6 +48,20 @@
 ### 5. `ENCRYPTION_KEY` Boot Validation
 - **Resolved (already in place — entry was stale documentation):** [packages/shopify/src/config.ts:39-48](packages/shopify/src/config.ts) — `getShopifyConfig`'s Zod schema validates `ENCRYPTION_KEY` (`.min(1)` + `.refine(base64-decoded length === 32)`). Validation runs at process boot in all three long-running apps: [apps/web/app/entry.server.tsx:24-25](apps/web/app/entry.server.tsx) calls `getCoreConfig()` + `getShopifyConfig()` at module load (before binding the HTTP port); [apps/drainer/src/index.ts](apps/drainer/src/index.ts) + [apps/scheduler/src/index.ts](apps/scheduler/src/index.ts) call `getShopifyConfig()` in `main()` before constructing Workers. Apps that don't touch Session encryption (`apps/cli`) intentionally skip. Original entry was written before the boot paths were wired; never got updated when they shipped.
 
+### C-5 [LOW] — `OutboxRepository` mark-* methods have no scope assertion
+- **Resolved 2026-05-23** on `chore/m10-scope-assertions` (v1 Section 6 — M10 one-liner pass). Added the same `getTenantScope()?.kind !== 'system'` guard at the top of `markProcessed`, `markFailed`, `markDeadLettered`, `markDeferredFailed`, AND `requeueDeadLettered` (the 5th method noted in POST-EPIC-E-AUDIT was folded in during the audit gate). Mirrors the existing `claimBatch` guard pattern. Each guard throws `Error('OutboxRepository.<method> requires system scope')`.
+- **Tests:** +6 regression locks in `tenant-scope.test.ts` ("OutboxRepository — system-scope guards (C-5 regression locks)" describe block): five tests verify each method throws when called from tenant scope; sixth verifies all five throw with no scope at all.
+- **Production caller audit:** verified all real callers already in system scope before the guard landed — `apps/drainer/src/drainer.ts` (outbox.drain), `apps/cli/src/commands/dead-letter.ts` (outbox.dead_letter), `apps/cli/src/commands/replay.ts` (outbox.replay). No code-side migration required; guard is pure defense-in-depth against future regressions.
+
+### M-1 [LOW] — `MerchantRepository.hardDelete` has documented scope contract but no assertion
+- **Resolved 2026-05-23** on `chore/m10-scope-assertions` (same commit as C-5). Added the one-line scope guard at the top of `hardDelete`. Throws `Error('MerchantRepository.hardDelete requires system scope')`. `getTenantScope` newly imported into `merchant.repository.ts` for this purpose.
+- **Tests:** existing unit tests wrapped in `withSystemScope('test.merchant_hard_delete', …)`; +2 regression locks in `merchant-repository.test.ts` covering tenant-scope and no-scope call paths.
+- **Production caller audit:** only legitimate caller is `gdpr-processor.processShopRedact`, already in `withSystemScope(SYSTEM_SCOPE_REASONS.gdpr.shop_redact, …)`. No migration.
+
+### S-5 [LOW] — `web.index_lookup` system-scope reason reused across multiple loaders
+- **Resolved 2026-05-23** on `chore/m10-scope-assertions` (same commit). Per-route reasons registered: `SYSTEM_SCOPE_REASONS.web.customers_lookup` for the `/customers` loader, `SYSTEM_SCOPE_REASONS.web.settings_lookup` for the `/settings` loader. `web.index_lookup` retained for the `/_index` loader (unchanged). Now log lines surfacing the scope reason can disambiguate which loader opened the scope.
+- **Tests:** +4 regression locks in `tenant-scope.test.ts` ("SYSTEM_SCOPE_REASONS.web — per-route entries (S-5 regression lock)") covering both new entries, membership in `ALL_SYSTEM_SCOPE_REASONS`, runtime regex pass via `withSystemScope` smoke check, and pinning of the original `web.index_lookup`.
+
 ---
 
 ## 🔴 Must Fix Before Epic E
@@ -78,25 +92,7 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
     - `AiSpendBucket.updatedAt` (Epic F batch 1)
 - **`@default(now())` createdAt columns** — verified safe; Prisma DOES emit `DEFAULT CURRENT_TIMESTAMP` for those. Only `@updatedAt` is affected.
 - **Fix:** single migration adding `DEFAULT CURRENT_TIMESTAMP` to each `@updatedAt` column in one transaction. Idempotent — re-running is a no-op (`ALTER COLUMN ... SET DEFAULT` is idempotent). Verify no integration-test path relies on Prisma's setting behaviour in a way the SQL default would break.
-- **Action:** M10 hardening. Bundle with the S-5 / C-5 / M-1 scope-assertion cleanup pass.
-
-### S-5 [LOW] — `web.index_lookup` system-scope reason reused across multiple loaders
-- **Source:** Epic E UI session audit (2026-05-21).
-- **Issue:** The `/customers` and `/settings` loaders both reuse `SYSTEM_SCOPE_REASONS.web.index_lookup` for their pre-tenant Merchant.findUnique. Operations are functionally identical (look up Merchant by `shop`), so the reuse is correct, but a log line tagged `web.index_lookup` no longer disambiguates which route triggered the lookup — muddies the audit trail.
-- **Fix:** Either register a generic `web.shop_lookup` reason that all three loaders use, OR register per-route reasons (`web.customers_lookup`, `web.settings_lookup`). Either is one-line addition in `@winback/contracts/src/system-scope-reasons.ts`.
-- **Action:** M10 hardening. Auditability concern, not correctness — no runtime error path.
-
-### C-5 [LOW] — `OutboxRepository` mark-* methods have no scope assertion
-- **Source:** PRE-EPIC-E-AUDIT.md, Pass 2.
-- **Issue:** `markProcessed`, `markFailed`, `markDeadLettered`, `markDeferredFailed` rely on caller being in system scope. No guard at method level. Latent footgun if a future caller invokes from tenant scope.
-- **Fix:** Add `scope?.kind === 'system'` guard at top of each mark-* method, mirroring `claimBatch`.
-- **Action:** M10 hardening. Drainer is the only caller today and is correctly scoped.
-
-### M-1 [LOW] — `MerchantRepository.hardDelete` has documented scope contract but no assertion
-- **Source:** POST-EPIC-E-AUDIT.md, Pass 2, LOW-4.
-- **Issue:** Method docstring says "MUST be called from system scope" but no top-of-method assertion enforces it. Same footgun pattern as C-5 — the Prisma extension's Merchant branch in tenant scope would assert `where.id === scope.merchantId` (structurally allowed), but the semantics of "deleting the row that defines the active scope" are wrong. Caller-only enforcement breaks the moment a future caller forgets.
-- **Fix:** Add `const scope = getTenantScope(); if (scope?.kind !== 'system') throw new Error('hardDelete requires system scope')` at the top of `hardDelete`, mirroring `OutboxRepository.claimBatch`. One-liner.
-- **Action:** M10 hardening. Only legitimate caller today is `gdpr-processor.processShopRedact`, which is correctly in system scope. Same risk profile as C-5 — bundle the two fixes in one cleanup pass.
+- **Action:** M10 hardening. P-1 stands alone now that S-5 / C-5 / M-1 are resolved (see Resolved section above).
 
 ### CI-1 [LOW] — `drift-check` is advisory, not required, on PRs
 - **Source:** Branch protection rollout for `ci.yml` (commit `4c30b56`).

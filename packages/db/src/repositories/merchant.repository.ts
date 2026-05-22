@@ -1,6 +1,7 @@
 import type { Prisma } from '@prisma/client';
 
 import type { WinbackPrisma } from '../client.js';
+import { getTenantScope } from '../tenant-scope.js';
 
 /**
  * Repository for the Merchant table — the typed write chokepoint for all
@@ -223,6 +224,10 @@ export class MerchantRepository {
     merchantId: string,
     tx?: Prisma.TransactionClient,
   ): Promise<void> {
+    const scope = getTenantScope();
+    if (scope?.kind !== 'system') {
+      throw new Error('MerchantRepository.hardDelete requires system scope');
+    }
     const client = tx ?? this.prisma;
     await client.merchant.delete({ where: { id: merchantId } });
   }
