@@ -62,6 +62,13 @@
 - **Resolved 2026-05-23** on `chore/m10-scope-assertions` (same commit). Per-route reasons registered: `SYSTEM_SCOPE_REASONS.web.customers_lookup` for the `/customers` loader, `SYSTEM_SCOPE_REASONS.web.settings_lookup` for the `/settings` loader. `web.index_lookup` retained for the `/_index` loader (unchanged). Now log lines surfacing the scope reason can disambiguate which loader opened the scope.
 - **Tests:** +4 regression locks in `tenant-scope.test.ts` ("SYSTEM_SCOPE_REASONS.web — per-route entries (S-5 regression lock)") covering both new entries, membership in `ALL_SYSTEM_SCOPE_REASONS`, runtime regex pass via `withSystemScope` smoke check, and pinning of the original `web.index_lookup`.
 
+### P-1 [LOW] — Prisma `@updatedAt` columns lack DB-level DEFAULT
+- **Resolved 2026-05-23** in `c0a7f4f` (PR `fix/p1-updatedat-defaults`). Schema-driven fix: each affected Prisma model's `updatedAt` field now declares the canonical `@default(now()) @updatedAt` pairing. Migration `20260523120000_add_updatedat_defaults` adds `DEFAULT CURRENT_TIMESTAMP` to the column at the DB layer for each of the 11 affected models. The `@updatedAt` decorator still drives runtime writes (Prisma client wins); the DEFAULT catches the raw-SQL-INSERT path where the column is omitted.
+- **Original P-1 list was overstated by 2.** Audit during the fix surfaced that `Session.updatedAt` and `OrderLineItem.updatedAt` (both originally listed in this section) do not exist in the schema — Session is Shopify-adapter-owned and has no `@updatedAt` field; OrderLineItem rows are immutable post-insert and have no `@updatedAt` field. Actual affected list is 11 models (not 13): Merchant, MerchantSettings, BillingSubscription, Customer, CustomerScore, Product, ProductVariant, Order, BackfillJob, Message, AiSpendBucket. The migration SQL header enumerates the 7 models excluded by design (no `@updatedAt`) for future-reader context.
+- **First production migration against live Neon.** Applied via Sequence B — merge to main, then `pnpm --filter @winback/db exec prisma migrate deploy` against the Neon DATABASE_URL from local. Verified post-apply via Neon MCP `information_schema.columns` query: all 11 affected columns show `column_default = 'CURRENT_TIMESTAMP'`. Postgres 18 (Neon) rendering matched Postgres 16-alpine (test container) rendering exactly — no version-specific surface bit us.
+- **Migration shape:** hand-authored because the local shadow Postgres was not reachable during the batch (see M-5 below). Verified by applying against a fresh Postgres 16-alpine container after `pnpm db:test:down` removed the prior volume — full migration history applied from zero, all 18 base tables created, then the 11 `ALTER COLUMN ... SET DEFAULT CURRENT_TIMESTAMP` statements ran in sequence. Idempotent — re-running is a Postgres no-op.
+- **No code behaviour change.** Prisma client continues to set `updatedAt` explicitly on every write; the DEFAULT is invisible to the client and only catches the raw-SQL-INSERT-omits-column edge case. No integration tests broke (all 13 db int still green; all 763 unit tests green).
+
 ---
 
 ## 🔴 Must Fix Before Epic E
@@ -72,27 +79,21 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 
 ## 🟡 Fix Before M10 (Hardening Pass)
 
-### P-1 [LOW] — Prisma `@updatedAt` columns lack DB-level DEFAULT
-
-- **Source:** Epic F batch 1 anomaly (c), surfaced during batch 2 audit.
-- **Issue:** Prisma generates `NOT NULL` columns without a DB-level `DEFAULT CURRENT_TIMESTAMP` for `@updatedAt` fields. Inserts via the Prisma client work (the client sets the value on every write); raw SQL `INSERT` statements that omit the column fail with a NOT NULL violation. Doesn't bite production code today (every write path goes through Prisma), but it's a footgun for any future raw-SQL fixture, manual operator hotfix, or migration that backfills via `INSERT ... SELECT`.
-- **Affected columns** (audited 2026-05-21 against `schema.prisma` HEAD):
-    - `Merchant.updatedAt`
-    - `MerchantSettings.updatedAt`
-    - `BillingSubscription.updatedAt`
-    - `Session.updatedAt`
-    - `Customer.updatedAt`
-    - `CustomerScore.updatedAt`
-    - `Product.updatedAt`
-    - `ProductVariant.updatedAt`
-    - `Order.updatedAt`
-    - `OrderLineItem.updatedAt`
-    - `BackfillJob.updatedAt`
-    - `Message.updatedAt` (Epic F batch 1)
-    - `AiSpendBucket.updatedAt` (Epic F batch 1)
-- **`@default(now())` createdAt columns** — verified safe; Prisma DOES emit `DEFAULT CURRENT_TIMESTAMP` for those. Only `@updatedAt` is affected.
-- **Fix:** single migration adding `DEFAULT CURRENT_TIMESTAMP` to each `@updatedAt` column in one transaction. Idempotent — re-running is a no-op (`ALTER COLUMN ... SET DEFAULT` is idempotent). Verify no integration-test path relies on Prisma's setting behaviour in a way the SQL default would break.
-- **Action:** M10 hardening. P-1 stands alone now that S-5 / C-5 / M-1 are resolved (see Resolved section above).
+### M-5 [LOW] — Shadow Postgres not provisioned for `prisma migrate dev`
+- **Source:** P-1 batch (`fix/p1-updatedat-defaults`, 2026-05-23). Surfaced when the migration needed to be hand-authored because `prisma migrate dev --create-only` could not run.
+- **Issue:** `prisma migrate dev` requires a reachable shadow Postgres instance to detect drift and generate migration SQL. The repo's `.env.example` references `SHADOW_DATABASE_URL` as commented-out local config; no shadow DB is actually provisioned. Result: the canonical "generate-via-Prisma" migration workflow is unavailable; new migrations have to be hand-authored.
+- **Why this is a real footgun:** hand-authored SQL was acceptable for P-1 (trivial additive `ALTER COLUMN ... SET DEFAULT` × 11). It is unsafe for migrations involving:
+  - Column renames (Prisma emits a specific `RENAME COLUMN` sequence that's hard to reproduce by hand without breaking transactional safety)
+  - Type changes (Prisma emits `USING` clauses and casts that are easy to miss)
+  - Constraint changes that interact with existing data (Prisma sequences these to avoid lock cascades)
+  - Data backfills (`INSERT ... SELECT` patterns in migrations where Prisma's emitted shape is non-obvious)
+- **Drift-check exposure:** the longer we hand-author migrations, the more likely a subtle difference between hand-authored SQL and what Prisma would have generated triggers permanent drift-check noise (whitespace, statement ordering, exact SQL keyword spelling, EOF newline). P-1 dodged this because the shape is mechanical; the next migration may not.
+- **Fix options:**
+  - (a) **Configure a Neon branch as shadow.** Cheapest: Neon free-tier supports unlimited branches; create a `shadow` branch on the `winback-ai` project and wire its connection string to `SHADOW_DATABASE_URL` in dev. Trade-off: branches share the project's compute quota.
+  - (b) **Local Docker Postgres.** Add a `postgres-shadow` service to `docker-compose.dev.yml` reachable at `localhost:5434` (or any unused port). `pnpm db:dev:up` brings it up alongside the main dev DB. Trade-off: another container to manage; only matters when running `prisma migrate dev`.
+  - (c) **Use the existing test container at port 5433 as shadow.** Hack-ish but zero new infrastructure. Trade-off: shadow and test DB share a container; running `prisma migrate dev` while integration tests run would clobber each other.
+- **Recommendation:** option (a) — Neon branch. Aligns with the rest of the prod-DB stack on Neon; zero local infra to maintain; branches are isolated and free on the current Neon tier.
+- **Action:** M10 hardening. Hand-authoring is the workaround until this lands. Any non-trivial migration before this is fixed must be applied to a Neon branch first as a verification step (manual diff against Prisma's expected output) before landing on main.
 
 ### CI-1 [LOW] — `drift-check` is advisory, not required, on PRs
 - **Source:** Branch protection rollout for `ci.yml` (commit `4c30b56`).
