@@ -242,7 +242,7 @@ model Merchant {
   tokenRevokedAt DateTime?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   customers           Customer[]
   customerScores      CustomerScore[]
@@ -319,7 +319,7 @@ model MerchantSettings {
   aiTone Json?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 }
 
 // =============================================================================
@@ -362,7 +362,7 @@ model BillingSubscription {
   onHoldAt     DateTime?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@index([status])
   @@index([currentPeriodEndsAt])
@@ -456,7 +456,7 @@ model Customer {
   shopifyUpdatedAt DateTime?
 
   createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  updatedAt DateTime  @default(now()) @updatedAt
   // Set when Shopify reports the customer gone (404 on resync) or when
   // a customers/redact GDPR webhook fires. Repository auto-filters.
   deletedAt DateTime?
@@ -536,7 +536,7 @@ model CustomerScore {
 
   computedAt DateTime
   createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  updatedAt  DateTime @default(now()) @updatedAt
 
   // Dashboard query: "show me my top at-risk customers." DESC sort is
   // pre-baked into the index so the planner avoids a separate sort step.
@@ -574,7 +574,7 @@ model Product {
   shopifyUpdatedAt DateTime?
 
   createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  updatedAt DateTime  @default(now()) @updatedAt
   deletedAt DateTime?
 
   variants  ProductVariant[]
@@ -607,7 +607,7 @@ model ProductVariant {
   shopifyUpdatedAt DateTime?
 
   createdAt DateTime  @default(now())
-  updatedAt DateTime  @updatedAt
+  updatedAt DateTime  @default(now()) @updatedAt
   deletedAt DateTime?
 
   lineItems OrderLineItem[]
@@ -686,7 +686,7 @@ model Order {
   shopifyUpdatedAt DateTime?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   lineItems OrderLineItem[]
 
@@ -954,7 +954,7 @@ model BackfillJob {
   completedAt DateTime?
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@unique([merchantId, resource])
   @@index([status])
@@ -1101,7 +1101,7 @@ model Message {
   status MessageStatus @default(draft)
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   // Epic G's batch 1 migration adds:
   //   campaignId String?
@@ -1139,7 +1139,7 @@ model AiSpendBucket {
   generationCount Int @default(0)
 
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now()) @updatedAt
 
   @@unique([merchantId, date])
   @@index([merchantId, date])
