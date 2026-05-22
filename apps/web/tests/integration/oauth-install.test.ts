@@ -44,7 +44,12 @@ describe('/auth install initiator (integration)', () => {
     expect(setCookie).toContain('winback_auth_state=');
     expect(setCookie).toContain('HttpOnly');
     expect(setCookie).toContain('Secure');
-    expect(setCookie).toContain('SameSite=Lax');
+    // SameSite=None (NOT Lax) required for the cookie to survive Shopify's
+    // OAuth redirect chain inside the admin.shopify.com iframe. See the
+    // serializeStateCookie comment in apps/web/app/services/auth-state.server.ts
+    // for the full rationale.
+    expect(setCookie).toContain('SameSite=None');
+    expect(setCookie).not.toContain('SameSite=Lax');
   });
 
   it('missing shop param → 400', async () => {
