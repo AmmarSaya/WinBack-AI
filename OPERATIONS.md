@@ -283,11 +283,12 @@ Before announcing the app is open to a real paying merchant, walk through this c
 - [ ] **DeepSeek API key valid.** From local: `curl -H "Authorization: Bearer <key>" https://api.deepseek.com/v1/models` returns the model list (HTTP 200).
 - [ ] **OAuth round-trip works on dev store.** Install via Partners → consent → land in embedded admin. No redirect loop. Verify post-install via Neon: Session + Merchant + MerchantSettings + BillingSubscription rows exist.
 - [ ] **Webhook delivery works.** Create a customer in the dev store admin → check drainer logs within 10 sec for the customer.create webhook processing.
+- [ ] **GDPR compliance webhooks registered in Partners Dashboard.** Partners → Winback AI → App Settings → Compliance Webhooks → `customers/data_request`, `customers/redact`, `shop/redact` all point at `https://winback-ai-web.onrender.com/webhooks`. (Required for App Store submission — Shopify rejects without these. Install code path EXCLUDES GDPR topics from `webhookSubscriptionCreate` per I-1 fix; the dashboard is the canonical declaration surface until/unless `shopify.app.toml` is adopted per M-7.)
 - [ ] **ENCRYPTION_KEY backup recorded.** The 32-byte base64 key is in your password manager (1Password / Bitwarden / wherever). Lose this and every merchant session becomes unrecoverable.
 - [ ] **CI gate green on main.** `git log main` shows the last commit passed CI; branch protection is active.
 - [ ] **POINTS-TO-CONSIDER reviewed.** No open MUST-FIX items; the M10 list is pre-launch operator-acceptable.
 
-If all 10 boxes tick, you can install on a paying merchant's store. If any one doesn't tick, resolve it before announcing.
+If all 11 boxes tick, you can install on a paying merchant's store. If any one doesn't tick, resolve it before announcing.
 
 ---
 
