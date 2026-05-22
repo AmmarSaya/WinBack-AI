@@ -53,9 +53,11 @@ export const GDPR_TOPIC_TO_EVENT: Readonly<Record<string, OutboxEventType>> = {
 };
 
 /**
- * Set view of GDPR topics. Used by subscribeAllWebhooks to ensure they're
- * subscribed alongside commerce topics, and by callers that need to special-
- * case GDPR flow (e.g. operator dashboards).
+ * Set view of GDPR topics. Used by callers that need to special-case the
+ * GDPR flow (e.g. operator dashboards, compliance audits). NOT used by
+ * the install-time `subscribeAllWebhooks` path — GDPR topics are declared
+ * at app level via Partners Dashboard (see webhook-subscriptions.ts
+ * header comment and OPERATIONS.md §4 for the operator step).
  */
 export const GDPR_TOPICS: ReadonlySet<string> = new Set(Object.keys(GDPR_TOPIC_TO_EVENT));
 

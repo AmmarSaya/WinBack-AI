@@ -1,4 +1,4 @@
-import { GDPR_TOPICS, WEBHOOK_TOPIC_TO_EVENT } from '../webhook-topics.js';
+import { WEBHOOK_TOPIC_TO_EVENT } from '../webhook-topics.js';
 import type { AdminClient } from './client.js';
 
 /**
@@ -38,9 +38,22 @@ export interface SubscribeResult {
   readonly errors: ReadonlyArray<{ field?: string[]; message: string }>;
 }
 
+// GDPR mandatory compliance webhooks (customers/data_request,
+// customers/redact, shop/redact) are NOT registered here. They are
+// declared at app level via Partners Dashboard → App Settings →
+// Compliance Webhooks. Attempting to register them via
+// webhookSubscriptionCreate produces a GraphQL enum error because
+// these topics are not valid values for WebhookSubscriptionTopic.
+// GDPR_TOPIC_TO_EVENT is still used by the receive path
+// (webhook-ingest.server.ts) to route delivered webhooks to the
+// correct outbox event type.
+//
+// (I-1 fix, 2026-05-23. See POINTS-TO-CONSIDER.md I-1 + OPERATIONS.md §4
+// for the operator-side Partners Dashboard registration step that pairs
+// with this code change.)
 /**
- * Subscribes all known topics (commerce + GDPR) for a merchant to the
- * given callback URL. Idempotent at the Shopify side: subscribing an
+ * Subscribes all known commerce topics for a merchant to the given
+ * callback URL. Idempotent at the Shopify side: subscribing an
  * already-subscribed topic with the same URL returns the existing
  * subscription.
  *
@@ -53,7 +66,7 @@ export interface SubscribeResult {
  * dispatch endpoint from C3. Topic identity is carried in the
  * `X-Shopify-Topic` header at delivery time.
  *
- * Estimated cost ~10 per mutation. With ~13 topics this is a small burst;
+ * Estimated cost ~10 per mutation. With 10 topics this is a small burst;
  * the cost tracker handles pacing if needed.
  */
 export async function subscribeAllWebhooks(
@@ -61,10 +74,7 @@ export async function subscribeAllWebhooks(
   merchantId: string,
   callbackUrl: string,
 ): Promise<ReadonlyArray<SubscribeResult>> {
-  const topics = [
-    ...Object.keys(WEBHOOK_TOPIC_TO_EVENT),
-    ...GDPR_TOPICS,
-  ];
+  const topics = Object.keys(WEBHOOK_TOPIC_TO_EVENT);
   const results: SubscribeResult[] = [];
   for (const topic of topics) {
     const result = await subscribeOne(client, merchantId, topic, callbackUrl);
