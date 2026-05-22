@@ -8,7 +8,7 @@
 
 ## Currently in production
 
-> **Status reference at audit approval (2026-05-21):** the three-scope baseline below was what the codebase + Partners portal carried when this audit was approved. After the pre-launch expansion commit, the `.env.example` template and `.github/workflows/ci.yml` env block carry the 8-scope union (see Migration strategy section below for live status). The deployed app's Partners-portal config remains a manual operator step until completed.
+> **Status reference at audit approval (2026-05-21):** the three-scope baseline below was what the codebase + Partners portal carried when this audit was approved. **All pre-launch sync tasks completed 2026-05-22:** `.env.example` template and `.github/workflows/ci.yml` env block carry the 8-scope union; Partners dev dashboard synced at app-config version `0.3`; production deploy live on Render with the 8-scope union set on the web + drainer + scheduler services. First paying-merchant install is unblocked. See Migration strategy section for the per-task closure detail.
 >
 > **For current live status (post-this-doc-approval), see the Migration strategy section's ✅/⚠️ checklist — that is the authoritative source.**
 
@@ -120,13 +120,21 @@ Two scopes considered + rejected:
 
 This is the only path that avoids the re-auth gauntlet.  Concrete tasks:
 
-1. ⚠️ **OUTSTANDING — manual step required before first merchant install.** Update `SHOPIFY_SCOPES` env in production deploy config (Vercel / Fly / wherever the deployed app reads its env from). The `.env.example` template change in this commit does NOT propagate to production — deploy configs are managed independently.
-2. ⚠️ **OUTSTANDING — manual step required before first merchant install.** Update Partners-portal app config to match the 8-scope union (Shopify's manual sync requirement). Without this, the OAuth install flow requests the 8-scope union but Shopify rejects scopes the app config doesn't declare.
+1. ✅ **DONE 2026-05-22** — Production deploy provisioned on **Render** (Singapore region). Three services live: `winback-ai-web` (Starter), `winback-ai-drainer` (Background Worker), `winback-ai-scheduler` (Background Worker). `SHOPIFY_SCOPES` env var set to the 8-scope union string on all three services. External Neon Postgres (`neondb` database, `winback-ai` project, AWS Asia Pacific 1 Singapore) and Upstash Redis (Singapore region) wired. Install verified end-to-end on dev store: OAuth handshake completes, Session + Merchant + MerchantSettings + BillingSubscription rows persisted to Neon, install OutboxEvent rows enqueued for drainer.
+2. ✅ **DONE 2026-05-22** — Partners dev dashboard (`dev.shopify.com`) synced to the 8-scope union. New app-config version `0.3` released and active. Operator verified the 8 scopes are listed on the post-release config view. Previous live version `0.2` (3-scope baseline) superseded; the Versions card shows `0.3 Active`. No existing paying merchants at sync time, so the re-authorization-prompt risk per §Re-authorization risk did not bite.
 3. ✅ `.env.example` template updated. `handoff.md` is gitignored; user maintains locally.
 4. ✅ `.github/workflows/ci.yml` env block updated.
 5. ✅ No CLAUDE.md tracked references to the scope set; nothing to update.
 
-**The two ⚠️ OUTSTANDING tasks are blockers for the first paying-merchant install.** They cannot ship from this repo — they require operator action in Vercel/Fly (item 1) and the Shopify Partner Dashboard (item 2). Audit-trail this commit's SHA wherever you log those steps when they complete.
+**Both pre-launch operator tasks completed 2026-05-22.** The 8-scope union is now consistently declared across all surfaces (codebase env templates + CI + Partners dashboard + Render production deploy env). First paying-merchant install is unblocked from a scopes-and-deploy perspective.
+
+**Hosting decision recorded:** Render was chosen over Fly.io after Fly's Stripe payment-verification rules blocked all available cards (Privacy.com / virtual / Wise variants all rejected). Render's payment acceptance is wider and the same three-service architecture (one Web Service + two Background Workers) maps cleanly. Cost floor: ~$21/mo (3× Starter). External Neon + Upstash on free tiers add $0/mo. See operator's runbook for re-provisioning steps if Render setup needs to be reproduced.
+
+**Production-deploy hotfixes shipped alongside the deploy** (caught on first install attempt against Render):
+- `apps/web/app/routes/_index.tsx` — switched `return new Response(400)` to `throw new Response(400)` for the missing-shop guard so Remix doesn't render the default component with undefined loader data (Render's `HEAD /` health probe surfaced the bug). Defensive `?? 0` added to the state-band counts render as belt-and-suspenders.
+- `apps/web/app/services/auth-state.server.ts` — OAuth CSRF state cookie changed from `SameSite=Lax` to `SameSite=None`. Required because Shopify embedded apps render inside an `admin.shopify.com` iframe; the OAuth round-trip through `accounts.shopify.com` is a cross-site sub-request within that iframe, and `Lax` cookies are dropped on those redirects. Without this fix every `/auth/callback` failed with `reason: missing_cookie` and the install looped forever.
+
+Both fixes shipped on `fix/index-route-empty-state-crash` branch; merged to `main`.
 
 **Post-launch staged (rejected):** ship narrow now, expand per-epic.  Each expansion forces every existing merchant to re-OAuth.  Terrible UX, real merchant attrition risk.
 
