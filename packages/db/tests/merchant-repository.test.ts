@@ -20,6 +20,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { MerchantRepository } from '../src/repositories/merchant.repository.js';
 import type { WinbackPrisma } from '../src/client.js';
+import { withSystemScope, withTenantScope } from '../src/tenant-scope.js';
 
 interface MerchantRow {
   id: string;
@@ -301,7 +302,9 @@ describe('MerchantRepository.hardDelete', () => {
     });
     const repo = new MerchantRepository(prisma);
 
-    await repo.hardDelete('m_1');
+    await withSystemScope('test.merchant_hard_delete', async () => {
+      await repo.hardDelete('m_1');
+    });
     expect(state.deletes).toEqual([{ id: 'm_1' }]);
     // Verify the row is gone from the mock state — proxy for CASCADE.
     expect(state.merchants).toEqual([]);
@@ -314,11 +317,39 @@ describe('MerchantRepository.hardDelete', () => {
     });
     const repo = new MerchantRepository(defaultPrisma);
 
-    await repo.hardDelete('m_1', tx.prisma as never);
+    await withSystemScope('test.merchant_hard_delete_with_tx', async () => {
+      await repo.hardDelete('m_1', tx.prisma as never);
+    });
     expect(tx.merchantDelegate.delete.mock.calls.length).toBe(1);
     expect(
       (defaultPrisma.merchant as unknown as { delete: { mock: { calls: unknown[] } } })
         .delete.mock.calls.length,
     ).toBe(0);
+  });
+
+  // Regression lock for M-1 (POINTS-TO-CONSIDER): hardDelete now asserts
+  // system scope at the top. Calling it from tenant scope must throw.
+  it('throws when called outside system scope (M-1 regression lock)', async () => {
+    const { prisma } = makeMockPrisma({
+      merchants: [{ id: 'm_1', shop: 'foo.myshopify.com' }],
+    });
+    const repo = new MerchantRepository(prisma);
+
+    await expect(
+      withTenantScope('m_1', async () => {
+        await repo.hardDelete('m_1');
+      }),
+    ).rejects.toThrow(/MerchantRepository\.hardDelete requires system scope/);
+  });
+
+  it('throws when called with no scope at all (M-1 regression lock)', async () => {
+    const { prisma } = makeMockPrisma({
+      merchants: [{ id: 'm_1', shop: 'foo.myshopify.com' }],
+    });
+    const repo = new MerchantRepository(prisma);
+
+    await expect(repo.hardDelete('m_1')).rejects.toThrow(
+      /MerchantRepository\.hardDelete requires system scope/,
+    );
   });
 });

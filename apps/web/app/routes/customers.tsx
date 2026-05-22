@@ -68,7 +68,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     }
 
     const merchant = await withSystemScope(
-      SYSTEM_SCOPE_REASONS.web.index_lookup,
+      SYSTEM_SCOPE_REASONS.web.customers_lookup,
       async () => {
         return await getPrisma().merchant.findUnique({
           where: { shop },

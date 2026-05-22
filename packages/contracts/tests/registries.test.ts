@@ -163,8 +163,8 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     // Same literal, two registries — coincidence, not coupling.
   });
 
-  it('contains the twelve reasons currently used across the codebase', () => {
-    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(12);
+  it('contains the fourteen reasons currently used across the codebase', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(14);
     expect(SYSTEM_SCOPE_REASONS.admin.token_resolve).toBe('admin.token_resolve');
     expect(SYSTEM_SCOPE_REASONS.admin.token_revoke).toBe('admin.token_revoke');
     expect(SYSTEM_SCOPE_REASONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
@@ -177,6 +177,9 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     expect(SYSTEM_SCOPE_REASONS.webhook.ingest).toBe('webhook.ingest');
     expect(SYSTEM_SCOPE_REASONS.healthcheck.readyz).toBe('healthcheck.readyz');
     expect(SYSTEM_SCOPE_REASONS.web.index_lookup).toBe('web.index_lookup');
+    // S-5 per-route reasons (POINTS-TO-CONSIDER, resolved 2026-05-23).
+    expect(SYSTEM_SCOPE_REASONS.web.customers_lookup).toBe('web.customers_lookup');
+    expect(SYSTEM_SCOPE_REASONS.web.settings_lookup).toBe('web.settings_lookup');
   });
 });
 
