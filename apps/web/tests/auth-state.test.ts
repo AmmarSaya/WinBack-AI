@@ -32,11 +32,16 @@ describe('auth-state CSRF cookie', () => {
     expect(result.ok).toBe(true);
   });
 
-  it('emits a HttpOnly + Secure + SameSite=Lax cookie', () => {
+  it('emits a HttpOnly + Secure + SameSite=None cookie (embedded-app iframe context)', () => {
+    // SameSite=None (NOT Lax) is required because Shopify embedded apps
+    // run inside an admin.shopify.com iframe — the OAuth state cookie
+    // must survive cross-site sub-requests through accounts.shopify.com
+    // and back to /auth/callback. Lax drops the cookie on those redirects.
     const { cookieHeader } = generateState(SHOP, SECRET);
     expect(cookieHeader).toContain('HttpOnly');
     expect(cookieHeader).toContain('Secure');
-    expect(cookieHeader).toContain('SameSite=Lax');
+    expect(cookieHeader).toContain('SameSite=None');
+    expect(cookieHeader).not.toContain('SameSite=Lax');
     expect(cookieHeader).toContain(`Max-Age=${String(STATE_TTL_SECONDS)}`);
   });
 

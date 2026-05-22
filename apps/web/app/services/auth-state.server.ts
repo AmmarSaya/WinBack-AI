@@ -90,18 +90,27 @@ function decodeRecord(b64: string): StateRecord | null {
 export function serializeStateCookie(record: StateRecord, secret: string): string {
   const payload = encodeRecord(record);
   const sig = sign(payload, secret);
+  // SameSite=None (NOT Lax) — Shopify embedded apps run inside an iframe
+  // on admin.shopify.com, which is third-party context. The OAuth round-
+  // trip redirects through accounts.shopify.com and back to our /auth/
+  // callback inside that same iframe. SameSite=Lax cookies are dropped
+  // on cross-site sub-requests within an iframe; SameSite=None+Secure
+  // is required for the state cookie to survive the redirect chain.
+  // Verified in production logs: with SameSite=Lax, every /auth/callback
+  // hit with `reason: missing_cookie` because the cookie was set on
+  // /auth but stripped before the callback request fired.
   return (
     `${STATE_COOKIE_NAME}=${payload}.${sig};` +
     ` Path=/;` +
     ` HttpOnly;` +
     ` Secure;` +
-    ` SameSite=Lax;` +
+    ` SameSite=None;` +
     ` Max-Age=${String(STATE_TTL_SECONDS)}`
   );
 }
 
 export function clearStateCookie(): string {
-  return `${STATE_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+  return `${STATE_COOKIE_NAME}=; Path=/; HttpOnly; Secure; SameSite=None; Max-Age=0`;
 }
 
 // ---------------------------------------------------------------------------
