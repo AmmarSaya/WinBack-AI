@@ -28,6 +28,7 @@ import {
   handleCustomerDeleted,
   handleCustomerUpdated,
 } from './handlers/customer.js';
+import { handleCustomerStateChanged } from './handlers/customer-state-changed.js';
 import {
   handleCustomerDataRequested,
   handleCustomerRedacted,
@@ -72,12 +73,11 @@ export async function dispatchEvent(
       // scope. GDPR redaction goes through `gdpr.customer_redacted`.
       return handleNoop(row);
     case OUTBOX_EVENTS.customer.state_changed:
-      // Epic E session 2 lands the PRODUCER (the scoring service emits
-      // this event when RFM recompute crosses a state band).  The
-      // consumer is Epic G's winback campaign engine — until that
-      // ships, the drainer absorbs the event with a noop.  Routing is
-      // here so future Epic G work just replaces this case body.
-      return handleNoop(row);
+      // Epic F §F-9 (handler) + §F-8 (AI Worker). The handler creates
+      // an AiGeneration + draft Message in one tx then enqueues an
+      // `ai.generate` job; the AI Worker (separate Worker instance in
+      // `apps/drainer`) consumes it and runs the 3-write completion tx.
+      return handleCustomerStateChanged(ctx, row);
 
     // --- order ------------------------------------------------------------
     case OUTBOX_EVENTS.order.placed:
