@@ -78,12 +78,31 @@ export async function action({ request }: ActionFunctionArgs) {
 }
 
 /**
- * GET /webhooks — return 405 so misconfigured probes get a clear signal.
- * Shopify only sends POST; anything else is a configuration error.
+ * GET /webhooks — returns 200 OK to satisfy Shopify Compliance Webhook
+ * validation probes. The Partners Dashboard tests the GDPR webhook URLs
+ * with a non-POST request before accepting them; if the endpoint 405s,
+ * the dashboard refuses the save and surfaces the response body verbatim
+ * as the validation error.
+ *
+ * Originally this loader returned 405 ("webhook endpoint accepts POST
+ * only") under the assumption that Shopify only sends POST. That's true
+ * for webhook DELIVERY but not for compliance VALIDATION probes.
+ * Discovered during Partners Dashboard configuration on 2026-05-22 (the
+ * operator-side step paired with the subscribe-side I-1 fix in
+ * `bc5a61e`); see POINTS-TO-CONSIDER.md I-1 entry for the full two-
+ * artifact resolution.
+ *
+ * The body is human-friendly diagnostic for someone curling the URL
+ * during incident response — they get a clear signal that the endpoint
+ * is healthy AND that POST is the operational interface.
+ *
+ * Cache-Control: no-store prevents Render's edge cache (or any
+ * intermediary) from holding a stale response if this handler ever
+ * changes again. Same pattern as `healthz.tsx` / `readyz.tsx`.
  */
 export function loader() {
-  return new Response('webhook endpoint accepts POST only', {
-    status: 405,
-    headers: { Allow: 'POST' },
+  return new Response('webhook endpoint ready (POST to deliver)', {
+    status: 200,
+    headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' },
   });
 }
