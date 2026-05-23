@@ -142,7 +142,28 @@ describe('getQueues + closeQueues', () => {
     expect(createRedisClientMock).toHaveBeenCalledWith('queues.shared');
   });
 
-  it('3. closeQueues closes all three Queue instances + the shared client, clears the cache, and re-initializes fresh on next getQueues()', async () => {
+  it('3. constructs every Queue with memory-bounded options (M-4 regression lock for Render Key Value OOM)', () => {
+    // Render Key Value's 25MB tier hit OOM 2026-05-23 because BullMQ's
+    // default event-stream MAXLEN (10000) across three queues filled the
+    // instance. This test pins the bounded shape so a future refactor
+    // that drops the SHARED_QUEUE_OPTIONS spread fails loudly rather than
+    // silently re-introducing the leak.
+    getQueues();
+    for (const call of QueueMock.mock.calls) {
+      const [, options] = call as unknown as [string, {
+        streams?: { events?: { maxLen?: number } };
+        defaultJobOptions?: {
+          removeOnComplete?: boolean | { count?: number };
+          removeOnFail?: boolean | { count?: number };
+        };
+      }];
+      expect(options.streams?.events?.maxLen).toBe(1000);
+      expect(options.defaultJobOptions?.removeOnComplete).toBe(true);
+      expect(options.defaultJobOptions?.removeOnFail).toEqual({ count: 1000 });
+    }
+  });
+
+  it('4. closeQueues closes all three Queue instances + the shared client, clears the cache, and re-initializes fresh on next getQueues()', async () => {
     const first = getQueues();
 
     // Capture the mock-Queue close fns BEFORE closing — after close, the

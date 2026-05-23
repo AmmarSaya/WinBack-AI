@@ -1,9 +1,52 @@
 import { QUEUE_NAMES } from '@winback/contracts';
-import { Queue } from 'bullmq';
+import { Queue, type QueueOptions } from 'bullmq';
 import type { Redis } from 'ioredis';
 
 import { createRedisClient } from './redis-client.js';
 import type { Queues } from './types.js';
+
+/**
+ * Memory-bounded Queue options applied to every Queue in the registry.
+ *
+ * Surfaced 2026-05-23 after Render Key Value's 25MB tier hit OOM during
+ * a routine drainer restart cycle — BullMQ's defaults are tuned for
+ * production-scale Redis (no memory ceiling assumption), and a tiny dev
+ * Redis tier filled within ~24h of idle polling.
+ *
+ *   - `streams.events.maxLen: 1000` — caps the per-Queue `<queue>:events`
+ *     XADD stream length. BullMQ default is 10000. Across 3 queues +
+ *     idle-poll noise, that defaulted to ~7-8MB of stream entries which
+ *     dominated the 25MB tier. 1000 keeps recent observability while
+ *     bounding memory at ~1MB across the three queues combined.
+ *
+ *   - `defaultJobOptions.removeOnComplete: true` — every job in this
+ *     registry is a scheduling tick (`outbox.drain`, `cron.rollup`,
+ *     `cron.sweep`). Their payloads are pure plumbing (`{ enqueuedAt }`
+ *     or `{}`), so retaining completed-job hashes after the tick fires
+ *     buys nothing — operator observability lives in the WebhookLog /
+ *     OutboxEvent rows in Postgres, not in BullMQ. Delete immediately.
+ *
+ *   - `defaultJobOptions.removeOnFail: { count: 1000 }` — failures keep
+ *     the last 1000 per queue for forensic debugging, older evicted
+ *     oldest-first. Bounded retention. M10 follow-up may add `age`
+ *     ceiling once production scale gives us a real number for "how
+ *     long is forensically useful."
+ *
+ * Any per-`queue.add()` job options will OVERRIDE these defaults — the
+ * four call sites in apps/drainer/src/scheduling.ts and
+ * apps/scheduler/src/scheduling.ts were audited and none set
+ * removeOnComplete/removeOnFail, so the defaults apply uniformly.
+ * Repeatable jobs (cron.rollup pattern, cron.sweep every) are unaffected
+ * by these options — the repeat scheduler key is stored separately and
+ * not subject to job-instance lifecycle.
+ */
+const SHARED_QUEUE_OPTIONS: Omit<QueueOptions, 'connection'> = {
+  streams: { events: { maxLen: 1000 } },
+  defaultJobOptions: {
+    removeOnComplete: true,
+    removeOnFail: { count: 1000 },
+  },
+};
 
 /**
  * BullMQ queue registry — gives consumers typed Queue handles for every
@@ -47,12 +90,15 @@ export function getQueues(): Queues {
     cachedQueues = {
       outboxDrain: new Queue(QUEUE_NAMES.outbox.drain, {
         connection: sharedClient,
+        ...SHARED_QUEUE_OPTIONS,
       }),
       cronRollup: new Queue(QUEUE_NAMES.cron.rollup, {
         connection: sharedClient,
+        ...SHARED_QUEUE_OPTIONS,
       }),
       cronSweep: new Queue(QUEUE_NAMES.cron.sweep, {
         connection: sharedClient,
+        ...SHARED_QUEUE_OPTIONS,
       }),
     };
   }
