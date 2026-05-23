@@ -19,9 +19,9 @@ This doc captures only what you need to **do** at the keyboard. Update it in the
 | Drainer | Render Background Worker | Singapore | $7/mo | `winback-ai-drainer`. BullMQ worker on `outbox.drain`. |
 | Scheduler | Render Background Worker | Singapore | $7/mo | `winback-ai-scheduler`. BullMQ repeatable `cron.rollup` + `cron.sweep`. |
 | Postgres | Neon | AWS Asia Pacific (Singapore) — `aws-ap-southeast-1` | 3 GB free | Project `winback-ai`, database `neondb`. Pooled connection (PgBouncer transparent). |
-| Redis | Upstash | Singapore | 10K cmds/day free | TLS-only (`rediss://`). |
+| Redis | Render Key Value (internal) | Singapore | 25 MB / 50 conn free | Plain TCP (`redis://red-*:6379`), internal Render network. M-4 caps applied in commit `12fce46` (`streams.events.maxLen=1000`). |
 | LLM | DeepSeek | — | Pay-as-you-go | Provider locked per V7 (`POST-EPIC-F-CONSCIOUS-DECISION.md`). Switch = margin re-baseline. |
-| Shopify app config | Shopify Partners dev dashboard | — | — | Versioned. Current live version: `0.4` (or higher) with 8-scope union. |
+| Shopify app config | Shopify Partners dev dashboard | — | — | Versioned. Current live version: `winback-ai-8` (released via `shopify app deploy` 2026-05-23). `shopify.app.toml` is the version-controlled source of truth (M-7 closed). |
 
 **Monthly cost floor at design-partner scale:** ~$21/mo (3× Render Starter) + $0 external + DeepSeek API at ~$0.30–$5/mo. See `PRICING-MODEL-v1.md` for unit-econ math.
 
@@ -152,7 +152,7 @@ corepack enable && pnpm install --frozen-lockfile --prod=false && pnpm --filter 
 | `SHOPIFY_API_VERSION` | plain | `2026-04` |
 | `ENCRYPTION_KEY` | secret | 44-char base64 (32 bytes). `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"`. **MUST match across all 3 services** or sessions encrypted by one can't be decrypted by another. |
 | `DATABASE_URL` | secret | Neon pooled string, ends `/neondb?sslmode=require&channel_binding=require` |
-| `REDIS_URL` | secret | Upstash `rediss://...` (TLS, double-s) |
+| `REDIS_URL` | secret | Render Key Value internal `redis://red-<hostname>:6379` (plain TCP, single-s). The internal hostname is private to Render's network; do NOT use public-internet Upstash URLs in production without `rediss://`. |
 | `AI_PROVIDER` | plain | `deepseek` (V7 locked) |
 | `AI_MODEL` | plain | `deepseek-v4-flash` (V7 locked) |
 | `AI_MAX_TOKENS` | plain | `300` |
@@ -186,6 +186,7 @@ Future: add a dedicated `/healthz` route that returns 200 with a DB ping. That c
 | Web service URL doesn't match SHOPIFY_APP_URL | Render assigned a different subdomain than expected. Edit `SHOPIFY_APP_URL` env var to match the actual Render URL; also update Partners dashboard App URL to match. |
 | OAuth install loops forever with `missing_cookie` in logs | State cookie's `SameSite` attribute is wrong for embedded-app iframe context. Must be `SameSite=None` (with `Secure`). Resolved in `apps/web/app/services/auth-state.server.ts`. |
 | Database connection times out at scale (10+ concurrent connections) | `DATABASE_URL` is the direct (non-pooled) connection. Switch to the `-pooler` hostname variant. Not an immediate-tier problem at design-partner scale (1–5 merchants); becomes load-bearing at ~50+ merchants. Fix before launch regardless. |
+| Render Key Value newly-provisioned instance times out on connect for first ~20 minutes after `Available` state | DNS propagation lag on the internal `red-*` hostname. Wait ~20 minutes after Render Key Value instance shows `Available` before expecting services to connect cleanly. Services will redeploy themselves into a working state once DNS catches up. Observed 2026-05-22 during Upstash → Render Key Value migration. |
 
 ### Free-tier traps avoided
 
@@ -225,7 +226,7 @@ Future: add a dedicated `/healthz` route that returns 200 with a DB ping. That c
 5. **Force-replay a dead-lettered row** via CLI:
    ```powershell
    $env:DATABASE_URL = "<neon pooled string>"
-   $env:REDIS_URL = "<upstash string>"
+   $env:REDIS_URL = "<render key value internal string, redis://red-...:6379>"
    pnpm cli:outbox:replay <eventId> --reason "<text>"
    ```
 
@@ -270,6 +271,29 @@ See §1's failure-mode table above. Most common: P3009 / P3018 / connection erro
    ```
    (Pre-call ceiling check rejects all new generations immediately.)
 
+### Upstash free-tier command quota exhausted
+
+Historical playbook — kept for posterity in case the project ever revisits Upstash. As of 2026-05-22 production runs on Render Key Value internal; this playbook does NOT apply to the current stack.
+
+1. **Symptom:** Drainer logs show `ERR max requests limit exceeded` from Upstash. All BullMQ operations fail.
+2. **Root cause:** 500K commands/month free-tier limit hit. BullMQ idle polling consumes 30K–100K commands/worker/day even with zero real work. Upstash's own docs explicitly recommend AGAINST pay-as-you-go for BullMQ use cases.
+3. **Recovery (long-term, recommended):** migrate to Render Key Value (same-vendor consolidation, internal-network latency, no command-count metering — bounded by 25 MB instead). Migration steps in §2 service inventory table; the current production stack is the result of this migration.
+4. **Recovery (short-term, if migration not viable):** upgrade Upstash to Fixed plan ($10/mo) — Upstash documents this as the BullMQ-safe alternative to pay-as-you-go.
+
+### Render Key Value OOM at 25 MB tier
+
+1. **Symptom:** drainer + scheduler logs show `OOM command not allowed when used memory > maxmemory`. All BullMQ operations fail; services crash on boot because BullMQ's first `XADD` hits the wall.
+2. **Root cause:** BullMQ's default `streams.events.maxLen` is 10000 entries per queue. Across 3 queues + idle-poll noise, that defaults to ~7–8 MB of stream entries which dominates a 25 MB tier within ~24h. Closed by M-4 fix in commit `12fce46` (`SHARED_QUEUE_OPTIONS` applied to all Queue constructors — caps stream MAXLEN at 1000 + `removeOnComplete: true` + `removeOnFail: { count: 1000 }`).
+3. **Recovery (if encountered before M-4 fix is deployed, or if a future regression removes it):** `FLUSHALL` the Redis instance to clear backlog. The cleanest way to reach a Render Key Value instance from outside Render's private network:
+   ```powershell
+   docker run -it --rm redis:7 redis-cli `
+     --insecure `
+     -u "rediss://<password>@<external-hostname>.singapore-keyvalue.render.com:6379"
+   > FLUSHALL
+   ```
+   The external `rediss://` URL is shown in Render dashboard → `winback-ai-redis` → Connect section. `--insecure` skips Render's TLS cert verification (the redis:7 Docker image's CA bundle doesn't trust Render's cert). Memory drops from 25 MB to <2 MB immediately. All 4 Render services auto-restart clean within ~10 minutes. Idempotent webhooks re-deliver if needed; no data loss (durable handoff is `OutboxEvent` rows in Postgres, not Redis).
+4. **Prevention:** verify `packages/queue/src/queues.ts`'s `SHARED_QUEUE_OPTIONS` is applied to every Queue constructor (M-4 regression-lock test in `packages/queue/tests/queues.test.ts` asserts this). If `pnpm --filter @winback/queue test` is green, the prevention layer is intact.
+
 ---
 
 ## §4 — First-paying-merchant install checklist
@@ -279,7 +303,7 @@ Before announcing the app is open to a real paying merchant, walk through this c
 - [ ] **8-scope union live on Partners dashboard.** `dev.shopify.com` → Winback AI → Configuration → 8 scopes listed under "Access scopes." Active version is the one with the 8-scope union (not the legacy 3-scope `0.2`).
 - [ ] **Render production deploy live.** All 3 services show **Live** in Render dashboard. Each service's recent Logs show clean boot (no ConfigError, no crashloop).
 - [ ] **Neon connection working.** `pnpm --filter @winback/db exec prisma migrate status` against the Neon DATABASE_URL shows "Database schema is up to date!"
-- [ ] **Upstash Redis reachable.** Drainer logs show `BullMQ worker started` within 30 sec of boot.
+- [ ] **Render Key Value (internal) reachable.** Drainer logs show `BullMQ worker started` within 30 sec of boot. Connection is via the internal `redis://red-*:6379` URL (plain TCP, private Render network).
 - [ ] **DeepSeek API key valid.** From local: `curl -H "Authorization: Bearer <key>" https://api.deepseek.com/v1/models` returns the model list (HTTP 200).
 - [ ] **OAuth round-trip works on dev store.** Install via Partners → consent → land in embedded admin. No redirect loop. Verify post-install via Neon: Session + Merchant + MerchantSettings + BillingSubscription rows exist.
 - [ ] **Webhook delivery works.** Create a customer in the dev store admin → check drainer logs within 10 sec for the customer.create webhook processing.
