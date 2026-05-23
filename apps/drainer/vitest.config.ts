@@ -15,6 +15,15 @@ export default defineConfig({
       NODE_ENV: 'test',
       SERVICE_NAME: 'drainer.test',
       LOG_LEVEL: 'fatal',
+      // @winback/ai's getAiConfig() is called eagerly by the Epic F
+      // batch 4 handler + worker. Placeholder values satisfy the Zod
+      // discriminated-union at module-load time; no real LLM calls
+      // happen in unit tests (provider is mocked or never invoked).
+      AI_PROVIDER: 'deepseek',
+      AI_MODEL: 'deepseek-v4-flash',
+      AI_MAX_TOKENS: '300',
+      AI_TEMPERATURE: '0.7',
+      DEEPSEEK_API_KEY: 'sk-test-stub-for-boot-validation',
     },
   },
 });

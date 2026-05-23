@@ -75,6 +75,9 @@ importers:
       '@prisma/client':
         specifier: 5.22.0
         version: 5.22.0(prisma@5.22.0)
+      '@winback/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@winback/config':
         specifier: workspace:*
         version: link:../../packages/config
