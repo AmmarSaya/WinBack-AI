@@ -20,4 +20,12 @@ export interface Queues {
   readonly outboxDrain: Queue;
   readonly cronRollup: Queue;
   readonly cronSweep: Queue;
+  /**
+   * Epic F batch 4. Producer = drainer `handleCustomerStateChanged`;
+   * consumer = AI Worker (separate BullMQ Worker instance inside
+   * `apps/drainer`). Per-job payload: `{ aiGenerationId, merchantId,
+   * customerId }`. BullMQ job ID = `aiGenerationId` for idempotent
+   * replay. See EPIC-F-DESIGN.md §F-8.
+   */
+  readonly aiGenerate: Queue;
 }
