@@ -1,0 +1,23 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "ff21fc702dbae7c96a9d1122017feb02"
+application_url = "https://winback-ai-web.onrender.com"
+embedded = true
+name = "Winback AI"
+
+[webhooks]
+api_version = "2026-04"
+
+[webhooks.privacy_compliance]
+customer_data_request_url = "https://winback-ai-web.onrender.com/webhooks"
+customer_deletion_url = "https://winback-ai-web.onrender.com/webhooks"
+shop_deletion_url = "https://winback-ai-web.onrender.com/webhooks"
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "read_customers,read_orders,read_products,read_inventory,read_price_rules,write_discounts,write_marketing_events,read_marketing_events"
+optional_scopes = [ ]
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [ "https://winback-ai-web.onrender.com/auth/callback" ]
