@@ -5,19 +5,41 @@
  *
  *   1. Read config (Shopify, ENCRYPTION_KEY, Redis).
  *   2. Construct DrainerContext (prisma, queues, shopifyConfig).
- *   3. Build BullMQ Worker on `outbox.drain`.
- *   4. Enqueue one initial tick job (the worker self-re-enqueues thereafter).
+ *   3. Build TWO BullMQ Workers (Epic F batch 4 Step 2d):
+ *        - `outbox.drain` Worker (createDrainerWorker)
+ *        - `ai.generate` Worker (createAiGenerateWorker)
+ *      Each owns its own ioredis connection per the BullMQ blocking-
+ *      commands rule (see packages/queue/src/redis-client.ts header).
+ *   4. Enqueue one initial tick job (the outbox Worker self-re-enqueues
+ *      thereafter; the AI Worker is purely producer-driven by Step 2b's
+ *      handler).
  *   5. Install SIGTERM / SIGINT handlers for graceful shutdown.
  *   6. Process runs indefinitely.
  *
- * Graceful shutdown:
- *   - worker.close(true) — finishes the in-flight tick, refuses new jobs.
- *   - closeQueues() — closes the shared Queue handles + their ioredis client.
- *   - disconnectPrisma() — releases DB pool.
+ * Graceful shutdown (Q-B1: parallel worker close via Promise.allSettled
+ * for per-worker error isolation + matching the handoff doc's explicit
+ * "close in parallel" wording):
+ *   - drainerWorker.close() + aiWorker.close() — PARALLEL via
+ *     `Promise.allSettled`. Each finishes its in-flight job + refuses
+ *     new jobs. Per-worker errors logged but never block the rest of
+ *     the shutdown.
+ *   - closeQueues() — closes the shared Queue ioredis client AFTER both
+ *     workers (workers may write back to the Queue handle during
+ *     in-flight finish).
+ *   - disconnectPrisma() — releases the DB pool LAST (workers may
+ *     write to Prisma during in-flight finish; queues + Prisma are
+ *     independent so order within Prisma doesn't matter, but workers
+ *     → queues → prisma is the safe order).
  *
- * The order matters: we want the Worker to finish first so it doesn't
- * grab another job while Queues are closing. closeQueues runs after, then
- * Prisma. Each step is idempotent over double-call.
+ * Each shutdown step is idempotent over double-call. Top-level
+ * `shuttingDown` flag prevents re-entry when SIGTERM + SIGINT arrive
+ * back-to-back.
+ *
+ * Test seam (Step 2d Phase 2): `main` is exported and the auto-
+ * invocation at file bottom is gated on `NODE_ENV !== 'test'`. Tests
+ * `import { main } from './index.js'` and call it explicitly with all
+ * boundary modules mocked. Production (`NODE_ENV=production`) and dev
+ * (`NODE_ENV=development` or unset) both auto-invoke as before.
  */
 
 import { getLogger } from '@winback/logger';
@@ -28,10 +50,11 @@ import type { DrainerContext } from './context.js';
 import { disconnectPrisma, getPrisma } from './db.js';
 import { enqueueInitialTick } from './scheduling.js';
 import { createDrainerWorker } from './worker.js';
+import { createAiGenerateWorker } from './workers/ai-generate.worker.js';
 
 const log = getLogger('drainer.main');
 
-async function main(): Promise<void> {
+export async function main(): Promise<void> {
   log.info('drainer: starting');
 
   const shopifyConfig = getShopifyConfig();
@@ -39,25 +62,53 @@ async function main(): Promise<void> {
   const queues = getQueues();
 
   const ctx: DrainerContext = { prisma, queues, shopifyConfig };
-  const worker = createDrainerWorker(ctx);
+
+  // Q-B3: explicit `drainerWorker` rename. Two Workers in one process,
+  // an unnamed `worker` is a refactor hazard.
+  const drainerWorker = createDrainerWorker(ctx);
+  const aiWorker = createAiGenerateWorker(ctx);
 
   await enqueueInitialTick(queues.outboxDrain);
-  log.info('drainer: initial tick enqueued; worker running');
+  log.info(
+    'drainer: initial tick enqueued; outbox drain + ai-generate workers running',
+  );
 
   let shuttingDown = false;
   const shutdown = async (signal: string): Promise<void> => {
     if (shuttingDown) {
-      log.warn({ signal }, 'drainer: shutdown already in progress; ignoring signal');
+      log.warn(
+        { signal },
+        'drainer: shutdown already in progress; ignoring signal',
+      );
       return;
     }
     shuttingDown = true;
     log.info({ signal }, 'drainer: shutdown initiated');
 
-    try {
-      await worker.close();
-      log.info('drainer: worker closed');
-    } catch (err) {
-      log.error({ err }, 'drainer: worker close threw');
+    // Q-B1 — PARALLEL worker close via Promise.allSettled. Both
+    // Workers own independent ioredis connections (no shared resource
+    // contention) so concurrent close is safe. Per-worker error
+    // isolation: if one close throws, the other still completes + we
+    // get separate log lines for each failure.
+    const [drainerResult, aiResult] = await Promise.allSettled([
+      drainerWorker.close(),
+      aiWorker.close(),
+    ]);
+    if (drainerResult.status === 'rejected') {
+      log.error(
+        { err: drainerResult.reason },
+        'drainer: outbox drain worker close threw',
+      );
+    } else {
+      log.info('drainer: outbox drain worker closed');
+    }
+    if (aiResult.status === 'rejected') {
+      log.error(
+        { err: aiResult.reason },
+        'drainer: ai-generate worker close threw',
+      );
+    } else {
+      log.info('drainer: ai-generate worker closed');
     }
 
     try {
@@ -86,9 +137,16 @@ async function main(): Promise<void> {
   });
 }
 
-main().catch((err: unknown) => {
-  // Top-level failure (config validation, Redis unreachable at boot, etc.).
-  // Log + exit non-zero so the orchestrator restarts the process.
-  log.error({ err }, 'drainer: fatal startup error');
-  process.exit(1);
-});
+// Auto-invocation gate (test seam). vitest sets NODE_ENV=test
+// (apps/drainer/vitest.config.ts:14), so tests `import { main }` from
+// this file without triggering boot. Production + dev are unaffected
+// (NODE_ENV=production from Render env / NODE_ENV=development or unset
+// from tsx). Tests call `await main()` explicitly with mocks set up.
+if (process.env.NODE_ENV !== 'test') {
+  main().catch((err: unknown) => {
+    // Top-level failure (config validation, Redis unreachable at boot, etc.).
+    // Log + exit non-zero so the orchestrator restarts the process.
+    log.error({ err }, 'drainer: fatal startup error');
+    process.exit(1);
+  });
+}

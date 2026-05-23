@@ -22,6 +22,9 @@ vi.mock('../src/handlers/customer.js', () => ({
   handleCustomerUpdated: vi.fn().mockResolvedValue(undefined),
   handleCustomerDeleted: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('../src/handlers/customer-state-changed.js', () => ({
+  handleCustomerStateChanged: vi.fn().mockResolvedValue(undefined),
+}));
 vi.mock('../src/handlers/gdpr.js', () => ({
   handleCustomerDataRequested: vi.fn().mockResolvedValue(undefined),
   handleCustomerRedacted: vi.fn().mockResolvedValue(undefined),
@@ -42,6 +45,7 @@ vi.mock('../src/handlers/order.js', () => ({
 // Imports AFTER mocks so dispatch sees the mocked handlers.
 const { dispatchEvent } = await import('../src/dispatch.js');
 const customerMod = await import('../src/handlers/customer.js');
+const customerStateChangedMod = await import('../src/handlers/customer-state-changed.js');
 const gdprMod = await import('../src/handlers/gdpr.js');
 const merchantMod = await import('../src/handlers/merchant.js');
 const noopMod = await import('../src/handlers/noop.js');
@@ -137,13 +141,19 @@ describe('dispatchEvent — handler routing', () => {
     expect(customerMod.handleCustomerDeleted).toHaveBeenCalledTimes(1);
   });
 
-  it('customer.redacted (non-GDPR; no producer) + customer.state_changed (Epic E session 2 owns) → handleNoop', async () => {
+  it('customer.redacted (non-GDPR; no producer) → handleNoop', async () => {
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.redacted));
-    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.state_changed));
-    expect(noopMod.handleNoop).toHaveBeenCalledTimes(2);
+    expect(noopMod.handleNoop).toHaveBeenCalledTimes(1);
     expect(customerMod.handleCustomerCreated).not.toHaveBeenCalled();
     expect(customerMod.handleCustomerUpdated).not.toHaveBeenCalled();
     expect(customerMod.handleCustomerDeleted).not.toHaveBeenCalled();
+  });
+
+  it('customer.state_changed → handleCustomerStateChanged (Epic F §F-9)', async () => {
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.customer.state_changed));
+    expect(customerStateChangedMod.handleCustomerStateChanged).toHaveBeenCalledTimes(1);
+    expect(noopMod.handleNoop).not.toHaveBeenCalled();
+    expect(customerMod.handleCustomerCreated).not.toHaveBeenCalled();
   });
 
   it('all product.* events → handleNoop', async () => {
