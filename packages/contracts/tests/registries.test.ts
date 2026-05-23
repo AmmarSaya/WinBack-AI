@@ -115,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the nine actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer)', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(9);
+  it('contains the twelve actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 3 Epic F batch 4 ai)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(12);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -128,6 +128,11 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(AUDIT_ACTIONS.outbox.replay).toBe('outbox.replay');
     expect(AUDIT_ACTIONS.outbox.dead_letter_forced).toBe('outbox.dead_letter_forced');
     expect(AUDIT_ACTIONS.customer.state_changed).toBe('customer.state_changed');
+    // Epic F batch 4 — AI generation pipeline outcomes. See
+    // EPIC-F-DESIGN.md §F-8 / §F-9 for the producer call sites.
+    expect(AUDIT_ACTIONS.ai.generation_failed).toBe('ai.generation_failed');
+    expect(AUDIT_ACTIONS.ai.spend_cap_exceeded).toBe('ai.spend_cap_exceeded');
+    expect(AUDIT_ACTIONS.ai.content_blocked).toBe('ai.content_blocked');
   });
 });
 

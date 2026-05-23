@@ -100,6 +100,10 @@ export function getQueues(): Queues {
         connection: sharedClient,
         ...SHARED_QUEUE_OPTIONS,
       }),
+      aiGenerate: new Queue(QUEUE_NAMES.ai.generate, {
+        connection: sharedClient,
+        ...SHARED_QUEUE_OPTIONS,
+      }),
     };
   }
   return cachedQueues;
@@ -165,6 +169,7 @@ export async function closeQueues(): Promise<void> {
         cachedQueues.outboxDrain.close(),
         cachedQueues.cronRollup.close(),
         cachedQueues.cronSweep.close(),
+        cachedQueues.aiGenerate.close(),
       ]);
     }
     if (sharedClient !== null) {

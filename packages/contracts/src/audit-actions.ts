@@ -62,6 +62,39 @@ export const AUDIT_ACTIONS = {
     /** RFM scoring recompute moved the customer between state bands. */
     state_changed: 'customer.state_changed',
   },
+  /**
+   * AI generation pipeline actions (Epic F batch 4). Written by the AI
+   * Worker (`apps/drainer/src/workers/ai-generate.worker.ts`) and the
+   * `handleCustomerStateChanged` drainer handler in the same tx as the
+   * `AiGeneration` row mutation that records the outcome. `actorType` is
+   * `system`; `actorId` is `'drainer'`.
+   *
+   * See EPIC-F-DESIGN.md §F-9 (handler) + §F-8 (worker).
+   */
+  ai: {
+    /**
+     * Non-retryable provider failure (after the worker classifies
+     * `AiProviderError.retryable === false`). Covers `invalid_request`,
+     * `auth`, and any provider-side bug that exhausts retries.
+     * `content_blocked` and spend-cap rejections have their own actions
+     * below for forensic clarity.
+     */
+    generation_failed: 'ai.generation_failed',
+    /**
+     * Pre-flight spend ceiling check (§F-6 / §F-9 step 5) rejected the
+     * generation because `currentMonthSpend + estimatedCallCost >
+     * monthlyAiSpendCapCents`. No `AiGeneration` row created; this audit
+     * row IS the forensic record of the denial.
+     */
+    spend_cap_exceeded: 'ai.spend_cap_exceeded',
+    /**
+     * Provider returned a content-policy block (`AiProviderContentBlockedError`
+     * — `finish_reason === 'content_filter'` for OpenAI, `stop_reason ===
+     * 'refusal'` for Anthropic, empty content for DeepSeek). Non-retryable;
+     * the same prompt will be blocked on every retry.
+     */
+    content_blocked: 'ai.content_blocked',
+  },
 } as const;
 
 /**
@@ -81,13 +114,15 @@ export const AUDIT_ACTIONS = {
 export type AuditAction =
   | (typeof AUDIT_ACTIONS.gdpr)[keyof typeof AUDIT_ACTIONS.gdpr]
   | (typeof AUDIT_ACTIONS.outbox)[keyof typeof AUDIT_ACTIONS.outbox]
-  | (typeof AUDIT_ACTIONS.customer)[keyof typeof AUDIT_ACTIONS.customer];
+  | (typeof AUDIT_ACTIONS.customer)[keyof typeof AUDIT_ACTIONS.customer]
+  | (typeof AUDIT_ACTIONS.ai)[keyof typeof AUDIT_ACTIONS.ai];
 
 /** Runtime Set of every registered action, for shape tests + iteration. */
 export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   ...Object.values(AUDIT_ACTIONS.gdpr),
   ...Object.values(AUDIT_ACTIONS.outbox),
   ...Object.values(AUDIT_ACTIONS.customer),
+  ...Object.values(AUDIT_ACTIONS.ai),
 ] as AuditAction[]);
 
 /**
