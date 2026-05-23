@@ -33,6 +33,7 @@
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
+    "@winback/ai": "workspace:*",
     "@winback/contracts": "workspace:*",
     "@winback/errors": "workspace:*",
     "@winback/logger": "workspace:*",

@@ -6,6 +6,7 @@
   },
   "include": ["src/**/*"],
   "references": [
+    { "path": "../ai" },
     { "path": "../contracts" },
     { "path": "../errors" },
     { "path": "../logger" }
