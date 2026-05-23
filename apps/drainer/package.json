@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@prisma/client": "5.22.0",
+    "@winback/ai": "workspace:*",
     "@winback/config": "workspace:*",
     "@winback/contracts": "workspace:*",
     "@winback/crypto": "workspace:*",
