@@ -57,6 +57,25 @@ function mockSleep() {
   return vi.fn(async () => {});
 }
 
+/**
+ * Deterministic clock for CostTracker construction. Mirrors the helper
+ * in cost-tracker.test.ts. Required wherever a test asserts an exact
+ * `msUntilAvailable` value — without it, real-clock drift between
+ * `onResponse` and the next `msUntilAvailable` call produces a
+ * fractional projected.available and (when the production code did not
+ * yet floor it) a flaky wait result on fine-grained timers (e.g. Linux
+ * CI vs Windows local).
+ */
+function mockClock(initial = 0) {
+  let t = initial;
+  return {
+    now: () => t,
+    advance: (ms: number) => {
+      t += ms;
+    },
+  };
+}
+
 // --- Tests ------------------------------------------------------------------
 
 describe('AdminClient — happy path', () => {
@@ -270,8 +289,16 @@ describe('AdminClient — 5xx + non-throttle errors', () => {
 describe('AdminClient — rate-limit gating', () => {
   it('sleeps when cost tracker says wait is required', async () => {
     const resolver = makeResolver();
-    // Pre-seed tracker with low budget
-    const tracker = new CostTracker({ safetyFloor: 0 });
+    // Pre-seed tracker with low budget. mockClock injection keeps the
+    // elapsedSec between `onResponse` and the internal `msUntilAvailable`
+    // call deterministically zero — without it, CI runners with
+    // millisecond-granular timers (Linux) produced fractional
+    // projected.available and a flaky 1899 vs 1900 result. The
+    // production code floors `projected.available` to defend against
+    // the same drift class; this mockClock makes the test
+    // deterministic regardless of that defence.
+    const clock = mockClock(0);
+    const tracker = new CostTracker({ now: clock.now, safetyFloor: 0 });
     tracker.onResponse(SHOP, {
       maximumAvailable: 1000,
       currentlyAvailable: 5,

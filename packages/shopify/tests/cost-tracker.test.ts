@@ -165,6 +165,34 @@ describe('CostTracker — multi-shop isolation', () => {
   });
 });
 
+describe('CostTracker — fractional elapsed time (regression: integer snap)', () => {
+  it('floors fractional projected.available so the deficit is integer-valued', () => {
+    // The CI flake on Linux's millisecond-granular timer surfaced this:
+    // production code extrapolates `available = currentlyAvailable +
+    // elapsedSec * restoreRate`, which produces a fractional `available`
+    // for any non-integer-second elapsed time. Carrying that fraction
+    // into `Math.ceil((deficit / restoreRate) * 1000)` produces float
+    // drift that can round the wait time DOWN by 1ms (1898.9999... →
+    // ceil 1899 instead of the semantically-correct 1900). The
+    // production fix floors `available` so the deficit is always a
+    // whole number; this test pins the behaviour against regression.
+    //
+    // Scenario: pre-seed available=5, advance the clock by 17ms (= 0.85
+    // credits restored, projected.available = 5.85). Without the floor,
+    // deficit = 94.15, Math.ceil((94.15/50)*1000) = 1883. With the
+    // floor, available snaps to 5, deficit = 95, result = 1900.
+    const clock = mockClock(0);
+    const tracker = new CostTracker({ now: clock.now, safetyFloor: 0 });
+    tracker.onResponse(SHOP, {
+      maximumAvailable: 1000,
+      currentlyAvailable: 5,
+      restoreRate: 50,
+    });
+    clock.advance(17);
+    expect(tracker.msUntilAvailable(SHOP, 100)).toBe(1900);
+  });
+});
+
 describe('CostTracker — reset', () => {
   it('clears specific shop', () => {
     const tracker = new CostTracker();
