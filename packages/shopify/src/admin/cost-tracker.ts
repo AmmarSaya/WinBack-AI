@@ -85,12 +85,26 @@ export class CostTracker {
    * (capped at `maximumAvailable`).
    * If `available_now >= cost + safetyFloor` → 0
    * Else → milliseconds to wait for the deficit to refill.
+   *
+   * Integer snap on `projected.available` (Math.floor): Shopify reports
+   * integer-valued `currentlyAvailable` in throttleStatus responses, but
+   * our elapsed-time extrapolation between calls produces fractional
+   * budget (5 + 0.873 * 50 = 48.65 etc.). Carrying that fraction into
+   * `deficit / restoreRate * 1000` produces float drift — `94.95 / 50 *
+   * 1000 = 1898.9999...` whose `Math.ceil` rounds DOWN to 1899 rather
+   * than the semantically-correct 1900. Flooring the available budget
+   * forces an integer deficit, eliminates the drift, and biases the
+   * computed wait toward "slightly longer than strictly necessary"
+   * (waiting one extra ms can never cause a 429; under-waiting can).
+   * The CI flake on Linux's millisecond-granular timer (vs Windows'
+   * coarser quantum) surfaced this in admin-client.test.ts.
    */
   msUntilAvailable(shop: string, cost: number): number {
     const projected = this.projectedAvailable(shop);
+    const available = Math.floor(projected.available);
     const required = cost + this.safetyFloor;
-    if (projected.available >= required) return 0;
-    const deficit = required - projected.available;
+    if (available >= required) return 0;
+    const deficit = required - available;
     return Math.ceil((deficit / projected.restoreRate) * 1000);
   }
 
