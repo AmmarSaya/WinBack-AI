@@ -37,3 +37,22 @@ export {
   type BackfillJob,
   type BackfillStatus,
 } from './backfill-job.repository.js';
+
+// --- Epic F batch 3 (AI generation, message, spend ledger) -----------------
+export {
+  AiGenerationRepository,
+  type CreatePendingArgs,
+  type MarkCompletedArgs,
+  type MarkFailedArgs,
+} from './ai-generation.repository.js';
+export {
+  MessageRepository,
+  type CreateDraftArgs,
+  type UpdateGeneratedTextArgs,
+} from './message.repository.js';
+export {
+  AiSpendBucketRepository,
+  type GetOrCreateForDayArgs,
+  type IncrementSpendArgs,
+  type SumMonthSpendArgs,
+} from './ai-spend-bucket.repository.js';
