@@ -59,6 +59,12 @@ export async function dispatchEvent(
     case OUTBOX_EVENTS.merchant.needs_reauth:
     case OUTBOX_EVENTS.merchant.shop_details_fetched:
     case OUTBOX_EVENTS.merchant.backfill_completed:
+    case OUTBOX_EVENTS.merchant.scopes_updated:
+      // M-9: toml-driven managed installation auto-updates Shopify-side
+      // access on scope re-consent; the app just needs to ack the
+      // delivery without spamming `unknown_topic` noise. Real handler
+      // (observing the merchant's accepted-scope set) lands when
+      // Section 4 batch 4.2 adds new scopes.
       return handleNoop(row);
 
     // --- customer ---------------------------------------------------------
