@@ -272,12 +272,14 @@ Before the LLM call, the AI Worker:
 
 **Atomic increment — post-call:**
 
-After a successful LLM call, the Worker updates today's `AiSpendBucket` row:
-1. `SELECT FOR UPDATE` on `(merchantId, date)` (or insert if not exists — upsert with `SELECT FOR UPDATE` semantics).
-2. `UPDATE` `spentMicrocents = spentMicrocents + $delta`, `generationCount = generationCount + 1`.
-3. Commit the same tx as the `AiGeneration.markCompleted` write.
+After a successful LLM call, the Worker updates today's `AiSpendBucket` row via a single Postgres `INSERT ... ON CONFLICT DO UPDATE` (Prisma's `upsert`):
+1. `INSERT (merchantId, date, spentMicrocents = $delta, generationCount = 1)`.
+2. `ON CONFLICT (merchantId, date) DO UPDATE SET spentMicrocents = spentMicrocents + $delta, generationCount = generationCount + 1`. The UPDATE path acquires the row-level X-lock on the `@@unique([merchantId, date])` index — the same lock a `SELECT FOR UPDATE` would acquire, folded into one round-trip instead of three.
+3. Commits in the same tx as the `AiGeneration.markCompleted` write.
 
-The `SELECT FOR UPDATE` serializes concurrent increments from the same merchant's parallel generation jobs. Same race-prevention pattern Epic G will use for `MessageQuotaBucket`.
+The unique-index row lock serializes concurrent increments from the same merchant's parallel generation jobs. Same race-prevention pattern Epic G will use for `MessageQuotaBucket`.
+
+(Originally specified as a separate `SELECT FOR UPDATE` + `UPDATE` pair; corrected during batch 3 audit when the upsert variant landed in `AiSpendBucketRepository.incrementSpend` with the same atomicity guarantee and lower round-trip cost. See `packages/db/src/repositories/ai-spend-bucket.repository.ts` header for the decision-history paragraph.)
 
 **Cascade policy:** `Merchant → AiSpendBucket: CASCADE`. Spend history deleted with the merchant. No GDPR concern — spend data is platform-internal accounting, not merchant-visible PII.
 
@@ -595,9 +597,9 @@ Both are `dependencies` of `packages/ai` (not devDependencies — they're runtim
 |---|---|---|
 | 1 | Schema + migration + this design doc + TENANT_SCOPED_MODELS additions | `AiGeneration`, `Message` (minimal), `AiSpendBucket`, `AiGenerationStatus` + `MessageStatus` enums, cascade-policy header update, `QUEUE_NAMES.ai.generate` registration in `@winback/contracts`, `'AiGeneration' + 'Message' + 'AiSpendBucket'` added to `TENANT_SCOPED_MODELS` |
 | 2 | `packages/ai` package | Provider interface + 3 concrete providers (OpenAI / Anthropic / DeepSeek), cost-rate table, `buildWinbackPrompt`, env config + boot validation, unit tests for all pure functions + mocked-SDK provider tests.  No DB, no drainer changes. |
-| 3 | Repositories in `@winback/db` | `AiGenerationRepository` (create, markCompleted, markFailed), `AiSpendBucketRepository` (getOrCreate, incrementSpend with SELECT FOR UPDATE), `MessageRepository` (create with draft status; G later extends with status-transition methods).  Unit tests (mocked Prisma). |
+| 3 | Repositories in `@winback/db` | `AiGenerationRepository` (create, markCompleted, markFailed), `AiSpendBucketRepository` (getOrCreate, incrementSpend via Postgres `INSERT ... ON CONFLICT DO UPDATE` — atomic row-lock on `@@unique([merchantId, date])`), `MessageRepository` (create with draft status; G later extends with status-transition methods).  Unit tests (mocked Prisma). |
 | 4 | `handleCustomerStateChanged` handler + AI Worker | Drainer handler rewrite (noop → real).  AI Worker BullMQ consumer at `ai.generate`.  Spend-ceiling check + atomic increment.  Full handler unit tests.  AI Worker unit tests (mocked provider). |
-| 5 | Integration tests | Real Postgres + mocked LLM provider.  End-to-end: `customer.state_changed` event → both `AiGeneration` + `Message` rows written → AI Worker job runs → both rows mutated to completed/draft + `AiSpendBucket` incremented.  Spend ceiling exceeded → generation rejected, no LLM call.  Concurrent jobs serialized via SELECT FOR UPDATE.  GDPR cascade chain verified end-to-end (delete Customer → AiGeneration + Message both gone). |
+| 5 | Integration tests | Real Postgres + mocked LLM provider.  End-to-end: `customer.state_changed` event → both `AiGeneration` + `Message` rows written → AI Worker job runs → both rows mutated to completed/draft + `AiSpendBucket` incremented.  Spend ceiling exceeded → generation rejected, no LLM call.  Concurrent jobs serialized via the Postgres `INSERT ... ON CONFLICT DO UPDATE` row-level lock on `@@unique([merchantId, date])` (parallel `processAiGenerateJob` calls land both increments without lost-update).  Non-retryable provider errors (`content_blocked` / `auth` / `invalid_request`) write `markFailed + AuditLog` in one tx with the correct action discriminant.  Race-replay regression lock (`markCompleted updatedCount=0` → skip downstream writes).  GDPR cascade chain verified end-to-end (delete Customer → AiGeneration + Message both gone; AiSpendBucket preserved — no Customer FK). |
 
 ---
 
@@ -665,7 +667,7 @@ Both are `dependencies` of `packages/ai` (not devDependencies — they're runtim
 | `apps/drainer/src/index.ts` | changed | Construct AI Worker alongside outbox drain Worker |
 | `apps/drainer/tests/handlers/customer-state-changed.test.ts` | new | Handler unit tests (mocked provider + repos) |
 | `apps/drainer/tests/workers/ai-generate.worker.test.ts` | new | Worker unit tests (mocked provider + repos) |
-| `apps/drainer/tests/integration/drainer-tick.test.ts` | changed | Add Epic F end-to-end integration tests |
+| `apps/drainer/tests/integration/ai-generate.test.ts` | new | Epic F end-to-end integration tests — batch 5 (§F-9 handler + §F-8 worker, real Postgres, mocked LLM provider) |
 | `EPIC-F-DESIGN.md` | new | This file |
 
 ---
@@ -676,7 +678,7 @@ Both are `dependencies` of `packages/ai` (not devDependencies — they're runtim
 - [ ] Provider abstraction interface fully specified (no provider-specific logic leaks into the handler or worker)
 - [ ] Cost tracking uses BigInt microcents throughout — no float anywhere near money
 - [ ] Spend ceiling enforcement is pre-call (not post-call) — we never owe more than the cap
-- [ ] `SELECT FOR UPDATE` pattern on `AiSpendBucket` documented for concurrent-job safety
+- [ ] Atomic-increment pattern on `AiSpendBucket` documented for concurrent-job safety (Postgres `INSERT ... ON CONFLICT DO UPDATE` row-lock on `@@unique([merchantId, date])`)
 - [ ] GDPR cascade chain documented (`Customer → AiGeneration → Message` all CASCADE; `Customer → Message` direct CASCADE for redundant safety)
 - [ ] Trigger surface explicit: which state bands generate, which don't (F-3)
 - [ ] Trigger language is "drainer at customer.state_changed", not "G at dispatch time" — Q4 reconciliation locked

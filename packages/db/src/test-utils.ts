@@ -77,6 +77,16 @@ export async function resetDb(): Promise<void> {
     await client.order.deleteMany({});
     await client.productVariant.deleteMany({});
     await client.product.deleteMany({});
+    // Epic F batch 1 tables. Order matters within this trio: Message has
+    // FK to AiGeneration (CASCADE), AiGeneration has FK to Customer
+    // (CASCADE), so Message → AiGeneration → Customer is the FK-safe
+    // sequence. AiSpendBucket has no Customer FK (only Merchant
+    // CASCADE), so its position before Customer is mechanical not
+    // load-bearing. The Merchant CASCADE chain at the end would clean
+    // all three implicitly; explicit-list convention per file header.
+    await client.message.deleteMany({});
+    await client.aiGeneration.deleteMany({});
+    await client.aiSpendBucket.deleteMany({});
     await client.customer.deleteMany({});
     await client.billingSubscription.deleteMany({});
     await client.merchantSettings.deleteMany({});

@@ -41,6 +41,24 @@ const TEST_SHOPIFY_ENV = {
   ENCRYPTION_KEY: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=',
 };
 
+// Test-only AI env. The drainer reads these via `getAiConfig()` at boot
+// (Epic F batch 2 §F-11 + L8) when `handleCustomerStateChanged` or the
+// AI Worker dispatch. Values mirror ci.yml lines 54-58 verbatim — same
+// placeholder DEEPSEEK_API_KEY so no environment-shaped surprise
+// between local and CI runs. NO real LLM calls happen in integration
+// tests: every test mocks `selectActiveProvider` via
+// `vi.mock('@winback/ai', ...)`. The DEEPSEEK_API_KEY value satisfies
+// the Zod discriminated-union boot validator (lazy provider
+// construction per L6 means the key is read but never used for a real
+// HTTP call).
+const TEST_AI_ENV = {
+  AI_PROVIDER: 'deepseek',
+  AI_MODEL: 'deepseek-v4-flash',
+  AI_MAX_TOKENS: '300',
+  AI_TEMPERATURE: '0.7',
+  DEEPSEEK_API_KEY: 'ci-test-deepseek-key-not-real',
+};
+
 function sh(cmd, args, opts = {}) {
   const merged = {
     stdio: 'inherit',
@@ -118,6 +136,7 @@ function run() {
         SERVICE_NAME: 'drainer.integration',
         LOG_LEVEL: 'fatal',
         ...TEST_SHOPIFY_ENV,
+        ...TEST_AI_ENV,
       },
     },
   );
