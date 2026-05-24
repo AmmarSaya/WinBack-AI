@@ -96,7 +96,11 @@ describe('dispatchEvent — handler routing', () => {
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.needs_reauth));
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.shop_details_fetched));
     await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.backfill_completed));
-    expect(noopMod.handleNoop).toHaveBeenCalledTimes(3);
+    // M-9: scopes_updated joins the merchant fall-through trio →
+    // 3 → 4 noop routes. v1 handler is intentionally noop; Section 4
+    // batch 4.2 may add a real handler when new scopes ship.
+    await dispatchEvent(stubCtx, makeRow(OUTBOX_EVENTS.merchant.scopes_updated));
+    expect(noopMod.handleNoop).toHaveBeenCalledTimes(4);
     expect(merchantMod.handleMerchantInstalled).not.toHaveBeenCalled();
     expect(merchantMod.handleMerchantUninstalled).not.toHaveBeenCalled();
   });

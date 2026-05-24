@@ -31,6 +31,13 @@ describe('webhook topic → outbox event mapping', () => {
 
   it('maps app lifecycle', () => {
     expect(getOutboxEventForTopic('app/uninstalled')).toBe(OUTBOX_EVENTS.merchant.uninstalled);
+    // M-9: scope re-consent under toml-driven managed installation.
+    // Receive-side mapping locked here; send-side registration via
+    // `subscribeAllWebhooks` is gated by `SUBSCRIBE_EXCLUDED_TOPICS`
+    // pending APP_SCOPES_UPDATE GraphQL-enum verification.
+    expect(getOutboxEventForTopic('app/scopes_update')).toBe(
+      OUTBOX_EVENTS.merchant.scopes_updated,
+    );
   });
 
   it('maps GDPR topics to gdpr.* outbox events (C6)', () => {
@@ -72,6 +79,9 @@ describe('isKnownTopic', () => {
     expect(isKnownTopic('orders/create')).toBe(true);
     expect(isKnownTopic('customers/redact')).toBe(true);
     expect(isKnownTopic('app/uninstalled')).toBe(true);
+    // M-9: app/scopes_update is known even though it's excluded from
+    // `subscribeAllWebhooks` — the exclusion is send-side only.
+    expect(isKnownTopic('app/scopes_update')).toBe(true);
   });
 
   it('rejects unknown topics', () => {

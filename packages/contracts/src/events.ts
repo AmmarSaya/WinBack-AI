@@ -28,6 +28,16 @@ export const OUTBOX_EVENTS = {
     needs_reauth: 'merchant.needs_reauth',
     shop_details_fetched: 'merchant.shop_details_fetched',
     backfill_completed: 'merchant.backfill_completed',
+    // M-9: Shopify fires `app/scopes_update` when scope changes
+    // re-consent via the toml-driven managed installation flow
+    // (use_legacy_install_flow = false in shopify.app.toml). Emitted
+    // by webhook-ingest when the topic arrives; the drainer routes
+    // this event to handleNoop in v1 (no consumer needed — the OAuth
+    // re-consent itself updates Shopify-side access; we just want to
+    // ack + log without spamming "unknown_topic"). A real handler
+    // will land when Section 4 batch 4.2 adds new scopes and the app
+    // needs to observe the merchant's accepted-scope set.
+    scopes_updated: 'merchant.scopes_updated',
   },
   customer: {
     created: 'customer.created',

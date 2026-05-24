@@ -51,6 +51,35 @@ export interface SubscribeResult {
 // (I-1 fix, 2026-05-23. See POINTS-TO-CONSIDER.md I-1 + OPERATIONS.md §4
 // for the operator-side Partners Dashboard registration step that pairs
 // with this code change.)
+
+/**
+ * Topics that LIVE IN `WEBHOOK_TOPIC_TO_EVENT` (so the receive path
+ * can dispatch them) but are EXCLUDED from `subscribeAllWebhooks`
+ * because their send-side registration via `webhookSubscriptionCreate`
+ * is still being verified.
+ *
+ * Currently excluded: `app/scopes_update`.
+ *
+ * TODO M-9 follow-up: verify `APP_SCOPES_UPDATE` is a valid value of
+ * the Shopify `WebhookSubscriptionTopic` GraphQL enum on the dev
+ * store before enabling subscription via `webhookSubscriptionCreate`.
+ * Until verified, this topic is excluded to avoid the I-1 class of
+ * enum-rejection install failures (subscribing to an invalid enum
+ * value bricks the install loop — the receive path treats every
+ * subscribe error as terminal). If verified valid → remove this
+ * exclusion in a one-line follow-up PR. If verified invalid →
+ * migrate this topic to the `shopify.app.toml`
+ * `[[webhooks.subscriptions]]` block.
+ *
+ * NOT the same mechanism as the GDPR exclusion above (GDPR topics
+ * live in a SEPARATE map, `GDPR_TOPIC_TO_EVENT`, and never enter
+ * `WEBHOOK_TOPIC_TO_EVENT`). This Set covers topics that legitimately
+ * need receive-side mapping but whose send-side registration is
+ * deliberately gated.
+ */
+export const SUBSCRIBE_EXCLUDED_TOPICS: ReadonlySet<string> = new Set([
+  'app/scopes_update',
+]);
 /**
  * Subscribes all known commerce topics for a merchant to the given
  * callback URL. Idempotent at the Shopify side: subscribing an
@@ -74,7 +103,9 @@ export async function subscribeAllWebhooks(
   merchantId: string,
   callbackUrl: string,
 ): Promise<ReadonlyArray<SubscribeResult>> {
-  const topics = Object.keys(WEBHOOK_TOPIC_TO_EVENT);
+  const topics = Object.keys(WEBHOOK_TOPIC_TO_EVENT).filter(
+    (topic) => !SUBSCRIBE_EXCLUDED_TOPICS.has(topic),
+  );
   const results: SubscribeResult[] = [];
   for (const topic of topics) {
     const result = await subscribeOne(client, merchantId, topic, callbackUrl);

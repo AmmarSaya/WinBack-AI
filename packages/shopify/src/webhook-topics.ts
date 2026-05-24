@@ -34,6 +34,16 @@ export const WEBHOOK_TOPIC_TO_EVENT: Readonly<Record<string, OutboxEventType>> =
   'products/update': OUTBOX_EVENTS.product.updated,
   'products/delete': OUTBOX_EVENTS.product.deleted,
   'app/uninstalled': OUTBOX_EVENTS.merchant.uninstalled,
+  // M-9: app/scopes_update fires on toml-driven managed-installation
+  // scope re-consent. Mapped here for receive-side dispatch routing.
+  // EXCLUDED from `subscribeAllWebhooks` via `SUBSCRIBE_EXCLUDED_TOPICS`
+  // (see `admin/webhook-subscriptions.ts`) until APP_SCOPES_UPDATE is
+  // verified as a valid `WebhookSubscriptionTopic` GraphQL enum value
+  // on the dev store (I-1 enum-rejection class of bug). Receive path
+  // works regardless of subscription source — once a delivery arrives,
+  // `getOutboxEventForTopic` resolves it to `merchant.scopes_updated`
+  // and the drainer routes to `handleNoop` in v1.
+  'app/scopes_update': OUTBOX_EVENTS.merchant.scopes_updated,
 };
 
 /**
