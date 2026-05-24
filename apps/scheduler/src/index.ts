@@ -10,15 +10,21 @@
  *   4. Install SIGTERM / SIGINT handlers.
  *   5. Process runs indefinitely.
  *
- * Graceful shutdown (same lesson as the drainer):
- *   - worker.close() — DEFAULT graceful, waits for in-flight tick.
- *     Do NOT pass `true` (that's the force variant — aborts in-flight).
- *   - closeQueues() — closes shared Queue ioredis client.
- *   - disconnectPrisma() — releases DB pool.
+ * Graceful shutdown (Q-B1: parallel worker close via Promise.allSettled
+ * for per-worker error isolation + matching the drainer's batch-4
+ * pattern at `apps/drainer/src/index.ts`):
+ *   - rollupWorker.close() + sweepWorker.close() — PARALLEL via
+ *     `Promise.allSettled`. Each finishes its in-flight tick + refuses
+ *     new jobs (DEFAULT graceful close; do NOT pass `true` — that's the
+ *     force variant which aborts in-flight). Per-worker errors logged
+ *     but never block the rest of the shutdown.
+ *   - closeQueues() — closes the shared Queue ioredis client AFTER both
+ *     workers (workers may write back to the Queue handle during
+ *     in-flight finish).
+ *   - disconnectPrisma() — releases the DB pool LAST.
  *
- * Order: rollup worker → sweep worker → queues → prisma. Each step is
- * idempotent over double-call. Double-shutdown guard via `shuttingDown`
- * flag.
+ * Order: workers (parallel) → queues → prisma. Each step is idempotent
+ * over double-call. Double-shutdown guard via `shuttingDown` flag.
  */
 
 import { getLogger } from '@winback/logger';
@@ -65,18 +71,31 @@ async function main(): Promise<void> {
     shuttingDown = true;
     log.info({ signal }, 'scheduler: shutdown initiated');
 
-    try {
-      await rollupWorker.close();
+    // Q-B1 — PARALLEL worker close via Promise.allSettled. Both
+    // Workers own independent ioredis connections (no shared resource
+    // contention) so concurrent close is safe. Per-worker error
+    // isolation: if one close throws, the other still completes + we
+    // get separate log lines for each failure. Mirrors the drainer's
+    // batch-4 pattern (apps/drainer/src/index.ts).
+    const [rollupResult, sweepResult] = await Promise.allSettled([
+      rollupWorker.close(),
+      sweepWorker.close(),
+    ]);
+    if (rollupResult.status === 'rejected') {
+      log.error(
+        { err: rollupResult.reason },
+        'scheduler: rollup worker close threw',
+      );
+    } else {
       log.info('scheduler: rollup worker closed');
-    } catch (err) {
-      log.error({ err }, 'scheduler: rollup worker close threw');
     }
-
-    try {
-      await sweepWorker.close();
+    if (sweepResult.status === 'rejected') {
+      log.error(
+        { err: sweepResult.reason },
+        'scheduler: sweep worker close threw',
+      );
+    } else {
       log.info('scheduler: sweep worker closed');
-    } catch (err) {
-      log.error({ err }, 'scheduler: sweep worker close threw');
     }
 
     try {
