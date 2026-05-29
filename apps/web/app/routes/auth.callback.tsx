@@ -128,11 +128,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // `@shopify/shopify-app-session-storage-prisma` adapter; the adapter
     // calls `session.toObject()` internally, which only exists on the
     // class. Construction here is data-only; no method side effects.
+    //
+    // `state: ''` is INTENTIONAL. The SDK type
+    // (@shopify/shopify-api 11.14.1 `SessionParams.state: string`)
+    // requires a value here, but the field's documented purpose is the
+    // ONLINE OAuth code-flow re-validation via the SDK's
+    // `validateAuthCallback` helper — which we don't use (our chain is
+    // `verifyState` at step 3 + `verifyShopifyOAuthHmac` at step 4).
+    // For OFFLINE sessions (`isOnline: false`), the SDK's own flow has
+    // no `Session.state` read path. And by the time we reach this
+    // construction call, the OAuth state nonce arriving in the query
+    // string has already been HMAC-validated against the CSRF cookie
+    // (step 3) and is about to be cleared (the redirect's
+    // `clearStateCookie()` at step 9). Persisting the consumed nonce
+    // into the DB `Session.state` column would leave stale OAuth
+    // state floating around the row indefinitely with no reader —
+    // empty string is the type-valid signal that the field is unused.
+    // Workspace grep confirms zero readers of `session.state` /
+    // `offlineSession.state` outside this construction site.
     try {
       const offlineSession = new Session({
         id: `offline_${shop}`,
         shop,
-        state,
+        state: '',
         isOnline: false,
         scope: tokenResult.scope,
         accessToken: tokenResult.accessToken,
