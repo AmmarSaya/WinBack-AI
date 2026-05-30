@@ -1,4 +1,4 @@
-import { type LoaderFunctionArgs, json, redirect } from '@remix-run/node';
+import { type LoaderFunctionArgs, json } from '@remix-run/node';
 import { Link, useLoaderData, useSearchParams } from '@remix-run/react';
 import {
   Badge,
@@ -17,16 +17,12 @@ import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import {
   CustomerScoreRepository,
   type CustomerStateValue,
-  withSystemScope,
   withTenantScope,
 } from '@winback/db';
-import { getLogger } from '@winback/logger';
-import { isValidShopDomain } from '@winback/shopify';
 
+import { requireAdminAuth } from '~/services/admin-auth.server.js';
 import { getPrisma } from '~/services/db.server.js';
 import { withRequest } from '~/services/request-context.server.js';
-
-const log = getLogger('web.customers');
 
 const PAGE_SIZE = 50;
 
@@ -49,46 +45,26 @@ const ALL_STATES: readonly CustomerStateValue[] = [
  *   - `?cursor=<id>`       — opaque cursor (= prior page's last row's CustomerScore.id)
  *
  * Loader pattern mirrors `/settings`:
- *   1. system-scope Merchant lookup (we only have `shop` at this point)
- *   2. tenant-scope CustomerScoreRepository.listWithCustomer call
- * Both wrappers use async callbacks with explicit await — see design.md
- * + the ALS comment in `_index.tsx`.
+ *   1. `requireAdminAuth` — JWT-or-legacy shop validation + system-scope
+ *      Merchant lookup. See admin-auth.server.ts for the dual-path logic.
+ *   2. tenant-scope CustomerScoreRepository.listWithCustomer call. Async
+ *      callback with explicit await (ALS propagation; see _index.tsx).
  *
  * Soft-deleted customers are excluded by the repository's defensive
  * `customer.deletedAt: null` filter (Epic E UI data-layer batch).
  */
 export async function loader({ request }: LoaderFunctionArgs) {
   return withRequest(request, async () => {
+    const ctx = await requireAdminAuth(request, SYSTEM_SCOPE_REASONS.web.customers_lookup);
+
     const url = new URL(request.url);
-    const shop = url.searchParams.get('shop');
-    const host = url.searchParams.get('host') ?? '';
-
-    if (shop === null || !isValidShopDomain(shop)) {
-      return new Response('Missing shop', { status: 400 });
-    }
-
-    const merchant = await withSystemScope(
-      SYSTEM_SCOPE_REASONS.web.customers_lookup,
-      async () => {
-        return await getPrisma().merchant.findUnique({
-          where: { shop },
-          select: { id: true },
-        });
-      },
-    );
-
-    if (merchant === null) {
-      log.info({ shop }, 'customers: shop not installed, redirecting to /auth');
-      return redirect(`/auth?shop=${encodeURIComponent(shop)}`);
-    }
-
     const filterStates = parseFilterStates(url.searchParams.get('state'));
     const cursor = url.searchParams.get('cursor');
 
-    const result = await withTenantScope(merchant.id, async () => {
+    const result = await withTenantScope(ctx.merchantId, async () => {
       const repo = new CustomerScoreRepository(getPrisma());
       return await repo.listWithCustomer({
-        merchantId: merchant.id,
+        merchantId: ctx.merchantId,
         cursor,
         limit: PAGE_SIZE,
         ...(filterStates.length > 0 && { filterStates }),
@@ -100,8 +76,8 @@ export async function loader({ request }: LoaderFunctionArgs) {
     // for formatting.  `mCents` stays a string so display code can
     // convert via Number() without BigInt overflow risk.
     return json({
-      shop,
-      host,
+      shop: ctx.shop,
+      host: ctx.host,
       filterStates,
       rows: result.rows.map((row) => ({
         customerScoreId: row.customerScoreId,
