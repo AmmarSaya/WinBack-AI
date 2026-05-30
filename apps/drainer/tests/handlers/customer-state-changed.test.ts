@@ -40,6 +40,22 @@ vi.mock('@winback/shopify', async (importOriginal) => {
   };
 });
 
+// Q-H1 closure: capture warn-log emissions for the un-enriched-currency
+// observability assertions. The handler's module-scope
+// `const log = getLogger(...)` resolves at import time; the mock below
+// must hoist above the handler import to take effect.
+const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }));
+vi.mock('@winback/logger', () => ({
+  getLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: warnSpy,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+  }),
+}));
+
 import { AUDIT_ACTIONS } from '@winback/contracts';
 import type { OutboxEventRow, WinbackPrisma } from '@winback/db';
 import type { Queues } from '@winback/queue';
@@ -55,7 +71,13 @@ import type { DrainerContext } from '../../src/context.js';
 
 interface MockState {
   billing: { status: string } | null;
-  merchant: { name: string | null; currency: string | null; shop: string } | null;
+  merchant: {
+    name: string | null;
+    currency: string | null;
+    shop: string;
+    installedAt: Date;
+    shopDetailsFetchedAt: Date | null;
+  } | null;
   settings: { monthlyAiSpendCapCents: bigint; aiTone: unknown } | null;
   customer: { firstName: string | null; lastName: string | null } | null;
   spendBucketSumMicrocents: bigint;
@@ -91,7 +113,16 @@ function makeCtx(initial: Partial<MockState> = {}): {
     merchant:
       'merchant' in initial
         ? initial.merchant
-        : { name: 'Foo Store', currency: 'USD', shop: 'foo.myshopify.com' },
+        : {
+            name: 'Foo Store',
+            currency: 'USD',
+            shop: 'foo.myshopify.com',
+            // Default: enriched 1 minute ago. Tests can override
+            // shopDetailsFetchedAt to null + currency to null to
+            // exercise the un-enriched WARN log path.
+            installedAt: new Date('2026-06-01T00:00:00Z'),
+            shopDetailsFetchedAt: new Date('2026-06-01T00:01:00Z'),
+          },
     settings:
       'settings' in initial
         ? initial.settings
@@ -521,5 +552,97 @@ describe('handleCustomerStateChanged — Shopify recent-orders outage', () => {
     // marker since recentProducts is empty.
     const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
     expect(userPrompt).not.toContain('recent purchases included');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Q-H1 closure: un-enriched-currency WARN log (operator visibility)
+// ---------------------------------------------------------------------------
+
+describe('handleCustomerStateChanged — un-enriched-currency WARN log (Q-H1)', () => {
+  it('merchant.currency === null → log.warn fires with full operator context + AI prompt uses USD fallback', async () => {
+    warnSpy.mockClear();
+
+    // 5 minutes after install, enrichment hasn't completed yet.
+    // Realistic happy-path-but-enrichInstall-failed scenario.
+    const installedAt = new Date('2026-06-01T00:00:00Z');
+    const nowMs = installedAt.getTime() + 5 * 60_000;
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date(nowMs));
+
+    try {
+      const { ctx, state } = makeCtx({
+        merchant: {
+          name: 'Un-enriched Store',
+          currency: null, // ← THE FALLBACK TRIGGER
+          shop: 'un-enriched.myshopify.com',
+          installedAt,
+          shopDetailsFetchedAt: null, // ← never enriched
+        },
+      });
+      const row = makeRow({});
+
+      await handleCustomerStateChanged(ctx, row);
+
+      // (1) WARN log fires exactly once with the un-enriched-currency
+      // message + Q-S3 operator-context fields.
+      const warnCall = warnSpy.mock.calls.find((call) =>
+        String(call[1] ?? '').includes(
+          'merchant currency not enriched; falling back to USD',
+        ),
+      );
+      expect(warnCall).toBeDefined();
+      const [warnCtx, warnMessage] = warnCall as [Record<string, unknown>, string];
+
+      expect(warnCtx['eventId']).toBe('evt_1');
+      expect(warnCtx['merchantId']).toBe('m_1');
+      expect(warnCtx['shop']).toBe('un-enriched.myshopify.com');
+      expect(warnCtx['installedAt']).toBe(installedAt.toISOString());
+      expect(warnCtx['shopDetailsFetchedAt']).toBeNull();
+      expect(warnCtx['eventTrigger']).toBe('customer.state_changed');
+      // Q-S3 addition: timeSinceInstallMs lets operators distinguish
+      // "normal install window" (<10min) from "D3 sweep failing
+      // repeatedly" (>10min).
+      expect(warnCtx['timeSinceInstallMs']).toBe(5 * 60_000);
+      expect(warnMessage).toContain('D3 enrichment-sweep will heal');
+
+      // (2) The AI prompt still gets built — USD fallback IS the v1
+      // behaviour. We don't skip generation; we just log + fall back.
+      expect(state.aiGenerationRows).toHaveLength(1);
+      const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
+      // The prompt-builder renders currency into the spend context.
+      // 'USD' should appear somewhere downstream of the fallback.
+      expect(userPrompt).toContain('USD');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('merchant.currency populated → no WARN log; AI prompt uses merchant currency', async () => {
+    warnSpy.mockClear();
+
+    const { ctx, state } = makeCtx({
+      merchant: {
+        name: 'Enriched Store',
+        currency: 'EUR',
+        shop: 'enriched.myshopify.com',
+        installedAt: new Date('2026-06-01T00:00:00Z'),
+        shopDetailsFetchedAt: new Date('2026-06-01T00:00:30Z'),
+      },
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    // No un-enriched-currency WARN log on the happy path.
+    const unEnrichedWarn = warnSpy.mock.calls.find((call) =>
+      String(call[1] ?? '').includes('merchant currency not enriched'),
+    );
+    expect(unEnrichedWarn).toBeUndefined();
+
+    // Prompt uses the merchant's actual currency.
+    expect(state.aiGenerationRows).toHaveLength(1);
+    const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
+    expect(userPrompt).toContain('EUR');
   });
 });

@@ -1,4 +1,5 @@
 import { AUDIT_ACTIONS, OUTBOX_EVENTS } from '@winback/contracts';
+import { getLogger } from '@winback/logger';
 import { Prisma } from '@prisma/client';
 
 import { buildCustomerStateChangedPayload } from '../events/customer-state-changed.js';
@@ -12,6 +13,8 @@ import {
   type CustomerStateValue,
   type ResolvedCustomerScore,
 } from './scoring-math.js';
+
+const log = getLogger('db.customer-score.service');
 
 /**
  * CustomerScoreService — Epic E session 2.
@@ -109,10 +112,17 @@ export class CustomerScoreService {
 
     // -----------------------------------------------------------------------
     // (2) Read the merchant for currency + shop denormalization.
+    // `installedAt` + `shopDetailsFetchedAt` are selected for the
+    // un-enriched-currency WARN log below (operator visibility only).
     // -----------------------------------------------------------------------
     const merchant = await tx.merchant.findUnique({
       where: { id: merchantId },
-      select: { currency: true, shop: true },
+      select: {
+        currency: true,
+        shop: true,
+        installedAt: true,
+        shopDetailsFetchedAt: true,
+      },
     });
 
     if (merchant === null) {
@@ -125,8 +135,33 @@ export class CustomerScoreService {
     }
 
     // Per §S-11: snapshot currency at compute time.  Fall back to 'USD'
-    // when the merchant hasn't been enriched yet (Merchant.currency is
-    // nullable until the shop-details fetch lands).
+    // when the merchant hasn't been enriched yet.
+    //
+    // Q-H1 closure: the Merchant.currency enrichment IS implemented
+    // (D2 `handleMerchantInstalled` → `enrichInstall` at install time;
+    // D3 `runEnrichmentSweep` every 15 min for D2 failures). The 'USD'
+    // fallback fires only when scoring runs against a merchant whose
+    // enrichment hasn't completed yet — narrow window (seconds for
+    // happy-path; up to 10 minutes for D2-failed installs before D3
+    // catches up). Beyond 10 minutes the WARN log below means D3 is
+    // failing repeatedly + needs operator attention. See
+    // POINTS-TO-CONSIDER.md "Q-H1 — un-enriched-currency fallback
+    // observability" for the conditional M10 hard-block.
+    if (merchant.currency === null) {
+      log.warn(
+        {
+          merchantId,
+          shop: merchant.shop,
+          installedAt: merchant.installedAt.toISOString(),
+          shopDetailsFetchedAt:
+            merchant.shopDetailsFetchedAt?.toISOString() ?? null,
+          eventTrigger: 'scoring',
+          timeSinceInstallMs:
+            Date.now() - merchant.installedAt.getTime(),
+        },
+        'CustomerScoreService: merchant currency not enriched; falling back to USD for CustomerScore.currency snapshot — D3 enrichment-sweep will heal on next tick (>10min installs warrant operator check)',
+      );
+    }
     const currency = (merchant.currency ?? 'USD').toUpperCase();
 
     // -----------------------------------------------------------------------

@@ -152,9 +152,18 @@ export async function handleCustomerStateChanged(
 
     // STEP 4 (continued) — Merchant + MerchantSettings reads (also
     // outside any tx; the prompt builder needs name/currency/aiTone).
+    // `installedAt` + `shopDetailsFetchedAt` are selected for the
+    // un-enriched-currency WARN log below (operator visibility only —
+    // not consumed by the prompt builder).
     const merchant = await ctx.prisma.merchant.findUnique({
       where: { id: payload.merchantId },
-      select: { name: true, currency: true, shop: true },
+      select: {
+        name: true,
+        currency: true,
+        shop: true,
+        installedAt: true,
+        shopDetailsFetchedAt: true,
+      },
     });
     if (merchant === null) {
       log.warn(
@@ -320,12 +329,50 @@ export async function handleCustomerStateChanged(
     // psql edit). Drainer's per-row try/catch markFails the event;
     // M10 candidate is a softer fallback to `null` here.
     //
-    // Currency null fallback: Merchant.currency is `String?` in
-    // schema. Default to 'USD' for v1 — currency is display-only in
-    // the prompt ("USD 199.95"), not used for monetary math.
-    // POINTS-TO-CONSIDER follow-up: fetch + persist Merchant.currency
-    // at install time so this handler doesn't need the fallback.
+    // Currency null fallback: `Merchant.currency` is `String?` in
+    // the schema. Defaults to 'USD' for the AI prompt — currency is
+    // display-only ("USD 199.95"), not used for monetary math.
+    //
+    // The Q-H1 follow-up referenced in the original comment IS
+    // implemented: enrichment fetches `shop.currencyCode` via Shopify
+    // Admin API and writes it to `Merchant.currency` via two
+    // mechanisms (Q-H1 closure, this commit):
+    //
+    //   1. D2 — `handleMerchantInstalled` (apps/drainer/src/handlers/
+    //      merchant.ts) calls `enrichInstall` immediately after the
+    //      `merchant.installed` outbox event lands. Runs out-of-tx
+    //      (MARK_BEFORE_INVOKE), so within seconds of OAuth callback.
+    //   2. D3 — `runEnrichmentSweep` (apps/scheduler/src/handlers/
+    //      enrichment-sweep.ts) — every 15 min, retries enrichment
+    //      for merchants with `shopDetailsFetchedAt IS NULL AND
+    //      installedAt < NOW() - INTERVAL '10 minutes'`. Self-heals
+    //      D2 failures.
+    //
+    // The 'USD' fallback fires ONLY when this handler runs against a
+    // merchant whose enrichment hasn't completed yet — typically a
+    // narrow window (seconds for happy-path; up to 10 minutes for
+    // D2-failed installs before D3 catches up). Beyond 10 minutes,
+    // the WARN log below means D3 is failing repeatedly + needs
+    // operator attention. M10 follow-up (POINTS-TO-CONSIDER) tracks
+    // the conditional hard-block: if these WARN logs surface
+    // regularly post-launch, replace the fallback with a skip.
     const aiTone = parseAiTone(settings.aiTone);
+    if (merchant.currency === null) {
+      log.warn(
+        {
+          eventId: row.id,
+          merchantId: payload.merchantId,
+          shop: merchant.shop,
+          installedAt: merchant.installedAt.toISOString(),
+          shopDetailsFetchedAt:
+            merchant.shopDetailsFetchedAt?.toISOString() ?? null,
+          eventTrigger: 'customer.state_changed',
+          timeSinceInstallMs:
+            Date.now() - merchant.installedAt.getTime(),
+        },
+        'state_changed: merchant currency not enriched; falling back to USD for AI prompt — D3 enrichment-sweep will heal on next tick (>10min installs warrant operator check)',
+      );
+    }
     const promptCurrency = merchant.currency ?? 'USD';
     const prompt = buildWinbackPrompt({
       customer: {

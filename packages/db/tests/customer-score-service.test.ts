@@ -1,6 +1,21 @@
 import type { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
+// Q-H1 closure: capture warn-log emissions for the un-enriched-currency
+// observability assertion. The service's module-scope `getLogger` call
+// resolves at import time; the hoisted mock below replaces it.
+const { warnSpy } = vi.hoisted(() => ({ warnSpy: vi.fn() }));
+vi.mock('@winback/logger', () => ({
+  getLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: warnSpy,
+    error: vi.fn(),
+    fatal: vi.fn(),
+    trace: vi.fn(),
+  }),
+}));
+
 import type { WinbackPrisma } from '../src/client.js';
 import { AuditLogRepository } from '../src/repositories/audit-log.repository.js';
 import { CustomerScoreRepository } from '../src/repositories/customer-score.repository.js';
@@ -78,8 +93,21 @@ function mockCustomerFound(tx: MockTx, overrides: Record<string, unknown> = {}):
   });
 }
 
-function mockMerchantFound(tx: MockTx, currency: string | null = 'USD'): void {
-  tx.merchant.findUnique.mockResolvedValue({ currency, shop: SHOP });
+// Q-H1: mockMerchantFound now provides installedAt + shopDetailsFetchedAt
+// so the service's un-enriched-currency WARN log can read them. Defaults
+// model the happy path (enriched 1 minute after install).
+function mockMerchantFound(
+  tx: MockTx,
+  currency: string | null = 'USD',
+  installedAt: Date = new Date('2026-05-19T12:00:00.000Z'),
+  shopDetailsFetchedAt: Date | null = new Date('2026-05-19T12:01:00.000Z'),
+): void {
+  tx.merchant.findUnique.mockResolvedValue({
+    currency,
+    shop: SHOP,
+    installedAt,
+    shopDetailsFetchedAt,
+  });
 }
 
 /** Five-customer cohort spanning the full quintile range. */
@@ -564,10 +592,16 @@ describe('CustomerScoreService.recompute — side-effect details on state change
     expect(auditCall.data.targetId).toBe(CUSTOMER_ID);
   });
 
-  it('Merchant.currency null → snapshots "USD" as the row currency', async () => {
+  it('Merchant.currency null → snapshots "USD" as the row currency + emits Q-H1 WARN log with operator context', async () => {
+    warnSpy.mockClear();
+
+    // 5 minutes after install — un-enriched window.
+    const installedAt = new Date('2026-05-20T11:55:00.000Z');
+    const shopDetailsFetchedAt = null;
+
     const { service } = makeService();
     mockCustomerFound(tx, { state: 'active' });
-    mockMerchantFound(tx, null); // no currency yet
+    mockMerchantFound(tx, null, installedAt, shopDetailsFetchedAt);
     tx.$queryRaw.mockResolvedValue(fullCohort({ rDays: 60, fCount: 4, mCents: 20_000n }));
 
     await withTenantScope(MERCHANT_ID, async () =>
@@ -579,7 +613,54 @@ describe('CustomerScoreService.recompute — side-effect details on state change
       }),
     );
 
+    // Fallback applied to the snapshot column.
     expect(tx.customerScore.upsert.mock.calls[0]![0].create.currency).toBe('USD');
+
+    // Q-H1: WARN log fires with full operator context (Q-S3 shape).
+    const warnCall = warnSpy.mock.calls.find((call) =>
+      String(call[1] ?? '').includes(
+        'merchant currency not enriched; falling back to USD',
+      ),
+    );
+    expect(warnCall).toBeDefined();
+    const [warnCtx, warnMessage] = warnCall as [Record<string, unknown>, string];
+
+    expect(warnCtx['merchantId']).toBe(MERCHANT_ID);
+    expect(warnCtx['shop']).toBe(SHOP);
+    expect(warnCtx['installedAt']).toBe(installedAt.toISOString());
+    expect(warnCtx['shopDetailsFetchedAt']).toBeNull();
+    expect(warnCtx['eventTrigger']).toBe('scoring');
+    // Q-S3: timeSinceInstallMs lets operators distinguish "normal
+    // install window" (<10min, D3 hasn't tried yet) from "D3 sweep
+    // failing repeatedly" (>10min, sweep should have healed).
+    expect(typeof warnCtx['timeSinceInstallMs']).toBe('number');
+    expect(warnCtx['timeSinceInstallMs']).toBeGreaterThanOrEqual(0);
+    expect(warnMessage).toContain('D3 enrichment-sweep will heal');
+  });
+
+  it('Merchant.currency populated → no Q-H1 WARN log on happy path', async () => {
+    warnSpy.mockClear();
+
+    const { service } = makeService();
+    mockCustomerFound(tx, { state: 'active' });
+    mockMerchantFound(tx, 'EUR');
+    tx.$queryRaw.mockResolvedValue(fullCohort({ rDays: 60, fCount: 4, mCents: 20_000n }));
+
+    await withTenantScope(MERCHANT_ID, async () =>
+      service.recompute({
+        merchantId: MERCHANT_ID,
+        customerId: CUSTOMER_ID,
+        tx: tx as unknown as Prisma.TransactionClient,
+        now: NOW,
+      }),
+    );
+
+    expect(tx.customerScore.upsert.mock.calls[0]![0].create.currency).toBe('EUR');
+
+    const unEnrichedWarn = warnSpy.mock.calls.find((call) =>
+      String(call[1] ?? '').includes('merchant currency not enriched'),
+    );
+    expect(unEnrichedWarn).toBeUndefined();
   });
 
   it('reports cohortSize + durationMs (S-10 observability)', async () => {
