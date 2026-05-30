@@ -26,7 +26,9 @@ export {
 export {
   ShopifyHmacError,
   ShopifyInvalidShopError,
+  ShopifySessionTokenError,
   ShopifyTokenExchangeError,
+  type ShopifySessionTokenErrorReason,
 } from './errors.js';
 
 // --- Shop domain validation ------------------------------------------------
@@ -46,12 +48,29 @@ export {
 } from './webhook-topics.js';
 
 // --- OAuth -----------------------------------------------------------------
+// Legacy code-grant helpers — used by the existing /auth + /auth.callback
+// routes. Coexist with the M-8 Token Exchange path below until those
+// routes are decommissioned (separate session per Phase 1 scope).
 export {
   buildAuthRedirectUrl,
   exchangeCodeForToken,
   type AuthRedirectArgs,
   type TokenExchangeResult,
 } from './oauth.js';
+
+// --- M-8 Token Exchange + session-token verification -----------------------
+// New auth surface for the Token Exchange migration. See ./auth/index.ts
+// for the public surface + ./auth/decode-session-token.ts +
+// ./auth/token-exchange.ts for the wrapped SDK helpers.
+export {
+  RequestedTokenType,
+  _resetShopifyApiInstanceForTests,
+  decodeAndVerifySessionToken,
+  getShopifyApiInstance,
+  tokenExchangeForShop,
+  type TokenExchangeForShopArgs,
+  type TokenExchangeForShopResult,
+} from './auth/index.js';
 
 // --- Session storage -------------------------------------------------------
 export { EncryptedSessionStorage } from './session-storage.js';
