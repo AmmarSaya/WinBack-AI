@@ -132,6 +132,27 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 - **Recommended fix:** Add a one-paragraph docstring on the `OutboxRepository.markFailed` / `markDeadLettered` methods explaining that `attempts` is retry-count, not dispatch-count. Optionally rename the column to `retryCount` in a future migration if the audit determines the column-name confusion outweighs migration cost.
 - **Action:** Cosmetic, M10 hardening. No production exposure; the DLQ + ceiling logic remains correct.
 
+### Q-H1 [LOW] — Un-enriched-currency 'USD' fallback observability + conditional hard-block follow-up
+- **Source:** Q-H1 closure pass (`feat/merchant-currency-at-install` branch). Surfaced during a re-audit of the stale "POINTS-TO-CONSIDER follow-up" comments in `apps/drainer/src/handlers/customer-state-changed.ts:323-327` + `packages/db/src/services/customer-score.service.ts:127-130`.
+- **Status:** Currency enrichment IS implemented. Two existing mechanisms persist `Merchant.currency` from Shopify:
+  - **D2 — `handleMerchantInstalled`** (`apps/drainer/src/handlers/merchant.ts:70`) calls `enrichInstall` immediately when the `merchant.installed` outbox event drains. Runs out-of-tx (MARK_BEFORE_INVOKE) so it completes within seconds of OAuth callback on the happy path.
+  - **D3 — `runEnrichmentSweep`** (`apps/scheduler/src/handlers/enrichment-sweep.ts`) every 15 min, retries `enrichInstall` for merchants with `shopDetailsFetchedAt IS NULL AND installedAt < NOW() - INTERVAL '10 minutes'`. Self-heals D2 failures.
+- **Remaining footgun (rare failure window):** if D2's `enrichInstall` call fails (network, Shopify hiccup, scope issue) AND a `customer.state_changed` event fires before D3 catches up (>10 minutes after install), the AI prompt + the `CustomerScore.currency` snapshot fall back to `'USD'` regardless of the merchant's actual shop currency. For a non-US merchant in the failure window: prompts say "USD 199.95" when they should say "EUR 199.95" / etc.
+- **Observability shipped (this entry's closing commit):** both fallback paths now emit `log.warn` with full operator context:
+  ```
+  {
+    merchantId, shop, installedAt (ISO),
+    shopDetailsFetchedAt (null on the failure path),
+    eventTrigger: 'customer.state_changed' | 'scoring',
+    timeSinceInstallMs: Date.now() - installedAt
+  }
+  ```
+  The `timeSinceInstallMs` field lets operators distinguish:
+  - `< 10 * 60_000` (10 min): normal install window, D3 hasn't tried yet — no action needed.
+  - `>= 10 * 60_000` (10 min): D3 sweep has tried at least once and failed → operator investigates the merchant manually (run `enrichInstall` directly or check Shopify Admin API health for the shop).
+- **Trigger condition for M10 hard-block (this entry's open task):** if these WARN logs appear in production with `timeSinceInstallMs >= 600_000` (>10 min) at any non-trivial rate (say, more than 1 per week per active merchant cohort), implement the hard-block — replace the USD fallback with an early-return in both handlers (AI generation skipped; scoring skipped) until `Merchant.currency` is populated. Trade-off: never wrong currency vs sometimes no message for un-enriched merchants. Acceptable trade if WARN logs prove this happens regularly; over-engineered if they stay quiet.
+- **Action:** ship the WARN log observability now (this PR). Watch logs post-launch. Implement the hard-block ONLY if the trigger condition above fires. The conditional approach avoids over-engineering for an edge case that may never materialize at scale.
+
 ### CI-1 [LOW] — `drift-check` is advisory, not required, on PRs
 - **Source:** Branch protection rollout for `ci.yml` (commit `4c30b56`).
 - **Issue:** `migrate-diff.yml` filters on `paths: [packages/db/prisma/schema.prisma, packages/db/prisma/migrations/**]` — so the `drift-check` job doesn't run on non-DB PRs.  Adding it to the required-status-checks list traps non-DB PRs at "Expected — waiting for status to be reported" forever.  We removed it from the required list (functional unblock) so it now runs + is visible on DB-touching PRs but is advisory, not blocking.  A DB-touching PR with a failing drift-check COULD be merged if the developer ignores the visible red ❌.
