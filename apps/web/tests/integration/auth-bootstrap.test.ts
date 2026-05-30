@@ -1,5 +1,3 @@
-import { createHmac } from 'node:crypto';
-
 import type { LoaderFunctionArgs } from '@remix-run/node';
 import { Session } from '@shopify/shopify-api';
 import {
@@ -11,6 +9,8 @@ import {
   it,
   vi,
 } from 'vitest';
+
+import { makeSessionToken } from './jwt-helper.js';
 
 // vi.mock factory is hoisted above all module-level code, so `spies` must
 // also be hoisted via `vi.hoisted()` — otherwise the factory tries to write
@@ -46,67 +46,14 @@ import {
 
 // ---------------------------------------------------------------------------
 // Test env — provided by scripts/web-test.mjs's TEST_SHOPIFY_ENV block.
+// JWT construction lives in ./jwt-helper.ts (shared with loaders.test.ts).
 // ---------------------------------------------------------------------------
-
-const API_KEY = process.env.SHOPIFY_API_KEY;
-const API_SECRET = process.env.SHOPIFY_API_SECRET;
-if (API_KEY === undefined || API_KEY.length === 0) {
-  throw new Error('SHOPIFY_API_KEY not set — run via `pnpm web:test`.');
-}
-if (API_SECRET === undefined || API_SECRET.length === 0) {
-  throw new Error('SHOPIFY_API_SECRET not set — run via `pnpm web:test`.');
-}
 
 const SHOP = 'winback-test.myshopify.com';
 const SHOP_OTHER = 'other-shop.myshopify.com';
 const HOST = 'admin.shopify.com/store/winback-test';
 const MOCK_TOKEN = 'shpat_test_token_for_harness';
 const MOCK_NEW_SCOPE = 'read_customers,read_orders,write_discounts';
-
-// ---------------------------------------------------------------------------
-// JWT construction — real HS256 JWTs against the test SHOPIFY_API_SECRET.
-// Mirrors packages/shopify/tests/auth/decode-session-token.test.ts so a
-// future SDK upgrade that changes JWT semantics fails here too.
-// ---------------------------------------------------------------------------
-
-function base64url(input: Buffer | string): string {
-  const buf = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
-  return buf
-    .toString('base64')
-    .replace(/=+$/, '')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_');
-}
-
-interface JwtOverrides {
-  readonly aud?: string;
-  readonly dest?: string;
-  readonly iss?: string;
-  readonly exp?: number;
-  readonly nbf?: number;
-  readonly secret?: string;
-}
-
-function makeSessionToken(shop: string = SHOP, overrides: JwtOverrides = {}): string {
-  const now = Math.floor(Date.now() / 1000);
-  const payload = {
-    iss: overrides.iss ?? `https://${shop}/admin`,
-    dest: overrides.dest ?? `https://${shop}`,
-    aud: overrides.aud ?? API_KEY,
-    sub: '12345',
-    exp: overrides.exp ?? now + 60,
-    nbf: overrides.nbf ?? now - 60,
-    iat: now,
-    jti: `test-jti-${String(now)}-${Math.random().toString(36).slice(2)}`,
-    sid: 'test-sid',
-  };
-  const header = base64url(JSON.stringify({ alg: 'HS256', typ: 'JWT' }));
-  const body = base64url(JSON.stringify(payload));
-  const sig = base64url(
-    createHmac('sha256', overrides.secret ?? API_SECRET!).update(`${header}.${body}`).digest(),
-  );
-  return `${header}.${body}.${sig}`;
-}
 
 // ---------------------------------------------------------------------------
 // Loader invocation — mirrors oauth-install / oauth-callback patterns.
@@ -176,7 +123,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
   // -------------------------------------------------------------------------
 
   it('1. fresh install: valid JWT → 302 to /?shop=&host=, Merchant + Settings + Subscription + Session rows created, webhooks subscribed', async () => {
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST }),
     );
@@ -219,7 +166,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
     const existingId = await createTestMerchant(SHOP);
     await preCreateSession(SHOP, 'read_orders');
 
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST }),
     );
@@ -244,7 +191,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
     await createTestMerchant(SHOP);
     await preCreateSession(SHOP, 'read_orders');
 
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST }),
     );
@@ -314,7 +261,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
   it('6. Token Exchange 401 → 500 with retry hint; **completeInstall NOT called** (explicit spy assertion)', async () => {
     mockTokenExchangeFailure();
 
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST }),
     );
@@ -344,7 +291,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
       throw new Error('simulated Prisma write failure');
     });
 
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST }),
     );
@@ -366,7 +313,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
   it('8. subscribeAllWebhooks userError → 302 to /?shop=&host= (NOT /auth, per Q-A1); Merchant + Session still persisted', async () => {
     mockSubscribeFailure();
 
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST }),
     );
@@ -417,7 +364,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
   // -------------------------------------------------------------------------
 
   it('10. invalid shop param → 400, no DB writes (id_token branch never reached)', async () => {
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const res = await invokeAuthLoader(
       buildBootstrapRequest({ shop: 'not a real shop', idToken: token }),
     );
@@ -440,7 +387,7 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
   // -------------------------------------------------------------------------
 
   it('12. concurrent first-install race: Promise.all of 2 parallel /auth?id_token requests → both 302, Merchant = 1, Session = 1, subscribeAllWebhooks called 1 or 2 times (both OK), no orphans', async () => {
-    const token = makeSessionToken();
+    const token = makeSessionToken(SHOP);
     const [res1, res2] = await Promise.all([
       invokeAuthLoader(buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST })),
       invokeAuthLoader(buildBootstrapRequest({ shop: SHOP, idToken: token, host: HOST })),

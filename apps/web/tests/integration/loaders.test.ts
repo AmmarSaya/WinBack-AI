@@ -6,6 +6,7 @@ import { loader as customersLoader } from '../../app/routes/customers.js';
 import { loader as indexLoader } from '../../app/routes/_index.js';
 import { loader as settingsLoader } from '../../app/routes/settings.js';
 
+import { makeSessionToken } from './jwt-helper.js';
 import { assertRead, createTestMerchant, getTestClient, resetDb } from './setup.js';
 
 /**
@@ -337,5 +338,248 @@ describe('admin loaders (integration, real Postgres)', () => {
   it('customers: missing shop param → 400', async () => {
     const res = await invokeCustomers(urlFor('/customers'));
     expect(res.status).toBe(400);
+  });
+});
+
+// ===========================================================================
+// JWT auth path (M-8 Commit 3) — Authorization: Bearer header or
+// ?id_token= query. Coexistence with the legacy ?shop-only path above is
+// preserved; these tests cover the new contract surface only.
+// ===========================================================================
+
+function jwtRequest(
+  path: string,
+  opts: { shop?: string; bearer?: string; idToken?: string; host?: string } = {},
+): Request {
+  const url = new URL(`https://test.invalid${path}`);
+  if (opts.shop !== undefined) url.searchParams.set('shop', opts.shop);
+  if (opts.idToken !== undefined) url.searchParams.set('id_token', opts.idToken);
+  if (opts.host !== undefined) url.searchParams.set('host', opts.host);
+  const headers = new Headers();
+  if (opts.bearer !== undefined) {
+    headers.set('authorization', `Bearer ${opts.bearer}`);
+  }
+  return new Request(url.toString(), { method: 'GET', headers });
+}
+
+describe('admin loaders — JWT auth path (M-8 Commit 3, integration)', () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  afterAll(async () => {
+    await getTestClient().$disconnect();
+  });
+
+  // -------------------------------------------------------------------------
+  // L-1. Valid Bearer JWT + Merchant exists → 200
+  // -------------------------------------------------------------------------
+
+  it('L-1. _index: valid Bearer JWT + Merchant exists → 200 json with shop + installedAt', async () => {
+    await createTestMerchant(SHOP_A);
+    const token = makeSessionToken(SHOP_A);
+
+    const res = await invokeIndex(jwtRequest('/', { shop: SHOP_A, bearer: token }));
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { shop: string; installedAt: string };
+    expect(body.shop).toBe(SHOP_A);
+    expect(typeof body.installedAt).toBe('string');
+  });
+
+  // -------------------------------------------------------------------------
+  // L-2. Valid id_token query + Merchant exists → 200
+  // -------------------------------------------------------------------------
+
+  it('L-2. _index: valid ?id_token query + Merchant exists → 200', async () => {
+    await createTestMerchant(SHOP_A);
+    const token = makeSessionToken(SHOP_A);
+
+    const res = await invokeIndex(jwtRequest('/', { shop: SHOP_A, idToken: token }));
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { shop: string };
+    expect(body.shop).toBe(SHOP_A);
+  });
+
+  // -------------------------------------------------------------------------
+  // L-3. Bearer JWT overrides id_token query (precedence)
+  //
+  // Bearer JWT is for SHOP_A (correct); id_token query is for SHOP_B
+  // (wrong dest for the expected shop SHOP_A). If query were preferred,
+  // verification would fail with wrong_dest and we'd see 401. 200 ==
+  // Bearer was selected, query was ignored.
+  // -------------------------------------------------------------------------
+
+  it('L-3. _index: Bearer JWT (valid, correct dest) overrides id_token query (valid, wrong dest) → 200', async () => {
+    await createTestMerchant(SHOP_A);
+    const bearer = makeSessionToken(SHOP_A);
+    const queryToken = makeSessionToken(SHOP_B); // dest=SHOP_B, would fail against SHOP_A
+
+    const res = await invokeIndex(
+      jwtRequest('/', { shop: SHOP_A, bearer, idToken: queryToken }),
+    );
+
+    expect(res.status).toBe(200);
+  });
+
+  // -------------------------------------------------------------------------
+  // L-3b. SECURITY LOCK — Bearer present but invalid signature, plus
+  // a VALID id_token query → 401 (no fallback to query).
+  //
+  // Locks the downgrade-attack defence: a bad header doesn't degrade to
+  // "try query instead". Once the client sends a Bearer credential, that
+  // commits them to the header-strict path. Any failure surfaces as 401.
+  // -------------------------------------------------------------------------
+
+  it('L-3b. _index: Bearer with invalid signature + valid id_token query → 401 (no fallback)', async () => {
+    await createTestMerchant(SHOP_A);
+    const badBearer = makeSessionToken(SHOP_A, { secret: 'a-completely-different-wrong-secret' });
+    const validQuery = makeSessionToken(SHOP_A);
+
+    const res = await invokeIndex(
+      jwtRequest('/', { shop: SHOP_A, bearer: badBearer, idToken: validQuery }),
+    );
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string; reason: string };
+    expect(body).toEqual({ error: 'session_token_invalid', reason: 'invalid_jwt' });
+  });
+
+  // -------------------------------------------------------------------------
+  // L-4. Valid JWT + no Merchant row → 302 to /auth?shop=X&id_token=<JWT>
+  // (Branch A re-bootstrap, idempotent — Q-B5).
+  // -------------------------------------------------------------------------
+
+  it('L-4. _index: valid JWT + NO Merchant → 302 to /auth?shop=X&id_token=<JWT> (Branch A re-bootstrap, Q-B5)', async () => {
+    const token = makeSessionToken(SHOP_A);
+
+    const res = await invokeIndex(jwtRequest('/', { shop: SHOP_A, bearer: token }));
+
+    expect(res.status).toBe(302);
+    const location = res.headers.get('location');
+    expect(location).toBe(
+      `/auth?shop=${encodeURIComponent(SHOP_A)}&id_token=${encodeURIComponent(token)}`,
+    );
+  });
+
+  // -------------------------------------------------------------------------
+  // L-5. Invalid JWT (bad signature) → 401 JSON
+  // -------------------------------------------------------------------------
+
+  it('L-5. _index: invalid Bearer JWT (bad signature) → 401 JSON `{ reason: "invalid_jwt" }`', async () => {
+    await createTestMerchant(SHOP_A);
+    const token = makeSessionToken(SHOP_A, { secret: 'a-different-secret' });
+
+    const res = await invokeIndex(jwtRequest('/', { shop: SHOP_A, bearer: token }));
+
+    expect(res.status).toBe(401);
+    expect(res.headers.get('content-type')).toMatch(/application\/json/);
+    const body = (await res.json()) as { error: string; reason: string };
+    expect(body).toEqual({ error: 'session_token_invalid', reason: 'invalid_jwt' });
+  });
+
+  // -------------------------------------------------------------------------
+  // L-6. Cross-shop replay (JWT dest=A, query.shop=B) → 401 wrong_dest
+  // -------------------------------------------------------------------------
+
+  it('L-6. _index: cross-shop replay — JWT dest=A, query.shop=B → 401 `{ reason: "wrong_dest" }`', async () => {
+    await createTestMerchant(SHOP_B);
+    const token = makeSessionToken(SHOP_A); // dest=SHOP_A
+
+    const res = await invokeIndex(jwtRequest('/', { shop: SHOP_B, bearer: token }));
+
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { error: string; reason: string };
+    expect(body).toEqual({ error: 'session_token_invalid', reason: 'wrong_dest' });
+  });
+
+  // -------------------------------------------------------------------------
+  // L-7. JWT present but no ?shop query → 400
+  // -------------------------------------------------------------------------
+
+  it('L-7. _index: Bearer JWT present but no ?shop query → 400 (no anchor for cross-shop verification)', async () => {
+    const token = makeSessionToken(SHOP_A);
+
+    const res = await invokeIndex(jwtRequest('/', { bearer: token }));
+
+    expect(res.status).toBe(400);
+  });
+
+  // -------------------------------------------------------------------------
+  // L-8. JWT path on /customers
+  // -------------------------------------------------------------------------
+
+  it('L-8. /customers: valid Bearer JWT + Merchant exists → 200 with rows + nextCursor', async () => {
+    await createTestMerchant(SHOP_A);
+    const token = makeSessionToken(SHOP_A);
+
+    const res = await invokeCustomers(
+      jwtRequest('/customers', { shop: SHOP_A, bearer: token }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      shop: string;
+      rows: unknown[];
+      nextCursor: string | null;
+    };
+    expect(body.shop).toBe(SHOP_A);
+    expect(body.rows).toEqual([]);
+    expect(body.nextCursor).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------
+  // L-9. JWT path on /settings
+  // -------------------------------------------------------------------------
+
+  it('L-9. /settings: valid Bearer JWT + Merchant exists → 200 with settings fields', async () => {
+    await createTestMerchant(SHOP_A);
+    const token = makeSessionToken(SHOP_A);
+
+    const res = await invokeSettings(
+      jwtRequest('/settings', { shop: SHOP_A, bearer: token }),
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { attributionDirectWindowDays: number };
+    expect(typeof body.attributionDirectWindowDays).toBe('number');
+  });
+
+  // -------------------------------------------------------------------------
+  // L-10. Tenant isolation under the JWT path — two merchants, distinct
+  // JWTs in parallel. Same ALS-leak detector as the legacy-path test
+  // above, but exercised through the JWT verification entry.
+  // -------------------------------------------------------------------------
+
+  it('L-10. /settings: tenant isolation under JWT — two merchants in parallel, distinct loader returns', async () => {
+    const idA = await createTestMerchant(SHOP_A);
+    const idB = await createTestMerchant(SHOP_B);
+
+    await withSystemScope('test.distinct_settings_jwt', async () => {
+      await getTestClient().merchantSettings.update({
+        where: { merchantId: idA },
+        data: { attributionDirectWindowDays: 77 },
+      });
+      await getTestClient().merchantSettings.update({
+        where: { merchantId: idB },
+        data: { attributionDirectWindowDays: 33 },
+      });
+    });
+
+    const tokenA = makeSessionToken(SHOP_A);
+    const tokenB = makeSessionToken(SHOP_B);
+
+    const [resA, resB] = await Promise.all([
+      invokeSettings(jwtRequest('/settings', { shop: SHOP_A, bearer: tokenA })),
+      invokeSettings(jwtRequest('/settings', { shop: SHOP_B, bearer: tokenB })),
+    ]);
+
+    expect(resA.status).toBe(200);
+    expect(resB.status).toBe(200);
+    const bodyA = (await resA.json()) as { attributionDirectWindowDays: number };
+    const bodyB = (await resB.json()) as { attributionDirectWindowDays: number };
+    expect(bodyA.attributionDirectWindowDays).toBe(77);
+    expect(bodyB.attributionDirectWindowDays).toBe(33);
   });
 });

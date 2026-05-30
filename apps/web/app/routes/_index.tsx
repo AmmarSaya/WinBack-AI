@@ -1,78 +1,51 @@
-import { type LoaderFunctionArgs, json, redirect } from '@remix-run/node';
+import { type LoaderFunctionArgs, json } from '@remix-run/node';
 import { Link, useLoaderData, useSearchParams } from '@remix-run/react';
 import { BlockStack, Card, Layout, Page, Text } from '@shopify/polaris';
 import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import {
   CustomerScoreRepository,
   type CustomerStateValue,
-  withSystemScope,
   withTenantScope,
 } from '@winback/db';
-import { getLogger } from '@winback/logger';
-import { isValidShopDomain } from '@winback/shopify';
 
+import { requireAdminAuth } from '~/services/admin-auth.server.js';
 import { getPrisma } from '~/services/db.server.js';
 import { withRequest } from '~/services/request-context.server.js';
-
-const log = getLogger('web.index');
 
 /**
  * Embedded landing page.
  *
  * Two responsibilities:
- *   1. Install guard — confirm a Merchant row exists for the shop; redirect
- *      to /auth otherwise.  Pre-tenant lookup uses withSystemScope.
+ *   1. Install guard via `requireAdminAuth` — verifies the session-token
+ *      JWT (preferring `Authorization: Bearer` header, falling back to
+ *      `?id_token=` query) when present; falls back to the legacy
+ *      shop-only Merchant lookup during the coexistence window.
+ *      Missing-merchant redirects route to /auth Branch A (with id_token,
+ *      idempotent re-bootstrap) or Branch B (no id_token, code-grant)
+ *      depending on whether a JWT was provided.
  *   2. State-band summary — six cards, one per CustomerState band, each
- *      linking through to `/customers?state=<band>`.  Driven by
+ *      linking through to `/customers?state=<band>`. Driven by
  *      CustomerScoreRepository.getStateBandCounts under withTenantScope.
  *
- * CRITICAL (unchanged from prior version): both scope callbacks are
- * `async` with explicit `await` for the Prisma call.  A sync callback
+ * CRITICAL (unchanged from prior version): the withTenantScope callback
+ * is `async` with explicit `await` for the Prisma call. A sync callback
  * that returns the PrismaPromise ends ALS.run BEFORE the promise
  * resolves and the Prisma extension throws TenantScopeError when its
- * query hook fires.  Locked at design.md.
- *
- * History: this loader used to return only `{ shop, installedAt, host }`
- * and the body was a 2×2 grid of empty-state cards naming the unlocking
- * epic.  Epic E session 2 landed the data pipe end-to-end; the empty
- * cards are now real state-band counts.
+ * query hook fires. Locked at design.md.
  */
 export async function loader({ request }: LoaderFunctionArgs) {
   return withRequest(request, async () => {
-    const url = new URL(request.url);
-    const shop = url.searchParams.get('shop');
-    const host = url.searchParams.get('host') ?? '';
+    const ctx = await requireAdminAuth(request, SYSTEM_SCOPE_REASONS.web.index_lookup);
 
-    if (shop === null || !isValidShopDomain(shop)) {
-      // `throw` (not `return`) so Remix routes this through the error
-      // boundary instead of attempting to render the default component
-      // with `undefined` loader data. The component's `data.stateBandCounts`
-      // access would throw a less-helpful TypeError under SSR. Hit in
-      // production by Render's `HEAD /` health probe (no query params).
-      throw new Response('Missing shop', { status: 400 });
-    }
-
-    const merchant = await withSystemScope(SYSTEM_SCOPE_REASONS.web.index_lookup, async () => {
-      return await getPrisma().merchant.findUnique({
-        where: { shop },
-        select: { id: true, shop: true, installedAt: true },
-      });
-    });
-
-    if (merchant === null) {
-      log.info({ shop }, 'index: shop not installed, redirecting to /auth');
-      return redirect(`/auth?shop=${encodeURIComponent(shop)}`);
-    }
-
-    const stateBandCounts = await withTenantScope(merchant.id, async () => {
+    const stateBandCounts = await withTenantScope(ctx.merchantId, async () => {
       const repo = new CustomerScoreRepository(getPrisma());
-      return await repo.getStateBandCounts(merchant.id);
+      return await repo.getStateBandCounts(ctx.merchantId);
     });
 
     return json({
-      shop: merchant.shop,
-      installedAt: merchant.installedAt.toISOString(),
-      host,
+      shop: ctx.shop,
+      installedAt: ctx.installedAt.toISOString(),
+      host: ctx.host,
       stateBandCounts,
     });
   });
