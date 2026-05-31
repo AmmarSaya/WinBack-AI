@@ -10,7 +10,7 @@ overrides:
   vitest: 2.1.9
   zod: 3.25.76
   '@shopify/shopify-api': 11.14.1
-  '@shopify/shopify-app-remix': 3.8.1
+  '@shopify/shopify-app-remix': 4.2.0
   '@shopify/shopify-app-session-storage': 3.0.20
   '@shopify/shopify-app-session-storage-prisma': 5.2.3
   openai: 6.39.1
@@ -183,8 +183,8 @@ importers:
         specifier: 11.14.1
         version: 11.14.1
       '@shopify/shopify-app-remix':
-        specifier: 3.8.1
-        version: 3.8.1(@remix-run/node@2.17.4(typescript@5.9.3))(@remix-run/react@2.17.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(@shopify/polaris@13.9.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
+        specifier: 4.2.0
+        version: 4.2.0(@remix-run/node@2.17.4(typescript@5.9.3))(@remix-run/react@2.17.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(@shopify/polaris@13.9.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
       '@shopify/shopify-app-session-storage-prisma':
         specifier: 5.2.3
         version: 5.2.3(@prisma/client@5.22.0(prisma@5.22.0))(@shopify/shopify-api@11.14.1)(@shopify/shopify-app-session-storage@3.0.20(@shopify/shopify-api@11.14.1))(prisma@5.22.0)
@@ -1459,8 +1459,9 @@ packages:
   '@shopify/shopify-api@11.14.1':
     resolution: {integrity: sha512-5VyQZyNhMN2PJLosA6OytYL1ENmdpqslcTcr1jFjGn6sEuxhXtLav+I74ygdL2iTdjEud4aDBZycgDVxPIH+uw==}
 
-  '@shopify/shopify-app-remix@3.8.1':
-    resolution: {integrity: sha512-QqcAo6N3H+OVjn2im2fsVnt6L7a2LSf0ag2Kl8uxOAo0w4d25dC3lSopB3aFxWNYT78KAddQ+gDV1eS5lbDZWA==}
+  '@shopify/shopify-app-remix@4.2.0':
+    resolution: {integrity: sha512-+76ZiDSs3ta0dR5SYDhnsTbW4pX6WvrsawLbZDCw6FKT48BBva4RFF4qwjgJu611FeXpfV0nHRQqUifLZurAAw==}
+    engines: {node: '>=20.10.0'}
     peerDependencies:
       '@remix-run/node': '*'
       '@remix-run/react': '*'
@@ -5607,7 +5608,7 @@ snapshots:
     transitivePeerDependencies:
       - encoding
 
-  '@shopify/shopify-app-remix@3.8.1(@remix-run/node@2.17.4(typescript@5.9.3))(@remix-run/react@2.17.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(@shopify/polaris@13.9.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(typescript@5.9.3)':
+  '@shopify/shopify-app-remix@4.2.0(@remix-run/node@2.17.4(typescript@5.9.3))(@remix-run/react@2.17.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3))(@shopify/polaris@13.9.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1))(react@18.3.1)(typescript@5.9.3)':
     dependencies:
       '@remix-run/react': 2.17.4(react-dom@18.3.1(react@18.3.1))(react@18.3.1)(typescript@5.9.3)
       '@remix-run/server-runtime': 2.17.4(typescript@5.9.3)
@@ -5615,9 +5616,9 @@ snapshots:
       '@shopify/shopify-api': 11.14.1
       '@shopify/shopify-app-session-storage': 3.0.20(@shopify/shopify-api@11.14.1)
       '@shopify/storefront-api-client': 1.0.10
+      compare-versions: 6.1.1
       isbot: 5.1.40
       react: 18.3.1
-      semver: 7.8.0
     optionalDependencies:
       '@remix-run/node': 2.17.4(typescript@5.9.3)
       '@shopify/polaris': 13.9.5(react-dom@18.3.1(react@18.3.1))(react@18.3.1)
