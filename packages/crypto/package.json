@@ -22,6 +22,6 @@
     "@winback/errors": "workspace:*"
   },
   "devDependencies": {
-    "vitest": "2.1.9"
+    "vitest": "4.1.7"
   }
 }
