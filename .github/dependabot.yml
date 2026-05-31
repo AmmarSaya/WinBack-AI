@@ -20,6 +20,20 @@ updates:
       # bullmq + ioredis together, override ioredis to a single version
       # workspace-wide, or wait for bullmq to update its ioredis pin.
       - dependency-name: "ioredis"
+      # React + react-dom + @types/react/-dom — DO NOT bump independently.
+      # React 19 requires Polaris 14 + Remix 3 (or Remix 2.20+ once it
+      # widens peerDeps). Polaris 13.9.5 + Remix 2.17.4 both pin
+      # react: ^18.0.0 in their peerDeps; bumping React alone crashes
+      # react-dom@18 at module load (TypeError: Cannot read properties
+      # of undefined (reading 'ReactCurrentDispatcher')) because React
+      # 19 removed the private internals react-dom@18 reads.
+      #
+      # Re-evaluate as a dedicated coupled-upgrade session (per
+      # POINTS-TO-CONSIDER.md item 11.10's Polaris audit).
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "@types/react"
+      - dependency-name: "@types/react-dom"
     groups:
       npm-minor-and-patch:
         patterns:
