@@ -48,7 +48,7 @@
     "cli:outbox:dead-letter": "pnpm --filter @winback/cli-app outbox:dead-letter"
   },
   "devDependencies": {
-    "@types/node": "^20.14.10",
+    "@types/node": "^25.9.1",
     "eslint": "^9.17.0",
     "eslint-import-resolver-typescript": "^4.4.4",
     "eslint-plugin-import": "^2.31.0",
