@@ -67,7 +67,7 @@
       "@shopify/shopify-app-remix": "3.8.1",
       "@shopify/shopify-app-session-storage": "3.0.20",
       "@shopify/shopify-app-session-storage-prisma": "5.2.3",
-      "openai": "4.104.0",
+      "openai": "6.39.1",
       "@anthropic-ai/sdk": "0.100.1"
     }
   }
