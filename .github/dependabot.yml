@@ -34,6 +34,33 @@ updates:
       - dependency-name: "react-dom"
       - dependency-name: "@types/react"
       - dependency-name: "@types/react-dom"
+      # @shopify/* app family — DO NOT bump independently. The 4 packages
+      # below form a coupling unit; their majors move together AND they
+      # transitively require the React/Polaris/Remix/Prisma chain to
+      # upgrade in lockstep.
+      #
+      # Coupling map (verified 2026-06-01):
+      #   - @shopify/shopify-app-remix 4.x is the root: direct deps pin
+      #     @shopify/shopify-api ^13.0.0 + @shopify/shopify-app-session-
+      #     storage ^5.0.0, forcing the three sibling packages.
+      #   - shopify-app-remix 4.x transitively requires React 19 via
+      #     @remix-run/react@2.17.4+ (peerDep react ^18.0.0 today; the
+      #     react/-dom/@types/react/-dom entries above share this gate).
+      #   - React 19 requires Polaris 14 (POINTS-TO-CONSIDER 11.10).
+      #   - shopify-app-session-storage-prisma 9.x additionally pins
+      #     @prisma/client + prisma ^6.19.0 — adds Prisma 5 → 6 to chain.
+      #
+      # Full coupled set (move together or not at all):
+      #   shopify-api, shopify-app-remix, shopify-app-session-storage,
+      #   shopify-app-session-storage-prisma, react, react-dom,
+      #   @types/react, @types/react-dom, @shopify/polaris,
+      #   @remix-run/react family, prisma, @prisma/client.
+      #
+      # Re-evaluate as a dedicated coupled-upgrade session.
+      - dependency-name: "@shopify/shopify-api"
+      - dependency-name: "@shopify/shopify-app-remix"
+      - dependency-name: "@shopify/shopify-app-session-storage"
+      - dependency-name: "@shopify/shopify-app-session-storage-prisma"
     groups:
       npm-minor-and-patch:
         patterns:
