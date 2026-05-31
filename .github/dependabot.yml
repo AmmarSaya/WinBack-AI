@@ -82,6 +82,33 @@ updates:
       # empirical verification matrix (all 4 integration suites +
       # workspace unit + per-call-site vi.restoreAllMocks audit).
       - dependency-name: "vitest"
+      # prisma + @prisma/client — DO NOT bump independently.
+      #
+      # Pinned at 5.22.0 via pnpm.overrides because
+      # @shopify/shopify-app-session-storage-prisma@5.2.3 declares
+      # peerDep "prisma: ^5.22.0, @prisma/client: ^5.22.0". This
+      # is the same coupling chain documented in commit abe6415
+      # (Shopify-family freeze) — Prisma 5 → 6 is the Prisma half
+      # of that deferred work.
+      #
+      # Additional v7 (current latest) cost beyond v6:
+      #   - Driver adapter migration (@prisma/adapter-pg) at 2
+      #     PrismaClient instantiation sites in packages/db/src/
+      #     client.ts
+      #   - datasource.url removal from schema.prisma → new
+      #     prisma.config.ts at workspace root
+      #   - Explicit env-load in scripts/{db,drainer,web,queue}-
+      #     test.mjs for `prisma` CLI invocations
+      #   - SSL default change (silently-ignored invalid certs
+      #     now rejected) — verify test container config
+      #
+      # No Dependabot PR exists today; this entry is preventive.
+      #
+      # Unfreeze condition: dedicated coupled-upgrade session
+      # encompassing Polaris 14 + Remix 3 + React 19 + Shopify
+      # family + Prisma 6 (+ optionally 7).
+      - dependency-name: "prisma"
+      - dependency-name: "@prisma/client"
     groups:
       npm-minor-and-patch:
         patterns:
