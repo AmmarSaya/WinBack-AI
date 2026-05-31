@@ -61,6 +61,27 @@ updates:
       - dependency-name: "@shopify/shopify-app-remix"
       - dependency-name: "@shopify/shopify-app-session-storage"
       - dependency-name: "@shopify/shopify-app-session-storage-prisma"
+      # vitest — DO NOT bump independently.
+      #
+      # Audit findings (Phase 1 of M11.x sweep, 2026-06-01):
+      #   - Migration 2 → 4 is mechanically small: 4 integration
+      #     configs need poolOptions.forks.singleFork → maxWorkers +
+      #     isolate transition (~12 lines net).
+      #   - Our vi.restoreAllMocks/vi.hoisted/vi.mock patterns are
+      #     already v4-compatible (40+ test files unaffected by the
+      #     documented semantic shifts).
+      #   - No external coupled-upgrade (vitest 4 stands alone).
+      #
+      # Reason for deferral: vitest IS the verification surface for
+      # the remaining override-sweep work (zod #8, prisma #9).
+      # Migrating it mid-sweep would compromise our ability to verify
+      # those bumps. The vitest 4 migration deserves a dedicated
+      # session AFTER the sweep completes.
+      #
+      # Unfreeze condition: dedicated half-day session with full
+      # empirical verification matrix (all 4 integration suites +
+      # workspace unit + per-call-site vi.restoreAllMocks audit).
+      - dependency-name: "vitest"
     groups:
       npm-minor-and-patch:
         patterns:
