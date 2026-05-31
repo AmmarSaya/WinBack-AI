@@ -8,6 +8,18 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      # ioredis 5.10 → 5.11 (or any later bump) produces cross-version type
+      # conflicts in the workspace lockfile: bullmq's ConnectionOptions
+      # type resolves to ioredis@5.10.x via a transitive path while a
+      # direct dependency in packages/queue + apps/drainer + apps/scheduler
+      # resolves to ioredis@5.11.x. CI build fails with TS2322 errors
+      # across 6 files when both versions coexist.
+      #
+      # Re-evaluate as a dedicated PR in a future session: either pin
+      # bullmq + ioredis together, override ioredis to a single version
+      # workspace-wide, or wait for bullmq to update its ioredis pin.
+      - dependency-name: "ioredis"
     groups:
       npm-minor-and-patch:
         patterns:
