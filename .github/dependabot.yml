@@ -109,6 +109,30 @@ updates:
       # family + Prisma 6 (+ optionally 7).
       - dependency-name: "prisma"
       - dependency-name: "@prisma/client"
+      # vite — DO NOT bump independently.
+      #
+      # Blocked by FOUR independent constraints (any one defers;
+      # confirmed 2026-06-02 against PR #77 vite 5.4.21 → 8.0.14):
+      #   1. vitest@2.1.9 hard-depends on vite ^5.0.0 (direct
+      #      `dependencies`, not peerDep — stronger constraint).
+      #      Frozen via pnpm.overrides; see vitest block above +
+      #      commit 3397493.
+      #   2. @remix-run/dev@2.15 peerDep vite ^5.1.0. Part of
+      #      Chain A (React/Polaris/Remix freeze); see react-family
+      #      block above + commit 154c3d2.
+      #   3. vite 8 engines.node requires ^20.19.0 || >=22.12.0.
+      #      CI + local run Node 20.11.0.
+      #   4. Empirical: vite 8 config loader imports `styleText`
+      #      from node:util (added Node 20.12.0) — CI fails
+      #      deterministically at vitest config load on 20.11.0.
+      #
+      # Vite is the build infra for BOTH Remix (apps/web) AND every
+      # vitest config across the workspace (12 vitest.config.ts
+      # files load via vite). Unfreezing requires vitest 2→4
+      # (relaxes blocker 1) + Chain A's Remix 2→3 (relaxes blocker
+      # 2) + a Node version bump (relaxes 3+4). Lands after or
+      # alongside those.
+      - dependency-name: "vite"
     groups:
       npm-minor-and-patch:
         patterns:
