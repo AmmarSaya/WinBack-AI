@@ -230,7 +230,7 @@ Reference exemplars (override + per-package + lockfile in one commit): `7266138`
 | `prisma` | `5.22.0` | KEEP+IGNORE | preventive freeze (Chain B) | `a7a874a` |
 | `@prisma/client` | `5.22.0` | KEEP+IGNORE | preventive freeze (Chain B) | `a7a874a` |
 
-The 3 BUMPed packages are NOT in `.github/dependabot.yml`'s ignore block — Dependabot continues proposing minor/patch updates for them. The 7 KEEP+IGNORE packages each have a matching ignore entry. The 12-entry ignore list also covers `ioredis` + 4 React-family packages that are NOT pinned via overrides (see Chain A); STEP G verified the 12 entries across 5 comment blocks reconcile cleanly.
+The 3 BUMPed packages are NOT in `.github/dependabot.yml`'s ignore block — Dependabot continues proposing minor/patch updates for them. The 7 KEEP+IGNORE packages each have a matching ignore entry. The 13-entry ignore list also covers `ioredis` + 4 React-family packages + `vite` that are NOT pinned via overrides (see Chain A and the vite cross-cutting freeze below). STEP G verified the initial 12-entry / 5-comment-block consolidation; the `vite` freeze (confirmed 2026-06-02 against PR #77) adds a 13th entry under its own 6th comment block.
 
 ### Deferred coupled-upgrade chains
 
@@ -252,6 +252,8 @@ Chain B **has Chain A as a precondition** (cannot proceed until Chain A clears) 
 - `@shopify/shopify-app-session-storage-prisma@9.x` pins `@prisma/client + prisma ^6.19.0` → adds the Prisma 5 → 6 driver-adapter migration on top of the Shopify-family bump.
 - Frozen packages: `@shopify/shopify-api`, `@shopify/shopify-app-remix`, `@shopify/shopify-app-session-storage`, `@shopify/shopify-app-session-storage-prisma`, `prisma`, `@prisma/client`.
 - Unfreezing requires Chain A complete + a dedicated session for Prisma 5 → 6. Cross-references: `.github/dependabot.yml` comment blocks (Shopify family + Prisma family) for the full coupling map; commits `abe6415` + `a7a874a` for the original freeze rationale.
+
+**Cross-cutting freeze — `vite`** (added 2026-06-02 after PR #77 triage). Vite is the build infra for both Remix (`apps/web`) and every `vitest.config.ts` across the workspace, so it is blocked by **two independent freezes simultaneously**: (1) `vitest@2.1.9` hard-depends on `vite ^5.0.0` (the vitest freeze; commit `3397493`); (2) `@remix-run/dev@2.15`'s vite peerDep `^5.1.0` (Chain A's Remix half; commit `154c3d2`). A Node engine bump is also required (vite 8 needs Node ≥20.19.0; CI runs 20.11.0). See `.github/dependabot.yml`'s vite block for the four-blocker map; unfreezing folds into the vitest + Chain-A sessions.
 
 ### Workflow rules (locked 2026-06-01)
 
