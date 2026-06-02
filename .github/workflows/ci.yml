@@ -60,6 +60,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Fail-fastest: catches drifted pnpm.overrides BEFORE the ~60s install
+      # and ~90s build burn. Pure Node — uses the runner's pre-installed
+      # Node 20.x; no setup-node / pnpm required for this step.
+      # See scripts/check-override-alignment.mjs header + POINTS-TO-CONSIDER.md M11.x.
+      - name: Check pnpm.overrides alignment
+        run: node ./scripts/check-override-alignment.mjs
+
       - uses: pnpm/action-setup@v3
         with:
           version: 9

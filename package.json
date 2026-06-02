@@ -17,6 +17,8 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
+    "lint:overrides": "node ./scripts/check-override-alignment.mjs",
+    "test:overrides": "node --test ./scripts/check-override-alignment.test.mjs",
     "db:migrate:dev": "pnpm --filter @winback/db migrate:dev",
     "db:migrate:deploy": "pnpm --filter @winback/db migrate:deploy",
     "db:migrate:status": "pnpm --filter @winback/db migrate:status",
