@@ -178,6 +178,93 @@ _All pre-Epic-E blockers resolved as of `756c489`. Section retained for future u
 
 ---
 
+## 🔒 M11.x — pnpm.overrides discipline + Dependabot's blind spot
+
+The override sweep of 2026-06-01 closed a class of bugs Dependabot cannot see. This section codifies the policy + workflow that prevents the class from returning, and inventories the current state of `pnpm.overrides` so future-us can find the deferred upgrade work without grepping commit history.
+
+### What this section is NOT
+- NOT a comprehensive dependency strategy doc. The per-block comments in `.github/dependabot.yml` remain the source-of-truth for *why* each ignore exists.
+- NOT a coupled-upgrade plan. Unfreezing Chain A or Chain B (see below) is its own dedicated session, not a deliverable of this entry.
+
+### Why this exists
+PR #66 (a Dependabot `npm-minor-and-patch` group) bumped `@anthropic-ai/sdk` from `0.65.0` to `0.100.1` in `packages/ai/package.json`. The bump merged green. The `pnpm.overrides` entry for `@anthropic-ai/sdk` stayed at `0.65.0`. `pnpm install` then resolved `@anthropic-ai/sdk` to **`0.65.0`** — the override's pinned version, not the bumped per-package version. The "merged" PR was a runtime no-op invisible to anyone reading the lockfile (the lockfile correctly recorded the override's resolution; nothing distinguished "override won" from "per-package and override agreed"). Caught only because the 2026-06-01 sweep audited every override against every per-package declaration.
+
+### The bug class
+`pnpm.overrides` is a workspace-root authority that pins a version regardless of what any per-package declaration says. It exists for legitimate reasons (security pins, transitive deduplication, coupling enforcement). Dependabot:
+
+- **CAN** propose bumps to per-package `dependencies` / `devDependencies` / `peerDependencies` entries.
+- **CANNOT** read or modify `pnpm.overrides`. It doesn't parse the `pnpm` key in `package.json`.
+
+The silent-no-op pattern: per-package gets bumped to N, override stays at M, lockfile resolves to M, "merged" Dependabot PR has zero runtime effect. There is no warning, no surface in `pnpm install` output, no diff in the lockfile that distinguishes the two outcomes. Detection requires explicitly comparing the two declarations — the job of the STEP F CI guardrail.
+
+### The CI guardrail (STEP F, `d57675a`)
+`scripts/check-override-alignment.mjs` walks root + every workspace `package.json`, and for each `pnpm.overrides` entry compares against every per-package declaration in `dependencies` / `devDependencies` / `peerDependencies`. Strict exact-string equality: ranges (`^x.y.z`) in a per-package declaration against an exact override are FAIL.
+
+- Local: `pnpm lint:overrides`
+- Tests: `pnpm test:overrides` (12 cases via `node:test`, zero new deps)
+- CI: separate workflow step `Check pnpm.overrides alignment` runs immediately after `actions/checkout@v4`, before `pnpm/action-setup@v3` — drift fails the workflow in ~5 seconds, before the ~60s install + ~90s build would otherwise burn.
+
+### How to bump a pinned package (the M11.x sync pattern)
+
+1. **Decide the target version.** Verify the upstream changelog for breaking changes. For coupled packages, verify the whole chain moves together (see Chain A / Chain B below).
+2. **Edit in ONE coupled commit:** root `pnpm.overrides` + EVERY per-package `dependencies` / `devDependencies` / `peerDependencies` declaration of the same key, anywhere in the workspace. Dependabot CANNOT produce this commit shape — you produce it by hand.
+3. **`pnpm install`** to refresh the lockfile; include the lockfile in the same commit.
+4. **Verify** via the load-bearing gate: `pnpm drainer:test` for AI / data / schema packages; `pnpm -r test` (unit baseline) for everything else.
+
+After `d57675a` (STEP F CI guardrail) is live on main, a per-package bump WITHOUT a corresponding override sync will FAIL CI at `lint:overrides` BEFORE `pnpm install` runs. This is the contract the guardrail enforces — you cannot accidentally create another PR #66 silent no-op.
+
+Reference exemplars (override + per-package + lockfile in one commit): `7266138` (`@anthropic-ai/sdk`), `1393448` (`openai`), `21b7963` (`zod`).
+
+### Current pin inventory (as of 2026-06-02, main @ `d57675a`)
+
+| Package | Pinned | Status | Last action | Commit |
+|---|---|---|---|---|
+| `@anthropic-ai/sdk` | `0.100.1` | BUMPed | sync 0.65.0 → 0.100.1 | `7266138` |
+| `openai` | `6.39.1` | BUMPed | sync 4.104.0 → 6.39.1 | `1393448` |
+| `zod` | `4.4.3` | BUMPed | sync 3.25.76 → 4.4.3 | `21b7963` |
+| `vitest` | `2.1.9` | KEEP+IGNORE | sequencing freeze; dedicated v4 migration session deferred | `3397493` |
+| `@shopify/shopify-api` | `11.14.1` | KEEP+IGNORE | coupled chain (Chain B) | `abe6415` |
+| `@shopify/shopify-app-remix` | `3.8.1` | KEEP+IGNORE | coupled chain (Chain B) | `abe6415` |
+| `@shopify/shopify-app-session-storage` | `3.0.20` | KEEP+IGNORE | coupled chain (Chain B) | `abe6415` |
+| `@shopify/shopify-app-session-storage-prisma` | `5.2.3` | KEEP+IGNORE | coupled chain (Chain B) | `abe6415` |
+| `prisma` | `5.22.0` | KEEP+IGNORE | preventive freeze (Chain B) | `a7a874a` |
+| `@prisma/client` | `5.22.0` | KEEP+IGNORE | preventive freeze (Chain B) | `a7a874a` |
+
+The 3 BUMPed packages are NOT in `.github/dependabot.yml`'s ignore block — Dependabot continues proposing minor/patch updates for them. The 7 KEEP+IGNORE packages each have a matching ignore entry. The 12-entry ignore list also covers `ioredis` + 4 React-family packages that are NOT pinned via overrides (see Chain A); STEP G verified the 12 entries across 5 comment blocks reconcile cleanly.
+
+### Deferred coupled-upgrade chains
+
+Two upgrade chains are deliberately frozen. They are NOT planned work for any current session; unfreezing either is its own multi-session effort.
+
+**Chain A — React 19 + Polaris 14 + Remix 3**
+
+- Polaris 13.9.5 pins `react ^18.0.0` in its peerDep.
+- `@remix-run/react@2.17.4` pins `react ^18.0.0` in its peerDep.
+- Bumping React alone crashes `react-dom@18` at module load (React 19 removed the private internals `react-dom@18` reads).
+- Frozen packages: `react`, `react-dom`, `@types/react`, `@types/react-dom`, `@shopify/polaris`, the `@remix-run/*` family.
+- Unfreezing requires a dedicated session including the Polaris 13 → 14 migration audit (`POST-EPIC-F-CONSCIOUS-DECISION.md` §11 item 11.10).
+
+**Chain B — Shopify family + Prisma 6**
+
+Chain B **has Chain A as a precondition** (cannot proceed until Chain A clears) AND **additionally requires Prisma 6** migration. The dependency direction is one-way: Chain A can be unfrozen without Chain B; Chain B cannot be unfrozen without Chain A.
+
+- `@shopify/shopify-app-remix@4.x` transitively requires React 19 via `@remix-run/react@2.17.4+`'s peerDep → blocked by Chain A.
+- `@shopify/shopify-app-session-storage-prisma@9.x` pins `@prisma/client + prisma ^6.19.0` → adds the Prisma 5 → 6 driver-adapter migration on top of the Shopify-family bump.
+- Frozen packages: `@shopify/shopify-api`, `@shopify/shopify-app-remix`, `@shopify/shopify-app-session-storage`, `@shopify/shopify-app-session-storage-prisma`, `prisma`, `@prisma/client`.
+- Unfreezing requires Chain A complete + a dedicated session for Prisma 5 → 6. Cross-references: `.github/dependabot.yml` comment blocks (Shopify family + Prisma family) for the full coupling map; commits `abe6415` + `a7a874a` for the original freeze rationale.
+
+### Workflow rules (locked 2026-06-01)
+
+These rules are non-negotiable for any future override / dependency / multi-package work.
+
+1. **Click GitHub's "Rebase and merge" button. Never local rebase+push to main.** The PR is the audit artifact; local rebase + push bypasses the audit trail and breaks the merge button. (Locked after the PR #63 incident.)
+2. **`pnpm.overrides` bumps require coupled commits.** Override + every per-package declaration + lockfile in ONE commit. Dependabot cannot couple these; the human-led M11.x sync pattern is the substitute. STEP F's `lint:overrides` enforces this at CI time.
+3. **Per-step audit gate non-negotiable.** Phase 1 surface (data) → user verdict → Phase 2 execute → Phase 3 verify → commit. No batching multiple packages into one Phase 2; structural coupling (e.g. the Shopify family decision) is the only exception, and even there each package is audited as its own Phase 1 first.
+4. **Drainer integration suite is the LOAD-BEARING runtime gate for AI / data / schema package bumps.** Unit tests don't exercise real Postgres + schema validation on fixture payloads + an AI worker exercising the SDK. Integration does. Used as the gate for the `@anthropic-ai/sdk`, `openai`, and `zod` sync commits.
+5. **Empirical resolution beats documentation audit when feasible.** Zod 4's Phase 1 estimated ~25–35 lines of mechanical migration; Phase 2 proved zero (v3 idioms ship as functional aliases in v4). Run the test matrix before assuming the documented "deprecated" needs immediate refactor.
+
+---
+
 ## 📚 Learning Points — Standing Knowledge
 
 ### 16. Multi-Tenant Failure Mode in Production
