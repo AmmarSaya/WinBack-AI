@@ -169,11 +169,27 @@ Render env vars are masked by default in dashboard + logs. No need to toggle a "
 
 ### Health check
 
-`winback-ai-web` only. Default Render health check hits `HEAD /`. The `/_index` route correctly returns 400 for requests without `?shop=xxx&host=xxx` query params — Render interprets this as unhealthy + may cycle the container.
+`winback-ai-web` only. Two routes now exist (B5):
 
-**Mitigation:** Render dashboard → `winback-ai-web` → **Settings** → **Health Check Path** → set to **empty/blank** (disables health checks). The service stays up regardless; webhook ingest reliability is what matters, and webhooks don't depend on health-check status.
+- **`/healthz`** — pure process-liveness ping. No I/O. Returns 200 as long as the Node process is responding. Untouched in B5.
+- **`/readyz`** — comprehensive readiness probe. Extended in B5. Behavior:
+  - **503 (don't route traffic):** Postgres `SELECT 1` fails OR Redis `PING` fails. These are the ONLY conditions that trigger 503 — 503 is reserved exclusively for the load balancer's "stop routing" signal.
+  - **200 with `warnings[]` in JSON body:** outbox DLQ depth > 5 (warn) or > 50 (critical); outbox stall age > 5 min (warn) or > 15 min (critical). These are **operator-alert signals, NOT routing signals**. Even at CRITICAL thresholds the status stays 200; the escalation lives in the warning text, not the HTTP status.
+  - **200 clean:** all nominal. Body shape `{ "status": "ok", "checks": {...} }`.
 
-Future: add a dedicated `/healthz` route that returns 200 with a DB ping. That can become the health check path. Not yet implemented.
+**Render dashboard wiring (operator task, post-merge):** Settings → **Health Check Path** → `/readyz`. Configure uptime/notify alert against the same path so 503 → page-on-call.
+
+**Critical limitation — surface explicitly:** Render's uptime alert keys on HTTP status by default. The DLQ + stall warnings live in the response BODY, not the status. So a status-only alert configured at `/readyz` catches Postgres / Redis outages (503) but does **NOT** catch DLQ backlog or stall escalations (200-with-warnings).
+
+If Render's alert config can be made to inspect response body content (some uptime monitors support this; verify in Render dashboard before assuming), point it at the `warnings[]` field. If Render CANNOT alert on body content, the DLQ + stall operator-alerting via `/readyz` is structurally incomplete — accept that gap and use a separate mechanism:
+
+- a scheduled log-based check (BullMQ repeatable job that runs the same query and emits a structured warning log; cheap to ship), or
+- a follow-up `/operatorz` route that 503s on DLQ as a routing-style alert (semantically a misuse of 503, but works around the body-content-alert gap), or
+- an external monitor (Better Uptime, UptimeRobot, etc.) that does body content parsing.
+
+Decide based on what Render's UI actually supports; do NOT silently assume it can do body-content matching.
+
+The previous `/_index` health-check gotcha (Render's default `HEAD /` against the embedded-admin index returns 400 → unhealthy + container cycles) is resolved by switching Health Check Path to `/readyz`.
 
 ### Known Render-specific gotchas (with their resolutions)
 
