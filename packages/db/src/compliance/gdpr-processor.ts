@@ -323,15 +323,30 @@ export interface ProcessShopRedactArgs {
  * at the final Merchant delete. The schema's CASCADE FKs make any
  * particular order safe; this ordering just bounds the per-step impact.
  */
-const SHOP_REDACT_TABLES_IN_ORDER = [
+// Exported so the registry-shape test can compare set-completeness against
+// the schema (B1). Ordering is operational, not correctness — see comment
+// block above; the test asserts SET equality, never positions.
+//
+// Insertion principle (per source comment above, "child-most relations
+// first to minimize the cascade fan-out"):
+//   - message, aiGeneration, customerScore → BEFORE customer (FK to Customer)
+//   - message → BEFORE aiGeneration (FK to AiGeneration)
+//   - aiSpendBucket → standalone (FK only to Merchant)
+// B1 additions 2026-06-05 (audit L3-H2): closes the GDPR shop-redact PII
+// survival risk for Epic E session 2 + Epic F batch 1 tables.
+export const SHOP_REDACT_TABLES_IN_ORDER = [
   'orderLineItem',
   'order',
+  'message',         // B1 — FK to AiGeneration + Customer + Merchant
+  'aiGeneration',    // B1 — FK to Customer + Merchant
+  'customerScore',   // B1 — FK to Customer + Merchant
   'productVariant',
   'product',
   'customer',
   'outboxEvent',
   'idempotencyKey',
   'backfillJob',
+  'aiSpendBucket',   // B1 — FK to Merchant only
   'merchantSettings',
   'billingSubscription',
 ] as const;

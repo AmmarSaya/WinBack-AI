@@ -67,15 +67,24 @@ function makeInitialState(): MockState {
     merchant: null,
     customers: [],
     orderCustomerIdUpdates: [],
+    // NOTE: this mock mirrors SHOP_REDACT_TABLES_IN_ORDER and IS the L4-H1
+    // anti-pattern the audit flagged (mock mirrors implementation; future
+    // drift slips silently through). Kept aligned for B1 to ship the
+    // registry-shape coverage; the structural fix is B2 (real-Postgres
+    // GDPR integration test) — see PRE-EPIC-G-AUDIT.md L4-H1.
     tenantTables: {
       orderLineItem: { rows: [] },
       order: { rows: [] },
+      message: { rows: [] },         // B1 addition
+      aiGeneration: { rows: [] },    // B1 addition
+      customerScore: { rows: [] },   // B1 addition
       productVariant: { rows: [] },
       product: { rows: [] },
       customer: { rows: [] },
       outboxEvent: { rows: [] },
       idempotencyKey: { rows: [] },
       backfillJob: { rows: [] },
+      aiSpendBucket: { rows: [] },   // B1 addition
       merchantSettings: { rows: [] },
       billingSubscription: { rows: [] },
     },
@@ -239,6 +248,25 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
     findMany: buildTenantDelegate('backfillJob').findMany,
     deleteMany: buildTenantDelegate('backfillJob').deleteMany,
   };
+  // B1 additions — match SHOP_REDACT_TABLES_IN_ORDER. Standard
+  // single-column-id tables; use the same buildTenantDelegate pattern as
+  // their Epic D peers above.
+  const message = {
+    findMany: buildTenantDelegate('message').findMany,
+    deleteMany: buildTenantDelegate('message').deleteMany,
+  };
+  const aiGeneration = {
+    findMany: buildTenantDelegate('aiGeneration').findMany,
+    deleteMany: buildTenantDelegate('aiGeneration').deleteMany,
+  };
+  const customerScore = {
+    findMany: buildTenantDelegate('customerScore').findMany,
+    deleteMany: buildTenantDelegate('customerScore').deleteMany,
+  };
+  const aiSpendBucket = {
+    findMany: buildTenantDelegate('aiSpendBucket').findMany,
+    deleteMany: buildTenantDelegate('aiSpendBucket').deleteMany,
+  };
   const merchantSettings = buildOneToOneDelegate('merchantSettings');
   const billingSubscription = buildOneToOneDelegate('billingSubscription');
 
@@ -247,11 +275,15 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
     customer: customerDelegate,
     order: orderDelegate,
     orderLineItem,
+    message,
+    aiGeneration,
+    customerScore,
     productVariant,
     product,
     outboxEvent,
     idempotencyKey: idempotencyKeyDelegate,
     backfillJob,
+    aiSpendBucket,
     merchantSettings,
     billingSubscription,
   };
@@ -433,12 +465,16 @@ describe('processShopRedact', () => {
       tenantTables: {
         orderLineItem: { rows: [] },
         order: { rows: ['o1', 'o2', 'o3'] },
+        message: { rows: ['m1'] },             // B1
+        aiGeneration: { rows: ['ag1'] },       // B1
+        customerScore: { rows: ['cs1'] },      // B1
         productVariant: { rows: ['pv1'] },
         product: { rows: ['p1'] },
         customer: { rows: ['c1', 'c2'] },
         outboxEvent: { rows: ['ob1'] },
         idempotencyKey: { rows: ['k1'] },
         backfillJob: { rows: [] },
+        aiSpendBucket: { rows: ['sb1'] },      // B1
         merchantSettings: { rows: ['ms1'] },
         billingSubscription: { rows: [] },
       },

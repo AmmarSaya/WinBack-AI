@@ -53,6 +53,7 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'OrderLineItem',
   'OutboxEvent',
   'IdempotencyKey',
+  'BackfillJob',   // Epic D — per-merchant backfill job rows. Added B1 2026-06-05 (audit L2-M1).
   'AiGeneration',  // Epic F batch 1 — one row per LLM call
   'Message',       // Epic F batch 1 — minimal draft row; Epic G extends
   'AiSpendBucket', // Epic F batch 1 — daily per-merchant LLM spend ledger
