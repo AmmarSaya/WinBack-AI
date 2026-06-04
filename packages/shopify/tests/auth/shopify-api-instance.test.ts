@@ -1,5 +1,5 @@
 /**
- * Unit tests for `getShopifyApiInstance` (M-8 Commit 1).
+ * Unit tests for `getShopifyApiInstance` (M-8 Commit 1; reframed B6).
  *
  * Locks the two invariants documented in
  * `packages/shopify/src/auth/shopify-api-instance.ts`:
@@ -10,19 +10,37 @@
  *      would not be observed by the wrappers (since they'd construct
  *      a fresh, un-spied instance internally).
  *
- *   2. DRIFT IMPOSSIBILITY between this module's instance and the
- *      `shopifyApp({...})` instance constructed independently in
- *      `apps/web/app/shopify.server.ts`. The argument is that BOTH
- *      pull from the same `getShopifyConfig()` singleton; we exercise
- *      this by constructing a parallel `shopifyApi({...})` instance
- *      from the SAME getShopifyConfig and asserting the SDK reads the
- *      same effective config back.
+ *   2. DRIFT IMPOSSIBILITY against future re-introduction of a
+ *      parallel Shopify construction. We assert that any `Shopify`
+ *      instance constructed from `getShopifyConfig()` produces config
+ *      identical to the memoised `getShopifyApiInstance()`. We
+ *      exercise this by building a parallel `shopifyApi({...})` from
+ *      the SAME `getShopifyConfig()` and asserting the SDK reads the
+ *      same effective config back across all five locked fields
+ *      (apiKey, apiSecretKey, apiVersion, hostName, scopes).
  *
- *      This is a defensive lock — if a future PR adds a config-read
- *      somewhere ELSE in this module (a hardcoded apiKey override,
- *      etc.), this test fails. The risk class it guards: "JWT verifier
- *      uses one apiSecret, Token Exchange uses another, App Bridge
- *      tokens silently fail to verify post-deploy."
+ *      Historical framing (M-8 Commit 1): originally locked the
+ *      apps/web parallel `shopifyApp({...})` instance in
+ *      `apps/web/app/shopify.server.ts` against drift from this
+ *      module's instance — both were constructed at runtime, both
+ *      read from `getShopifyConfig()`, the test guaranteed they saw
+ *      the same effective config.
+ *
+ *      Current framing (post-B6, 2026-06-04): the apps/web parallel
+ *      instance was deleted as orphaned (zero consumers). This
+ *      module is now the SINGLE canonical Shopify SDK instance, and
+ *      the test now locks against FUTURE re-introduction of a
+ *      parallel construction (an SDK helper, a second adapter, a
+ *      Path-A revival) silently drifting from canonical. The
+ *      guarantee is ongoing and real, not vestigial — any future PR
+ *      adding a config-read divergence (a hardcoded apiKey override,
+ *      a second adapter pulling from a different source, etc.) at
+ *      either the canonical or a newly-introduced parallel
+ *      construction site fails this test.
+ *
+ *      Risk class guarded: "JWT verifier uses one apiSecret, Token
+ *      Exchange uses another, App Bridge tokens silently fail to
+ *      verify post-deploy."
  *
  *   3. The test reset hook actually resets — a fresh instance can be
  *      built from a new config source after `_resetShopifyApiInstanceForTests`.
@@ -80,15 +98,22 @@ describe('getShopifyApiInstance — memoisation', () => {
   });
 });
 
-describe('getShopifyApiInstance — drift impossibility vs apps/web shopifyApp instance', () => {
+describe('getShopifyApiInstance — drift impossibility vs future parallel construction', () => {
   /**
-   * The argument: BOTH our instance and the `shopifyApp({...})`
-   * instance in apps/web read from `getShopifyConfig()` at construction.
-   * If we build a parallel `shopifyApi({...})` instance from the same
-   * config, the SDK's effective config (apiKey, apiSecretKey,
-   * apiVersion, scopes, hostName) MUST match. If this test fails, a
-   * future PR has introduced a config-read divergence and the JWT
-   * verifier vs Token Exchange paths can drift apart.
+   * The argument: any code that constructs a `shopifyApi({...})` /
+   * `shopifyApp({...})` from `getShopifyConfig()` MUST produce the
+   * same effective config (apiKey, apiSecretKey, apiVersion, scopes,
+   * hostName) as our canonical memoised instance. If we build a
+   * parallel `shopifyApi({...})` from the same config and any field
+   * diverges, a future PR has introduced a config-read divergence
+   * and the JWT verifier vs Token Exchange paths can drift apart.
+   *
+   * Originally this locked the apps/web `shopifyApp({...})` instance
+   * in `apps/web/app/shopify.server.ts` against this module's instance
+   * (M-8 Commit 1). Post-B6 (2026-06-04) the apps/web instance was
+   * deleted as orphaned; the test now guards FUTURE re-introduction
+   * (SDK helper, second adapter, Path-A revival) of a parallel
+   * construction silently drifting from canonical.
    */
   function buildParallelInstance(): ReturnType<typeof shopifyApi> {
     const config = getShopifyConfig();
