@@ -3,58 +3,52 @@
  * process. The SDK's `tokenExchange` + `decodeSessionToken` helpers
  * are accessed via this instance's `.auth` + `.session` namespaces.
  *
- * ─── DESIGN DECISION: a SECOND `Shopify` instance? ──────────────
+ * This module owns the SINGLE canonical Shopify SDK instance for the
+ * workspace.
  *
- * `apps/web/app/shopify.server.ts` constructs a `shopifyApp({...})`
- * instance from `@shopify/shopify-app-remix`. That's the Remix
- * wrapper layer; it internally constructs its own `shopifyApi({...})`
- * instance. So in the web process at runtime, this module's instance
- * lives ALONGSIDE the one inside `shopifyApp` — two `Shopify` objects
- * holding the same config.
+ * ─── WHY THIS MODULE OWNS THE CANONICAL INSTANCE ────────────────
  *
- * We accept this duplication. Three reasons:
+ * `@winback/shopify` needs to stand alone for non-Remix consumers —
+ * the drainer + scheduler + future CLI never load Remix yet still
+ * need access to the JWT verifier (for operator tooling, scope-update
+ * reconciliation, etc.). An `apps/web`-owned SDK instance would
+ * couple them to Remix.
  *
- *   1. The `shopifyApp({...})` public TS type (`ShopifyAppBase` in
- *      `@shopify/shopify-app-remix/server/types.d.ts:214-377`) does
- *      NOT expose the underlying `Shopify` instance. The internal
- *      `BasicParams.api` field lives only on the SDK's private
- *      strategy/factory layer. Reading it via untyped runtime access
- *      would create a load-bearing dependency on SDK internals that
- *      breaks on every SDK upgrade.
+ * Historical note (B6 / 2026-06-04): `apps/web/app/shopify.server.ts`
+ * previously constructed a second `shopifyApp({...})` instance from
+ * `@shopify/shopify-app-remix` (M-8 Path A scaffolding). It was
+ * deleted as orphaned — zero consumers, config validation + Node
+ * adapter registration independently covered by
+ * `apps/web/app/entry.server.tsx` (boot-time `getShopifyConfig()`)
+ * and this module's adapter import (line below). Prior to deletion
+ * the two instances coexisted; the drift test below originally
+ * locked that pair against divergence.
  *
- *   2. `@winback/shopify` needs to stand alone for non-Remix
- *      consumers — the drainer + scheduler + future CLI never load
- *      Remix yet still need access to the JWT verifier (for future
- *      operator tooling, scope-update reconciliation, etc.). An
- *      `apps/web`-owned SDK instance would couple them to Remix.
- *
- *   3. Memory cost is trivial. A `Shopify` instance is a few config
- *      objects + bound helper functions — single-digit KB.
- *
- * ─── DRIFT IMPOSSIBILITY ────────────────────────────────────────
- *
- * Both instances read `getShopifyConfig()` at construction time.
- * `getShopifyConfig()` is itself memoised — first call validates
- * `process.env` against the Zod schema; subsequent calls return the
- * same singleton. Conclusion:
- *
- *   - Both instances see identical apiKey / apiSecretKey /
- *     apiVersion / scopes / hostName.
- *   - They cannot drift at runtime — `Shopify` config is frozen at
- *     construction; there's no setter.
- *   - The ONLY way to get different effective config is for one
- *     instance to be constructed BEFORE a
- *     `getShopifyConfig({reset: true, source: ...})` call and the
- *     other AFTER. Production code never calls reset. Tests reset
- *     ONLY in `beforeEach` (before either instance is constructed).
+ * ─── DRIFT IMPOSSIBILITY (revised post-B6) ──────────────────────
  *
  * The drift-impossibility argument is locked by
- * `packages/shopify/tests/auth/shopify-api-instance.test.ts` which
- * constructs both potential instances inline and compares config.
+ * `packages/shopify/tests/auth/shopify-api-instance.test.ts`. The 8
+ * tests there assert that any `Shopify` instance constructed from
+ * `getShopifyConfig()` produces config identical to the memoised
+ * `getShopifyApiInstance()`.
+ *
+ * Originally this locked the apps/web parallel instance against
+ * drift; post-M-8 / post-B6 there is a SINGLE canonical instance,
+ * and the tests now lock against FUTURE re-introduction of a
+ * parallel construction (an SDK helper, a second adapter, a Path-A
+ * revival) silently drifting from canonical. The guarantee is
+ * ongoing and real, not vestigial.
+ *
+ * `getShopifyConfig()` is itself memoised — first call validates
+ * `process.env` against the Zod schema; subsequent calls return the
+ * same singleton. Any future code that re-reads `getShopifyConfig()`
+ * to construct a Shopify instance is therefore covered by the drift
+ * test by construction — divergence only enters via a hardcoded
+ * override at the construction site, which the test catches.
  *
  * Lifecycle: lazy-constructed on first call. Tests reset via
  * `_resetShopifyApiInstanceForTests()`. NO production runtime
- * override exists — see below.
+ * override exists.
  *
  * Adapter import is required at module top — Shopify's SDK ships
  * platform-specific adapters and the node adapter must be loaded
@@ -80,8 +74,6 @@ let cached: Shopify | null = null;
  * fall back to LATEST_API_VERSION so construction succeeds — the
  * actual API version used by GraphQL calls is set per-client by
  * `@winback/shopify/admin/client.ts`, not by this instance.
- *
- * Same pattern as `apps/web/app/shopify.server.ts:resolveApiVersion`.
  */
 function resolveApiVersion(version: string): ApiVersion {
   const recognized = Object.values(ApiVersion) as string[];
