@@ -37,8 +37,9 @@ import { z } from 'zod';
 // pulling the entire client into consumers of this file (the drainer, the
 // service in batch 3, any future Epic G/F consumer).  Listing the values
 // here keeps the validator zero-dependency on Prisma at parse time.  The
-// shape test in `packages/contracts/tests/registries.test.ts` validates
-// that these values match the Prisma enum — drift caught by CI.
+// shape test in `packages/db/tests/registry-shape.test.ts` validates (via
+// Prisma DMMF) that these values match the Prisma `CustomerState` enum
+// exactly — drift caught at CI by `pnpm --filter @winback/db test`.
 // ---------------------------------------------------------------------------
 
 export const customerStateValues = [
