@@ -9,6 +9,8 @@ import { getShopifyConfig } from '@winback/shopify';
 import { isbot } from 'isbot';
 import { renderToPipeableStream } from 'react-dom/server';
 
+import { setSecurityHeaders } from '~/services/security-headers.server.js';
+
 // =============================================================================
 // BOOT-TIME CONFIG VALIDATION
 //
@@ -36,6 +38,16 @@ export default function handleRequest(
   remixContext: EntryContext,
   _loadContext: AppLoadContext,
 ): Promise<Response> {
+  // CSP frame-ancestors + nosniff + Referrer-Policy on every document
+  // response (B3 / closes L2-H2, L2-M2). Shared between the bot and
+  // browser render paths via this single call site — see the file-
+  // header docstring at services/security-headers.server.ts for the
+  // shop-absent strict-deny decision and the deliberate X-Frame-Options
+  // omission. Runs synchronously, so the response (whether rendered by
+  // the bot path, the browser path, or Remix's error UI for a thrown
+  // Response) carries the headers regardless of which branch resolves.
+  setSecurityHeaders(request, responseHeaders);
+
   return isbot(request.headers.get('user-agent') ?? '')
     ? handleBotRequest(request, responseStatusCode, responseHeaders, remixContext)
     : handleBrowserRequest(request, responseStatusCode, responseHeaders, remixContext);
