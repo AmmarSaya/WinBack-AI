@@ -50,14 +50,15 @@ export interface AdminAuthContext {
  *     credential type, not in our protocol.
  *   - No `Authorization` header at all.
  *
- * ─── COEXISTENCE PATH (Phase 1 Q-B2) ────────────────────────────────
+ * ─── NO SESSION TOKEN → 401 (B4 / M-8 Commit 4) ─────────────────────
  *
- * When neither Bearer header nor `?id_token` is present but `?shop`
- * is, the helper still performs the legacy shop-based Merchant
- * lookup and redirects missing installs to `/auth?shop=X`. This
- * preserves the pre-M-8 behavior for cold-URL navigation during the
- * coexistence window. Commit 4 (separate session) will re-aim the
- * redirect target when the legacy code-grant path is removed.
+ * When neither Bearer header nor `?id_token` query is present, the
+ * helper rejects with 401 `session_token_required`. There is no
+ * fallback to a shop-only Merchant lookup — the pre-B4 fallback was
+ * the L2-H1 cross-tenant exploit (`?shop=victim.myshopify.com`
+ * returning victim data) and is permanently closed. Embedded App
+ * Bridge clients always present a session token; cold-URL navigation
+ * by an operator must come through the embedded entry that issues one.
  *
  * ─── JWT VERIFIES BUT NO MERCHANT (Phase 1 Q-B5) ────────────────────
  *
@@ -71,12 +72,8 @@ export interface AdminAuthContext {
  *
  * Three log lines emitted for operator grepping:
  *   - `debug { source, shop } session_auth: JWT verified`
- *   - `debug { shop }         session_auth: legacy shop-only path (no JWT)`
- *   - `warn  { shop, reason } session_auth: JWT invalid`
- *
- * Commit 4 (legacy code-grant deletion) is safe to ship once the
- * "legacy shop-only" debug rate drops to near-zero across active
- * merchants.
+ *   - `warn  { shop }         session_auth: no session token presented` (→ 401)
+ *   - `warn  { shop, reason } session_auth: JWT invalid` (→ 401)
  */
 export async function requireAdminAuth(
   request: Request,
@@ -108,21 +105,22 @@ export async function requireAdminAuth(
     }
   }
 
-  // `shop` is required regardless of which path runs — without it we
-  // can't verify cross-shop replay (JWT path) and can't construct the
-  // redirect target (legacy path).
+  // `shop` is required for cross-shop-replay verification: the JWT path
+  // compares the token's `dest` against this. Without `shop` we can't
+  // decide what we're verifying against.
   if (shop === null) {
     throw new Response('Missing shop', { status: 400 });
   }
 
   if (sessionToken === null) {
-    // Legacy ?shop-only path (coexistence). Code-grant fires on miss.
-    log.debug({ shop }, 'session_auth: legacy shop-only path (no JWT)');
-    return await lookupMerchantOrRedirect(
-      shop,
-      scopeReason,
-      host,
-      `/auth?shop=${encodeURIComponent(shop)}`,
+    // No Bearer header, no ?id_token query. Pre-B4 this fell through to
+    // a shop-only Merchant lookup that returned victim data on attacker-
+    // crafted ?shop= URLs (L2-H1). Permanently closed: 401, no DB lookup,
+    // no shop disclosure beyond what the caller already supplied.
+    log.warn({ shop }, 'session_auth: no session token presented');
+    throw json(
+      { error: 'session_token_required', reason: 'no_token' },
+      { status: 401 },
     );
   }
 

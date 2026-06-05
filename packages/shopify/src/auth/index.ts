@@ -1,11 +1,11 @@
 /**
  * `@winback/shopify/auth` — Token Exchange + session-token verification
- * surface for M-8.
+ * surface (M-8).
  *
- * Coexists with the legacy code-grant helpers in `../oauth.ts`
- * (`buildAuthRedirectUrl`, `exchangeCodeForToken`) for the migration
- * window. Code-grant helpers will be removed in a follow-up commit
- * once `/auth.tsx` + `/auth.callback.tsx` are decommissioned.
+ * The only install + re-bootstrap path post-B4. The legacy code-grant
+ * helpers (`buildAuthRedirectUrl`, `exchangeCodeForToken` from
+ * `../oauth.ts`) were deleted alongside `/auth.tsx`'s Branch B and
+ * `/auth.callback.tsx` in M-8 Commit 4 (L2-H1 closure).
  *
  * Public surface:
  *

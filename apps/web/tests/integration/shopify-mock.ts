@@ -7,7 +7,10 @@ import { afterAll, afterEach, beforeAll } from 'vitest';
  * tests. Two endpoints are mocked:
  *
  *   1. OAuth token exchange — POST https://{shop}/admin/oauth/access_token
- *      Production: `exchangeCodeForToken` in @winback/shopify/oauth.ts.
+ *      Production: `tokenExchangeForShop` in @winback/shopify/auth/token-exchange.ts
+ *      (RFC 8693 Token Exchange — the only path post-B4. The pre-B4
+ *      code-grant `exchangeCodeForToken` posted to the same URL and was
+ *      removed alongside the legacy auth path.)
  *
  *   2. Admin GraphQL — POST https://{shop}/admin/api/{version}/graphql.json
  *      Production: `AdminClient.graphql` in @winback/shopify/admin/client.ts.
