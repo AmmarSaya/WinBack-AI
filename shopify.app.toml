@@ -19,7 +19,13 @@ scopes = "read_customers,read_orders,read_products,read_inventory,read_price_rul
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
-# [auth] block removed in B4 (M-8 Commit 4). The /auth/callback route
-# was the legacy code-grant completer; Token Exchange does not use the
-# OAuth redirect URI mechanism. Requires `shopify app deploy` post-merge
-# to take effect on Partners (operator step).
+[auth]
+# Token Exchange (M-8) does not use the OAuth redirect URI mechanism —
+# Shopify never actually redirects TO any URL in this list. The block is
+# still required by the Shopify CLI's toml schema validation (the deploy
+# command rejects a toml missing the [auth] table). The pre-B4 value
+# pointed at /auth/callback (the legacy code-grant completer, now
+# deleted). Replaced with /auth (the Token Exchange bootstrap entry —
+# real route, returns 400 if hit without id_token) so the placeholder
+# at least points at code that exists.
+redirect_urls = [ "https://winback-ai-web.onrender.com/auth" ]
