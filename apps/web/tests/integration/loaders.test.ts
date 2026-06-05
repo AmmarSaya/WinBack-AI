@@ -17,14 +17,68 @@ import { assertRead, createTestMerchant, getTestClient, resetDb } from './setup.
  *                    withTenantScope.  `/campaigns` is still a static
  *                    placeholder (no loader); ignored here.
  *
- * The tenant-isolation test (the settings one) is the strongest single
- * signal — two merchants in the same DB, two parallel loaders, distinct
- * return values.  If withTenantScope ALS leaks, one loader returns the
- * other's data and the test fails.
+ * Two describe blocks below:
+ *
+ *   1. "?shop-only requests → 401 (L2-H1 closure-lock)" — proves that the
+ *      pre-B4 cross-tenant exploit (?shop= without a session token
+ *      returning victim data) stays closed. These tests use realistic
+ *      fixtures (created merchants, seeded customers, settings overrides)
+ *      so a regression that re-introduces shop-only auth would surface
+ *      ACTUAL data leak in the response body, not just a status flip.
+ *      Each test asserts 401 + body shape + absence of leak fields.
+ *
+ *   2. JWT auth path (M-8 Commit 3) — the only success path post-B4. The
+ *      tenant-isolation test under that block is the strongest single
+ *      signal: two merchants in the same DB, two parallel loaders, two
+ *      Bearer JWTs, distinct return values. If withTenantScope ALS leaks,
+ *      one loader returns the other's data and the test fails.
  */
 
 const SHOP_A = 'merchant-a.myshopify.com';
 const SHOP_B = 'merchant-b.myshopify.com';
+
+interface SessionTokenRequiredBody {
+  readonly error: string;
+  readonly reason?: string;
+}
+
+/**
+ * Closure-lock helper for the L2-H1 exploit class. Asserts that a
+ * ?shop-only response without a session token:
+ *   1. Is exactly 401 (not 200, not 302).
+ *   2. Has the documented `{error: 'session_token_required', reason: 'no_token'}`
+ *      shape from admin-auth.server.ts.
+ *   3. Contains NONE of the merchant / customer / settings field names the
+ *      pre-B4 fallback would have leaked.
+ */
+async function assertNoDataLeak401(res: Response): Promise<void> {
+  expect(res.status).toBe(401);
+  const raw = await res.text();
+  // The 401 throw uses Remix `json()`, so the body parses as
+  // SessionTokenRequiredBody. Tested as both a structural assertion and
+  // a substring no-leak check.
+  const body = JSON.parse(raw) as SessionTokenRequiredBody;
+  expect(body.error).toBe('session_token_required');
+  expect(body.reason).toBe('no_token');
+  // Substring sweep — any of these in the body would indicate the
+  // legacy lookupMerchantOrRedirect path leaked data despite the
+  // 401 status. The closure-lock is "no data, not just no 200."
+  for (const field of [
+    'installedAt',
+    'attributionDirectWindowDays',
+    'monthlyAiSpendCapCents',
+    'churnRiskScore',
+    'shopifyCustomerId',
+    'alice@example.com',
+    'bob@example.com',
+    'carol@example.com',
+    'rows',
+    'nextCursor',
+    'filterStates',
+  ]) {
+    expect(raw, `401 body must not leak '${field}'`).not.toContain(field);
+  }
+}
 
 async function invokeIndex(request: Request): Promise<Response> {
   const args: LoaderFunctionArgs = { request, params: {}, context: {} };
@@ -62,7 +116,7 @@ function urlFor(path: string, shop?: string): Request {
   return new Request(url.toString(), { method: 'GET' });
 }
 
-describe('admin loaders (integration, real Postgres)', () => {
+describe('?shop-only requests → 401 (B4 / L2-H1 closure-lock, integration, real Postgres)', () => {
   beforeEach(async () => {
     await resetDb();
   });
@@ -71,84 +125,59 @@ describe('admin loaders (integration, real Postgres)', () => {
     await getTestClient().$disconnect();
   });
 
+  // Each test seeds REALISTIC fixtures (a created merchant, distinct
+  // settings, a 3-customer cohort) so a regression that re-introduces the
+  // pre-B4 shop-only Merchant lookup would leak actual data into the 401
+  // body. The closure is "no data" not just "no 200."
+
   // ----- /_index -----------------------------------------------------------
 
-  it('_index: valid shop with merchant → 200 json with shop + installedAt', async () => {
+  it('_index: ?shop with EXISTING merchant → 401, no installedAt leak (pre-B4 was 200)', async () => {
     await createTestMerchant(SHOP_A);
-
     const res = await invokeIndex(urlFor('/', SHOP_A));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as { shop: string; installedAt: string };
-    expect(body.shop).toBe(SHOP_A);
-    expect(typeof body.installedAt).toBe('string');
-    expect(new Date(body.installedAt).toString()).not.toBe('Invalid Date');
+    await assertNoDataLeak401(res);
   });
 
-  it('_index: valid shop with NO merchant → 302 to /auth', async () => {
+  it('_index: ?shop with NO merchant → 401, no /auth redirect (pre-B4 was 302)', async () => {
     const res = await invokeIndex(urlFor('/', SHOP_A));
-
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe(
-      `/auth?shop=${encodeURIComponent(SHOP_A)}`,
-    );
+    expect(res.headers.get('location')).toBeNull();
+    await assertNoDataLeak401(res);
   });
 
-  it('_index: missing shop param → 400', async () => {
+  it('_index: missing shop param → 400 (unchanged from pre-B4)', async () => {
     const res = await invokeIndex(urlFor('/'));
     expect(res.status).toBe(400);
   });
 
-  it('_index: invalid shop domain → 400', async () => {
+  it('_index: invalid shop domain → 400 (unchanged from pre-B4)', async () => {
     const res = await invokeIndex(urlFor('/', 'not a real shop'));
     expect(res.status).toBe(400);
   });
 
   // ----- /settings ---------------------------------------------------------
 
-  it('settings: valid shop with merchant + settings → 200 json with settings fields', async () => {
+  it('settings: ?shop with merchant + settings → 401, no settings leak (pre-B4 was 200)', async () => {
     await createTestMerchant(SHOP_A);
-
     const res = await invokeSettings(urlFor('/settings', SHOP_A));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      attributionDirectWindowDays: number;
-      attributionAssistedWindowDays: number;
-      sendTimeStartHour: number;
-      sendTimeEndHour: number;
-      monthlyAiSpendCapCents: string; // BigInt → string at the boundary
-      monthlySendsCap: number;
-    };
-    expect(typeof body.attributionDirectWindowDays).toBe('number');
-    expect(typeof body.monthlyAiSpendCapCents).toBe('string');
-    // Schema defaults are set by Prisma; we don't assert exact values
-    // (those are the @winback/db tests' job), just that the shape arrived.
+    await assertNoDataLeak401(res);
   });
 
-  it('settings: valid shop with NO merchant → 302 to /auth', async () => {
+  it('settings: ?shop with NO merchant → 401, no /auth redirect (pre-B4 was 302)', async () => {
     const res = await invokeSettings(urlFor('/settings', SHOP_A));
-
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe(
-      `/auth?shop=${encodeURIComponent(SHOP_A)}`,
-    );
+    expect(res.headers.get('location')).toBeNull();
+    await assertNoDataLeak401(res);
   });
 
-  it('settings: missing shop param → 400', async () => {
+  it('settings: missing shop param → 400 (unchanged from pre-B4)', async () => {
     const res = await invokeSettings(urlFor('/settings'));
     expect(res.status).toBe(400);
   });
 
-  // ----- The ALS-bug-class catcher ----------------------------------------
-
-  it('settings: tenant isolation — two merchants, each loader returns its own data', async () => {
+  it('settings: parallel cross-tenant ?shop calls → both 401, no settings cross-leak (pre-B4 was 200/200)', async () => {
     const idA = await createTestMerchant(SHOP_A);
     const idB = await createTestMerchant(SHOP_B);
-
-    // Distinguish A's settings from B's defaults so the assertion can tell
-    // which merchant's data the loader returned. Settings are tenant-
-    // scoped writes, so we use system scope for cross-tenant test setup.
+    // Distinct settings under system scope so a regression that re-introduces
+    // the shop-only path would leak distinguishable values.
     await withSystemScope('test.distinct_settings', async () => {
       await getTestClient().merchantSettings.update({
         where: { merchantId: idA },
@@ -159,53 +188,28 @@ describe('admin loaders (integration, real Postgres)', () => {
         data: { attributionDirectWindowDays: 42 },
       });
     });
-
-    // Promise.all interleaves the two loaders on the same event loop —
-    // not OS-thread-parallel, but the interleaving is exactly the shape
-    // where ALS context leakage between async chains would manifest.
     const [resA, resB] = await Promise.all([
       invokeSettings(urlFor('/settings', SHOP_A)),
       invokeSettings(urlFor('/settings', SHOP_B)),
     ]);
-
-    expect(resA.status).toBe(200);
-    expect(resB.status).toBe(200);
-    const bodyA = (await resA.json()) as { attributionDirectWindowDays: number };
-    const bodyB = (await resB.json()) as { attributionDirectWindowDays: number };
-
-    expect(bodyA.attributionDirectWindowDays).toBe(99);
-    expect(bodyB.attributionDirectWindowDays).toBe(42);
-    // If withTenantScope's ALS leaked across the parallel calls,
-    // one of these would carry the other's value (or both the same).
+    await assertNoDataLeak401(resA);
+    await assertNoDataLeak401(resB);
   });
 
   // ----- /customers (Epic E UI session) ------------------------------------
 
-  it('customers: valid shop with no CustomerScore rows yet → 200 with empty rows + null nextCursor', async () => {
+  it('customers: ?shop with empty cohort → 401, no rows/cursor leak (pre-B4 was 200 empty)', async () => {
     await createTestMerchant(SHOP_A);
-
     const res = await invokeCustomers(urlFor('/customers', SHOP_A));
-
-    expect(res.status).toBe(200);
-    const body = (await res.json()) as {
-      shop: string;
-      filterStates: string[];
-      rows: unknown[];
-      nextCursor: string | null;
-    };
-    expect(body.shop).toBe(SHOP_A);
-    expect(body.filterStates).toEqual([]);
-    expect(body.rows).toEqual([]);
-    expect(body.nextCursor).toBeNull();
+    await assertNoDataLeak401(res);
   });
 
-  it('customers: mixed-state cohort → returns sorted rows; state filter restricts results', async () => {
+  it('customers: ?shop with seeded 3-customer cohort → 401, no email/state/score leak (pre-B4 was 200 with rows)', async () => {
     const merchantId = await createTestMerchant(SHOP_A);
-
-    // Seed: 3 customers across distinct state bands with distinct churn risk
-    // scores so the sort order is deterministic.  Direct Prisma writes
-    // under system scope — bypass the webhook handlers (we're testing the
-    // loader, not the scoring pipeline).
+    // Seed: 3 customers + scores. If the closure regresses, the email
+    // strings 'alice@example.com' / 'bob@example.com' / 'carol@example.com'
+    // and the churnRiskScore numbers would appear in the 401 body —
+    // assertNoDataLeak401 substring-sweeps for all three.
     await withSystemScope('test.seed_customers_route', async () => {
       const client = getTestClient();
       const customers = await Promise.all([
@@ -257,7 +261,7 @@ describe('admin loaders (integration, real Postgres)', () => {
             rQuintile: 3,
             fQuintile: 3,
             mQuintile: 4,
-            churnRiskScore: 0.6, // highest risk → top of list
+            churnRiskScore: 0.6,
             computedAt,
           },
         }),
@@ -294,48 +298,28 @@ describe('admin loaders (integration, real Postgres)', () => {
       ]);
     });
 
-    // Unfiltered: expect 3 rows sorted by churnRiskScore DESC.
+    // Unfiltered and state-filtered both must be 401-no-leak. Pre-B4 these
+    // returned 200 with the seeded data; the closure asserts neither path
+    // leaks anything.
     const resAll = await invokeCustomers(urlFor('/customers', SHOP_A));
-    expect(resAll.status).toBe(200);
-    const bodyAll = (await resAll.json()) as {
-      rows: Array<{ email: string | null; churnRiskScore: number | null; state: string }>;
-      nextCursor: string | null;
-    };
-    expect(bodyAll.rows).toHaveLength(3);
-    // Order: carol (0.87) → alice (0.6) → bob (0.0)
-    expect(bodyAll.rows[0]?.email).toBe('carol@example.com');
-    expect(bodyAll.rows[0]?.state).toBe('dormant');
-    expect(bodyAll.rows[1]?.email).toBe('alice@example.com');
-    expect(bodyAll.rows[1]?.state).toBe('at_risk');
-    expect(bodyAll.rows[2]?.email).toBe('bob@example.com');
-    expect(bodyAll.rows[2]?.state).toBe('active');
-    expect(bodyAll.nextCursor).toBeNull();
+    await assertNoDataLeak401(resAll);
 
-    // Filtered by state=at_risk,dormant → only Alice + Carol.
     const url = new URL(`https://test.invalid/customers`);
     url.searchParams.set('shop', SHOP_A);
     url.searchParams.set('state', 'at_risk,dormant');
-    const resFiltered = await invokeCustomers(new Request(url.toString(), { method: 'GET' }));
-    expect(resFiltered.status).toBe(200);
-    const bodyFiltered = (await resFiltered.json()) as {
-      filterStates: string[];
-      rows: Array<{ email: string | null; state: string }>;
-    };
-    expect(bodyFiltered.filterStates.sort()).toEqual(['at_risk', 'dormant']);
-    expect(bodyFiltered.rows.map((r) => r.email).sort()).toEqual([
-      'alice@example.com',
-      'carol@example.com',
-    ]);
+    const resFiltered = await invokeCustomers(
+      new Request(url.toString(), { method: 'GET' }),
+    );
+    await assertNoDataLeak401(resFiltered);
   });
 
-  it('customers: valid shop with NO merchant → 302 to /auth', async () => {
+  it('customers: ?shop with NO merchant → 401, no /auth redirect (pre-B4 was 302)', async () => {
     const res = await invokeCustomers(urlFor('/customers', SHOP_A));
-
-    expect(res.status).toBe(302);
-    expect(res.headers.get('location')).toBe(`/auth?shop=${encodeURIComponent(SHOP_A)}`);
+    expect(res.headers.get('location')).toBeNull();
+    await assertNoDataLeak401(res);
   });
 
-  it('customers: missing shop param → 400', async () => {
+  it('customers: missing shop param → 400 (unchanged from pre-B4)', async () => {
     const res = await invokeCustomers(urlFor('/customers'));
     expect(res.status).toBe(400);
   });
@@ -343,8 +327,8 @@ describe('admin loaders (integration, real Postgres)', () => {
 
 // ===========================================================================
 // JWT auth path (M-8 Commit 3) — Authorization: Bearer header or
-// ?id_token= query. Coexistence with the legacy ?shop-only path above is
-// preserved; these tests cover the new contract surface only.
+// ?id_token= query. The only success path post-B4; the legacy ?shop-only
+// fallback above now 401s instead of returning data.
 // ===========================================================================
 
 function jwtRequest(

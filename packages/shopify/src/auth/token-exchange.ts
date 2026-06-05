@@ -1,8 +1,8 @@
 /**
  * Token Exchange wrapper (M-8 — RFC 8693 via Shopify's offline-token
- * grant). Replaces the code-grant `exchangeCodeForToken` for new
- * installs once M-8 lands; for the transition window both helpers
- * coexist (per Phase 1 decision: keep the legacy oauth.ts intact).
+ * grant). The only install + re-bootstrap path post-B4. The pre-B4
+ * code-grant `exchangeCodeForToken` in oauth.ts was deleted alongside
+ * the rest of the legacy auth path (M-8 Commit 4 / L2-H1 closure).
  *
  * Thin wrapper over `@shopify/shopify-api`'s
  * `shopify.auth.tokenExchange`, which posts to
@@ -17,9 +17,10 @@
  *     reject but the error type is less useful for HTTP mapping).
  *
  *   - Typed error wrapping. SDK errors become
- *     `ShopifyTokenExchangeError` (the existing type from the legacy
- *     `oauth.ts`), so a caller can catch one type regardless of
- *     which path produced the failure.
+ *     `ShopifyTokenExchangeError` (exported from
+ *     `@winback/shopify/errors`), the same type the pre-B4 code-grant
+ *     path used — kept stable so any caller catching it doesn't need
+ *     to change.
  *
  *   - Returns the populated `Session` object directly. The SDK's
  *     return shape `{ session }` is convenient at this layer and

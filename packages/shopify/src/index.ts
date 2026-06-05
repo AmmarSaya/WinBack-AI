@@ -35,7 +35,9 @@ export {
 export { isValidShopDomain, normalizeShopDomain } from './shop-domain.js';
 
 // --- HMAC primitives (Shopify-format) --------------------------------------
-export { verifyShopifyOAuthHmac, verifyShopifyWebhookHmac } from './hmac.js';
+// Webhook-only post-B4. OAuth-callback HMAC + canonicalization deleted
+// with the rest of the legacy auth path (M-8 Commit 4).
+export { verifyShopifyWebhookHmac } from './hmac.js';
 
 // --- Webhook topic dispatch ------------------------------------------------
 export {
@@ -46,17 +48,6 @@ export {
   isGdprTopic,
   isKnownTopic,
 } from './webhook-topics.js';
-
-// --- OAuth -----------------------------------------------------------------
-// Legacy code-grant helpers — used by the existing /auth + /auth.callback
-// routes. Coexist with the M-8 Token Exchange path below until those
-// routes are decommissioned (separate session per Phase 1 scope).
-export {
-  buildAuthRedirectUrl,
-  exchangeCodeForToken,
-  type AuthRedirectArgs,
-  type TokenExchangeResult,
-} from './oauth.js';
 
 // --- M-8 Token Exchange + session-token verification -----------------------
 // New auth surface for the Token Exchange migration. See ./auth/index.ts

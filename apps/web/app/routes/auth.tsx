@@ -4,7 +4,6 @@ import {
   ShopifySessionTokenError,
   type ShopifyConfig,
   buildAdminClient,
-  buildAuthRedirectUrl,
   completeInstall,
   decodeAndVerifySessionToken,
   getShopifyConfig,
@@ -13,7 +12,6 @@ import {
   tokenExchangeForShop,
 } from '@winback/shopify';
 
-import { generateState } from '~/services/auth-state.server.js';
 import { getPrisma } from '~/services/db.server.js';
 import { withRequest } from '~/services/request-context.server.js';
 import { getSessionStorage } from '~/services/session-storage.server.js';
@@ -21,11 +19,10 @@ import { getSessionStorage } from '~/services/session-storage.server.js';
 const log = getLogger('web.auth');
 
 /**
- * `/auth?shop=<shop>.myshopify.com [&id_token=<JWT>] [&host=<host>]`
+ * `/auth?shop=<shop>.myshopify.com&id_token=<JWT>[&host=<host>]`
  *
- * Two branches, distinguished by `id_token` presence:
+ * Token Exchange bootstrap (M-8 / post-B4):
  *
- * ── BRANCH A: id_token PRESENT (M-8 Token Exchange bootstrap) ──
  *   1. Decode + verify session-token JWT (HS256 + dest + iss + aud).
  *   2. Token Exchange → offline access token + scope.
  *   3. completeInstall (atomic Merchant + Settings + Subscription + outbox).
@@ -35,29 +32,23 @@ const log = getLogger('web.auth');
  *      subscription drift is reconciled elsewhere.)
  *   6. Redirect 302 → /?shop=...[&host=...]
  *
- *   Failure mapping (per Phase 1 Q-A1..Q-A4):
- *     - Step 1 fail → 401 JSON `{ error: 'session_token_invalid',
- *                                  reason: <discriminator> }`
- *     - Step 2 fail → 500 JSON `{ error, retry: true }` + Retry-After: 1
- *     - Step 3 fail → 500 JSON same shape. completeInstall is idempotent;
- *                     retry recovers. Orphan-Merchant risk is acceptable
- *                     (Q-A4).
- *     - Step 4 fail → 500 JSON same shape.
- *     - Step 5 fail → 302 → /?shop=...[&host=...] (Q-A1: NOT /auth — avoids
- *                     managed-install merchants falling into code-grant
- *                     regression). Merchant + Session rows are already
- *                     persisted; webhook reconciliation runs separately.
+ * Failure mapping (per Phase 1 Q-A1..Q-A4):
+ *   - Step 1 fail → 401 JSON `{ error: 'session_token_invalid',
+ *                                reason: <discriminator> }`
+ *   - Step 2 fail → 500 JSON `{ error, retry: true }` + Retry-After: 1
+ *   - Step 3 fail → 500 JSON same shape. completeInstall is idempotent;
+ *                   retry recovers. Orphan-Merchant risk is acceptable
+ *                   (Q-A4).
+ *   - Step 4 fail → 500 JSON same shape.
+ *   - Step 5 fail → 302 → /?shop=...[&host=...]. Merchant + Session rows
+ *                   are already persisted; webhook reconciliation runs
+ *                   separately.
  *
- * ── BRANCH B: id_token ABSENT (legacy code-grant initiator) ──
- *   Preserved verbatim from the pre-M-8 behavior. Generates a CSRF state
- *   cookie + redirects to Shopify's `/admin/oauth/authorize`. The
- *   `/auth.callback.tsx` route completes that flow. Coexistence
- *   invariant: this path MUST remain functional until the legacy
- *   code-grant flow is decommissioned in a separate session.
- *
- * NO DB access in Branch B. Branch A opens the (system-scoped) install
- * transaction inside `completeInstall` and writes the encrypted Session
- * via the storage adapter.
+ * Pre-B4 also accepted `/auth?shop=...` without `id_token`, routing it
+ * to a legacy code-grant initiator. That branch was deleted in B4
+ * alongside the L2-H1 closure: no-id_token now returns 400. Embedded
+ * App Bridge clients always issue a session token; an operator hitting
+ * the URL directly must come through the embedded entry that issues one.
  */
 export async function loader({ request }: LoaderFunctionArgs) {
   return withRequest(request, async () => {
@@ -67,22 +58,29 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const host = url.searchParams.get('host');
 
     // normalizeShopDomain validates + canonicalizes (lowercase) in one step.
-    // Same pattern as the legacy initiator + the callback route; persisting
-    // by the canonical form keeps install / webhook / operator-tool lookups
-    // aligned regardless of how the merchant navigated here.
+    // Persisting + looking up by the canonical form keeps install /
+    // webhook / operator-tool lookups aligned regardless of how the
+    // merchant navigated here.
     const shop = shopParam !== null ? normalizeShopDomain(shopParam) : null;
     if (shop === null) {
       log.warn({ shop: shopParam }, 'auth: invalid shop param');
       throw new Response('Invalid shop parameter', { status: 400 });
     }
 
-    const config = getShopifyConfig();
-
-    if (idToken !== null && idToken.length > 0) {
-      return await runTokenExchangeBootstrap({ shop, idToken, host, config });
+    if (idToken === null || idToken.length === 0) {
+      // B4 / M-8 Commit 4: no fallback to code-grant. Token Exchange is
+      // the only install/re-bootstrap path. App Bridge always presents
+      // a session token; an operator hitting the URL directly must come
+      // through the embedded entry that issues one.
+      log.warn({ shop }, 'auth: id_token query parameter required');
+      return json(
+        { error: 'id_token_required' },
+        { status: 400 },
+      );
     }
 
-    return runCodeGrantInitiator({ shop, config });
+    const config = getShopifyConfig();
+    return await runTokenExchangeBootstrap({ shop, idToken, host, config });
   });
 }
 
@@ -304,19 +302,3 @@ function redirectToAppRoot(
   return redirect(target.toString());
 }
 
-// ===========================================================================
-// Branch B — legacy code-grant initiator (preserved verbatim per Q-A7)
-// ===========================================================================
-
-interface CodeGrantArgs {
-  readonly shop: string;
-  readonly config: ShopifyConfig;
-}
-
-function runCodeGrantInitiator(args: CodeGrantArgs): Response {
-  const { shop, config } = args;
-  const { state, cookieHeader } = generateState(shop, config.SHOPIFY_API_SECRET);
-  const authUrl = buildAuthRedirectUrl({ shop, state }, config);
-  log.info({ shop }, 'auth: legacy code-grant initiator → Shopify');
-  return redirect(authUrl, { headers: { 'Set-Cookie': cookieHeader } });
-}

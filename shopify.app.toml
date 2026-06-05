@@ -19,5 +19,7 @@ scopes = "read_customers,read_orders,read_products,read_inventory,read_price_rul
 optional_scopes = [ ]
 use_legacy_install_flow = false
 
-[auth]
-redirect_urls = [ "https://winback-ai-web.onrender.com/auth/callback" ]
+# [auth] block removed in B4 (M-8 Commit 4). The /auth/callback route
+# was the legacy code-grant completer; Token Exchange does not use the
+# OAuth redirect URI mechanism. Requires `shopify app deploy` post-merge
+# to take effect on Partners (operator step).

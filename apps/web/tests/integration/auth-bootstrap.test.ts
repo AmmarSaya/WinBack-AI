@@ -99,7 +99,7 @@ async function preCreateSession(
 // Suite
 // ---------------------------------------------------------------------------
 
-describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) (integration)', () => {
+describe('/auth bootstrap — Token Exchange (post-B4; legacy code-grant Branch B deleted, no-id_token now 400) (integration)', () => {
   setupShopifyMocks();
 
   beforeEach(async () => {
@@ -336,24 +336,20 @@ describe('/auth bootstrap — Token Exchange (Branch A) + code-grant (Branch B) 
   // 9. Legacy fallback (Branch B) — no id_token, valid shop
   // -------------------------------------------------------------------------
 
-  it('9. legacy fallback: no id_token, valid shop → 302 to Shopify authorize URL with state cookie (Branch B preserved)', async () => {
+  it('9. no id_token, valid shop → 400 `{ error: "id_token_required" }`, no DB writes, no Set-Cookie (B4 Branch B closure-lock; pre-B4 was 302 to Shopify authorize URL with state cookie)', async () => {
     const res = await invokeAuthLoader(buildBootstrapRequest({ shop: SHOP }));
 
-    expect(res.status).toBe(302);
-    const location = res.headers.get('location');
-    expect(location).toMatch(
-      new RegExp(`^https://${SHOP.replace(/\./g, '\\.')}/admin/oauth/authorize\\?`),
-    );
-    expect(location).toContain('client_id=');
-    expect(location).toContain('scope=');
-    expect(location).toContain('state=');
+    expect(res.status).toBe(400);
+    // No redirect to Shopify authorize (the pre-B4 legacy code-grant target).
+    expect(res.headers.get('location')).toBeNull();
+    // No CSRF state cookie set (auth-state.server.ts was deleted with Branch B).
+    expect(res.headers.get('set-cookie')).toBeNull();
 
-    const setCookie = res.headers.get('set-cookie');
-    expect(setCookie).toContain('winback_auth_state=');
-    expect(setCookie).toContain('HttpOnly');
-    expect(setCookie).toContain('SameSite=None');
+    // Documented 400 body shape from auth.tsx's id_token guard.
+    const body = (await res.json()) as { error?: string };
+    expect(body.error).toBe('id_token_required');
 
-    // No DB writes on Branch B.
+    // No DB writes — the 400 path returns before any Prisma call.
     const client = getTestClient();
     expect(await assertRead(() => client.merchant.count())).toBe(0);
     expect(spies.completeInstall).not.toHaveBeenCalled();
