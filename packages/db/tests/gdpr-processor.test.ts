@@ -1,11 +1,34 @@
 /**
  * Unit tests for the C6 GDPR compliance processors.
  *
- * Mock-prisma pattern (records ops in-memory). The point is to exercise the
- * processor control flow — tenant-scope wrapping, transaction sequencing,
- * PII redaction column set, chunked-delete loop, idempotency on missing
- * merchant — not the DB itself. End-to-end coverage with real Postgres
- * lands as part of M10 / CP-7 (external security review + GDPR pass).
+ * Mock-prisma pattern (records ops in-memory). Scope is CONTROL-FLOW
+ * SHAPE ONLY — tenant-scope wrapping, audit-row sequencing,
+ * malformed-payload bail, shop-redact chunked-delete loop, idempotency
+ * on missing merchant. Fast feedback (~10 ms per test) for regressions
+ * in those structural concerns.
+ *
+ * OUTCOME assertions (PII is actually absent from real rows after a
+ * redact; child-table deletion happens; sentinel substitution writes
+ * the right column shape) are owned by the real-Postgres integration
+ * test at apps/drainer/tests/integration/gdpr.test.ts. That's where the
+ * L4-H1 mock-mirrors-implementation anti-pattern is structurally closed
+ * — outcomes are asserted against real DB state, not against the mock
+ * faithfully recording the call the implementation just made.
+ *
+ * Role separation:
+ *   - THIS FILE asserts: "did the handler write the right audit row?
+ *     wrap in tenant scope? bail on malformed input? loop chunks N times
+ *     for shop-redact?"
+ *   - INTEGRATION FILE asserts: "after the handler ran, is the PII
+ *     actually gone from every row in Postgres?"
+ *
+ * The tenantTables mock mirror below is RETAINED EXCLUSIVELY for
+ * processShopRedact's chunk-loop tests — that flow operates on
+ * tenant-wide deleteMany batches whose shape is faithfully simulated
+ * here, and the chunk-iteration count is the assertion. The
+ * processCustomerRedact tests in this file do NOT touch the
+ * tenantTables mirror; their child-table delete behavior is verified
+ * end-to-end by the integration test against real Postgres.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -67,11 +90,12 @@ function makeInitialState(): MockState {
     merchant: null,
     customers: [],
     orderCustomerIdUpdates: [],
-    // NOTE: this mock mirrors SHOP_REDACT_TABLES_IN_ORDER and IS the L4-H1
-    // anti-pattern the audit flagged (mock mirrors implementation; future
-    // drift slips silently through). Kept aligned for B1 to ship the
-    // registry-shape coverage; the structural fix is B2 (real-Postgres
-    // GDPR integration test) — see PRE-EPIC-G-AUDIT.md L4-H1.
+    // Mirrors SHOP_REDACT_TABLES_IN_ORDER — used ONLY by
+    // processShopRedact's chunked-delete-loop tests below. The
+    // processCustomerRedact tests do NOT consume this mirror; their
+    // child-table deletion behavior is verified by the real-Postgres
+    // integration test at apps/drainer/tests/integration/gdpr.test.ts
+    // (B2 — closes L4-H1 structurally).
     tenantTables: {
       orderLineItem: { rows: [] },
       order: { rows: [] },
@@ -341,55 +365,14 @@ describe('processCustomerDataRequest', () => {
 // processCustomerRedact
 // ===========================================================================
 
-describe('processCustomerRedact', () => {
-  it('nulls PII, sets deletedAt, severs Order link, writes audit (existing customer)', async () => {
-    const handle = makeMockPrisma({
-      customers: [
-        {
-          id: 'c_1',
-          merchantId: MERCHANT_ID,
-          shopifyCustomerId: 'gid://shopify/Customer/12345',
-          email: 'jane@example.com',
-          phone: '+15555555555',
-          firstName: 'Jane',
-          lastName: 'Doe',
-          deletedAt: null,
-        },
-      ],
-    });
-
-    await processCustomerRedact({
-      prisma: handle.prisma,
-      merchantId: MERCHANT_ID,
-      shop: SHOP,
-      payload: {
-        shop_domain: SHOP,
-        customer: { id: 12345, email: 'jane@example.com', phone: '+15555555555' },
-        orders_to_redact: [100, 101],
-      },
-    });
-
-    const c = handle.state.customers[0]!;
-    expect(c.email).toBeNull();
-    expect(c.phone).toBeNull();
-    expect(c.firstName).toBeNull();
-    expect(c.lastName).toBeNull();
-    expect(c.deletedAt).toBeInstanceOf(Date);
-
-    // Order link severed: updateMany called with customerId=c_1
-    expect(handle.state.orderCustomerIdUpdates).toEqual([
-      { merchantId: MERCHANT_ID, customerId: 'c_1' },
-    ]);
-
-    // Exactly one audit row for the successful redact.
-    expect(handle.state.auditLogs).toHaveLength(1);
-    const row = handle.state.auditLogs[0]!;
-    expect(row.action).toBe('gdpr.customer_redact');
-    expect(row.targetId).toBe('c_1');
-    const ctx = row.context as { shopifyCustomerGid: string; ordersToRedact: string[] };
-    expect(ctx.shopifyCustomerGid).toBe('gid://shopify/Customer/12345');
-    expect(ctx.ordersToRedact).toEqual(['100', '101']);
-  });
+describe('processCustomerRedact (control-flow only — OUTCOMES owned by integration test)', () => {
+  // The "happy path: nulls PII / replaces shopifyCustomerId with sentinel /
+  // hard-deletes Customer-CASCADE children / severs Order / writes audit"
+  // assertions live in apps/drainer/tests/integration/gdpr.test.ts where
+  // the assertions are against real Postgres state. Anything the mock
+  // could assert here ("customer.update was called with X") would mirror
+  // the implementation, not the outcome — the L4-H1 anti-pattern the
+  // integration test exists to replace.
 
   it('no-local-record: writes gdpr.customer_redact_no_local_record and does NOT update any customer', async () => {
     const handle = makeMockPrisma(); // empty customers

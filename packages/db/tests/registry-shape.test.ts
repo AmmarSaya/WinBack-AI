@@ -42,7 +42,10 @@ import {
 
 import { WEBHOOK_TOPIC_TO_EVENT } from '@winback/shopify';
 
-import { SHOP_REDACT_TABLES_IN_ORDER } from '../src/compliance/gdpr-processor.js';
+import {
+  CUSTOMER_REDACT_CHILD_TABLES,
+  SHOP_REDACT_TABLES_IN_ORDER,
+} from '../src/compliance/gdpr-processor.js';
 import { customerStateValues } from '../src/events/customer-state-changed.js';
 import {
   SOFT_DELETE_MODELS,
@@ -80,6 +83,31 @@ function getMerchantSetNullModels(): Set<string> {
             f.kind === 'object' &&
             f.type === 'Merchant' &&
             f.relationOnDelete === 'SetNull',
+        ),
+      )
+      .map((m) => m.name),
+  );
+}
+
+/**
+ * Models with a `customer Customer @relation(onDelete: Cascade)` field.
+ *
+ * Distinct from the Merchant-CASCADE helper: this set is the per-customer
+ * child graph that processCustomerRedact must hard-delete (B2). Excludes
+ * Order which is `customer Customer? @relation(onDelete: SetNull)` —
+ * SetNull is correct for Order (severs the personal link, preserves
+ * revenue history); only CASCADE children hold PII that survives a
+ * Customer soft-delete.
+ */
+function getCustomerCascadeModels(): Set<string> {
+  return new Set(
+    Prisma.dmmf.datamodel.models
+      .filter((model) =>
+        model.fields.some(
+          (f) =>
+            f.kind === 'object' &&
+            f.type === 'Customer' &&
+            f.relationOnDelete === 'Cascade',
         ),
       )
       .map((m) => m.name),
@@ -297,6 +325,38 @@ describe('WEBHOOK_TOPIC_TO_EVENT shape (closes L6-M3)', () => {
       `WEBHOOK_TOPIC_TO_EVENT has entries that resolve to events NOT in OUTBOX_EVENTS: ${JSON.stringify(bad)}. ` +
         `The drainer's dispatch table will silently fail to route these topics. ` +
         `Either remove the mapping or register the event in packages/contracts/src/events.ts.`,
+    ).toEqual([]);
+  });
+});
+
+// ===========================================================================
+// 8. CUSTOMER_REDACT_CHILD_TABLES — schema-derived SET completeness
+//    (B2 prereq for closing L3-H1).
+//    Order is FK-safe-child-first (Message → AiGeneration), NOT correctness,
+//    same convention as SHOP_REDACT_TABLES_IN_ORDER. Test asserts SET equality.
+//    Drift here = a per-customer PII-bearing child model that processCustomerRedact
+//    silently fails to scrub on customers/redact = GDPR Article 17 violation.
+// ===========================================================================
+
+describe('CUSTOMER_REDACT_CHILD_TABLES shape (B2 prereq for L3-H1)', () => {
+  it('covers (as a SET, order irrelevant per source comment) every Customer-CASCADE child model', () => {
+    const expectedCamelCase = new Set(
+      [...getCustomerCascadeModels()].map(pascalToCamel),
+    );
+    const actualSet = new Set<string>(CUSTOMER_REDACT_CHILD_TABLES);
+    const { missing, extra } = diffSets(expectedCamelCase, actualSet);
+    expect(
+      missing,
+      `CUSTOMER_REDACT_CHILD_TABLES is missing these Customer-CASCADE child models (camelCase Prisma method names): ${missing.join(', ')}. ` +
+        `Each missing model holds per-customer data that survives processCustomerRedact (Customer soft-delete does not cascade), ` +
+        `leaving PII attributable to a redacted customer — Shopify App Review reject-grade GDPR Article 17 violation. ` +
+        `Insert into packages/db/src/compliance/gdpr-processor.ts in FK-safe child-first order ` +
+        `(tables with inter-child FKs to other entries go BEFORE their referenced tables).`,
+    ).toEqual([]);
+    expect(
+      extra,
+      `CUSTOMER_REDACT_CHILD_TABLES contains models that are NOT Customer-CASCADE in the schema: ${extra.join(', ')}. ` +
+        `Either remove them from the set or verify they declare onDelete: Cascade on the Customer relation.`,
     ).toEqual([]);
   });
 });

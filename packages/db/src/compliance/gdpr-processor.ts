@@ -147,7 +147,7 @@ export async function processCustomerDataRequest(
 }
 
 // ---------------------------------------------------------------------------
-// processCustomerRedact
+// processCustomerRedact (B2 — closes L3-H1, L4-M3, L4-H1 mock-mirror)
 //
 // 48 hours after a customer is deleted (or after the merchant uninstalls and
 // shop/redact arrives), Shopify dispatches `customers/redact` for any
@@ -155,19 +155,71 @@ export async function processCustomerDataRequest(
 //
 //   1. Find the Customer row by (merchantId, full-GID).
 //   2. NULL the PII columns: email, phone, firstName, lastName.
-//   3. Set deletedAt (soft-delete; preserves aggregate revenue history).
-//   4. Sever the Order link: NULL Order.customerId for that customer's orders.
-//      (Schema cascade is SetNull on hard-delete; with soft-delete we do this
-//      explicitly per the schema comment at Order.customer.)
-//   5. Write AuditLog evidence.
+//   3. Replace shopifyCustomerId with a redaction sentinel
+//      (`redacted:<customer.id>` — the customer's own globally-unique cuid
+//      PK reused as entropy; preserves the NOT NULL + composite-unique
+//      constraint while making the row un-attributable from the GID). The
+//      original GID is gone from the Customer row; re-identification would
+//      require the AuditLog `context.shopifyCustomerGid` field, which is
+//      retained as GDPR-required compliance evidence.
+//   4. Set deletedAt — ONLY if currently null (preserves the original redact
+//      moment per the L4-M3 invariant; duplicate deliveries don't bump it).
+//   5. Sever the Order link: NULL Order.customerId for that customer's orders.
+//      (Schema cascade is SetNull on hard-delete; with soft-delete on
+//      Customer we do this explicitly per the Order.customer schema comment.)
+//   6. Hard-delete the Customer-CASCADE children listed in
+//      CUSTOMER_REDACT_CHILD_TABLES (Message + AiGeneration + CustomerScore,
+//      FK-safe child-first order). The PII embedded in AI text columns
+//      (firstName in prompts; generatedText addressed by name) is removed
+//      by row-level deletion, not column-level scrub — there's nothing to
+//      drift on per new PII column. Each deleteMany is scoped
+//      { merchantId, customerId } — the merchantId scope is the
+//      cross-tenant-bleed guard (the same Shopify customer at two merchants
+//      must be redacted independently per merchant).
+//   7. Write AuditLog evidence.
 //
-// All five steps run in one tx so a crash doesn't leave PII partially redacted.
+// All steps 2-7 run in one tx so a crash doesn't leave PII partially redacted.
 //
-// Idempotency: re-running on an already-redacted customer is safe — the PII
-// columns are already null, deletedAt is already set, and the Order.customerId
-// nullings have already happened. The AuditLog row would be a duplicate; we
-// treat that as acceptable (the drainer's idempotency key is the primary guard).
+// Idempotency (under sentinel substitution): a duplicate redact webhook
+// looks up `(merchantId, originalGid)`. Step 3 replaced that GID with a
+// sentinel, so findUnique returns null and the handler hits the
+// `no_local_record` audit path — correct behavior (the customer IS already
+// redacted). To distinguish "duplicate-after-redact" from
+// "never-ingested" in the audit stream, the `no_local_record` audit's
+// `context.shopifyCustomerGid` records the queried original GID; an
+// operator can cross-reference a prior `customer_redact` audit for the
+// same GID to identify duplicates.
+//
+// SOFT-DELETE EXTENSION INTERACTION: Customer is in SOFT_DELETE_MODELS, so
+// the Prisma extension auto-filters reads on `deletedAt: null`. A Customer
+// previously soft-deleted by another code path (e.g. Shopify 404 enrichment
+// sweep, deletion via Shopify Admin UI) is invisible to step 1's findUnique
+// and the redact hits `no_local_record`. That's a pre-existing gap, not
+// introduced by B2; tracked in POINTS-TO-CONSIDER for M10 follow-up.
 // ---------------------------------------------------------------------------
+
+/**
+ * Sentinel prefix for the redacted Customer.shopifyCustomerId column.
+ *
+ * Under GDPR erasure (B2), the original Shopify GID would re-link a
+ * redacted Customer row back to a named person via Shopify-side data. The
+ * column is NOT NULL + part of a composite unique index, so we can't null
+ * it without a schema migration. The sentinel `redacted:<customer.id>`
+ * preserves both constraints (customer.id is a globally-unique cuid →
+ * sentinel is globally unique → no collision with live customers or with
+ * other redacted customers), is deterministic (the same row redacted
+ * twice produces the same sentinel), and is un-attributable from the GID
+ * alone (the original GID is gone; the linkage exists only in the
+ * AuditLog row's `context.shopifyCustomerGid` field, retained as
+ * GDPR-required compliance evidence).
+ *
+ * Convention: any code that needs to identify a redacted row by column
+ * shape MUST check this prefix, not parse a string literal. System-scope
+ * queries that read past the Prisma soft-delete auto-filter (e.g.
+ * forensic operator tooling, future GDPR audits) can use it to recognise
+ * tombstoned rows.
+ */
+export const REDACTED_GID_SENTINEL_PREFIX = 'redacted:';
 
 export interface ProcessCustomerRedactArgs {
   readonly prisma: WinbackPrisma;
@@ -175,6 +227,42 @@ export interface ProcessCustomerRedactArgs {
   readonly shop: string;
   readonly payload: CustomerRedactPayload;
 }
+
+/**
+ * Customer-CASCADE child tables that processCustomerRedact MUST hard-delete
+ * to discharge GDPR Article 17 erasure for one customer (B2 / closes L3-H1).
+ *
+ * Three models declare `customer Customer @relation(onDelete: Cascade)` in
+ * the schema: CustomerScore (per-customer RFM aggregates), AiGeneration
+ * (systemPrompt + userPrompt + generatedText embed the customer's
+ * firstName + behavioral data via packages/ai/src/prompt-builder.ts), and
+ * Message (generatedText denormalised for Epic G dispatch). With Customer
+ * soft-deleted, the schema CASCADE never fires and those rows survive with
+ * PII intact — the L3-H1 leak. processCustomerRedact uses this list to
+ * explicitly deleteMany inside the redact tx — table-level deletion, NOT
+ * column-level scrub (B1's drift class applies to lists, not to columns;
+ * row-level delete has nothing to drift on per added column).
+ *
+ * Order: child-most relations first to minimise per-step fan-out (Message
+ * FKs to AiGeneration with CASCADE; same convention as
+ * SHOP_REDACT_TABLES_IN_ORDER). CustomerScore has no inter-child FK; its
+ * trailing position is mechanical, not correctness.
+ *
+ * Shape-tested in packages/db/tests/registry-shape.test.ts: every model
+ * with `customer Customer @onDelete:Cascade` in the Prisma DMMF MUST appear
+ * here. Epic G additions (e.g. CampaignTarget if it FKs to Customer with
+ * CASCADE) trip the shape test on the next CI run and surface the drift
+ * before they ship.
+ *
+ * Phase 2a — declared and shape-tested, NOT yet wired into
+ * processCustomerRedact. Phase 2b wires the deleteMany loop after the
+ * 3-table set is operator-confirmed complete against the live schema.
+ */
+export const CUSTOMER_REDACT_CHILD_TABLES = [
+  'message',          // FK to AiGeneration + Customer + Merchant
+  'aiGeneration',     // FK to Customer + Merchant
+  'customerScore',    // FK to Customer + Merchant
+] as const;
 
 export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Promise<void> {
   const { prisma, merchantId, shop, payload } = args;
@@ -206,10 +294,14 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
   await withTenantScope(merchantId, async () => {
     await uow.run(async (ctx) => {
       // 1. Locate the customer row. Skip-with-audit if absent — Shopify can
-      // re-send redacts for customers we never ingested.
+      // re-send redacts for customers we never ingested. Also covers
+      // duplicate-delivery-after-redact: the row's shopifyCustomerId is
+      // now a sentinel (step 3), so the lookup by original GID misses,
+      // and we audit-and-no-op. Pull deletedAt for the L4-M3 conditional
+      // set in step 4.
       const customer = await ctx.db.customer.findUnique({
         where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: shopifyCustomerGid } },
-        select: { id: true },
+        select: { id: true, deletedAt: true },
       });
 
       if (customer === null) {
@@ -232,9 +324,15 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
         return;
       }
 
-      // 2 + 3. NULL PII + soft-delete. Set deletedAt only if not already set
-      // (avoid bumping the timestamp on duplicate deliveries — preserves the
-      // original redact moment for audit clarity).
+      // 2 + 3 + 4. NULL PII; replace shopifyCustomerId with the
+      // un-attributable sentinel (preserves NOT NULL + composite-unique
+      // while removing the original GID from the row); set deletedAt
+      // ONLY if currently null (L4-M3: docstring promises the original
+      // redact moment is preserved across duplicate deliveries — this
+      // matches that promise; under sentinel substitution a duplicate
+      // delivery hits the no_local_record path above anyway, but the
+      // conditional is the structural guarantee, not the GID-rewrite).
+      const sentinelShopifyCustomerId = `${REDACTED_GID_SENTINEL_PREFIX}${customer.id}`;
       await ctx.db.customer.update({
         where: { id: customer.id },
         data: {
@@ -242,18 +340,50 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
           phone: null,
           firstName: null,
           lastName: null,
-          deletedAt: new Date(),
+          shopifyCustomerId: sentinelShopifyCustomerId,
+          ...(customer.deletedAt === null && { deletedAt: new Date() }),
         },
       });
 
-      // 4. Sever Order link. Order.customerId becomes null; aggregate
-      // revenue history preserved without identifier.
+      // 5. Sever Order link. Order.customerId becomes null; aggregate
+      // revenue history preserved without identifier. Scoped by both
+      // merchantId AND customerId — the merchantId scope is the
+      // cross-tenant-bleed guard (same Shopify customer at two merchants
+      // is two distinct Customer.id values; this filter only touches the
+      // active tenant's Orders).
       await ctx.db.order.updateMany({
         where: { merchantId, customerId: customer.id },
         data: { customerId: null },
       });
 
-      // 5. Audit evidence — same tx as steps 2-4.
+      // 6. Hard-delete Customer-CASCADE children (Message, AiGeneration,
+      // CustomerScore). Row-level delete removes the PII embedded in AI
+      // text columns — nothing to drift on per new PII column. Driven
+      // off CUSTOMER_REDACT_CHILD_TABLES so the impl can't diverge from
+      // the registry-shape-tested set (B1's pattern, table-level not
+      // column-level). Iterated in FK-safe child-first order (Message
+      // FKs to AiGeneration with CASCADE; CustomerScore has no inter-
+      // child FK so trailing position is mechanical).
+      //
+      // EACH deleteMany scoped { merchantId, customerId } — the
+      // merchantId scope is the cross-tenant-bleed guard. Without it, a
+      // crafted payload could in theory target a different merchant's
+      // customer; with it, the filter is bounded to the active tenant's
+      // FK graph regardless of input.
+      type CustomerRedactDelegate = {
+        deleteMany: (a: unknown) => Promise<unknown>;
+      };
+      type CustomerRedactDelegates = {
+        [K in (typeof CUSTOMER_REDACT_CHILD_TABLES)[number]]: CustomerRedactDelegate;
+      };
+      const childDelegates = ctx.db as unknown as CustomerRedactDelegates;
+      for (const table of CUSTOMER_REDACT_CHILD_TABLES) {
+        await childDelegates[table].deleteMany({
+          where: { merchantId, customerId: customer.id },
+        });
+      }
+
+      // 7. Audit evidence — same tx as steps 2-6.
       await auditLog.append(
         {
           merchantId,
