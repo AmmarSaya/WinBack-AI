@@ -52,12 +52,12 @@
   "devDependencies": {
     "@types/node": "^25.9.1",
     "eslint": "^9.17.0",
-    "eslint-import-resolver-typescript": "^4.4.4",
+    "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.31.0",
     "prettier": "^3.4.2",
     "prisma": "5.22.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.60.0"
+    "typescript-eslint": "^8.60.1"
   },
   "pnpm": {
     "overrides": {
