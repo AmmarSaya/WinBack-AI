@@ -36,6 +36,7 @@ import { type JwtPayload, InvalidJwtError } from '@shopify/shopify-api';
 
 import { ShopifySessionTokenError } from '../errors.js';
 import { isValidShopDomain } from '../shop-domain.js';
+
 import { getShopifyApiInstance } from './shopify-api-instance.js';
 
 /**

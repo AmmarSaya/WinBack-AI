@@ -28,11 +28,12 @@
  * (vitest.integration.config.ts) — tests serialize, no cross-test races.
  */
 
-import { Prisma } from '@prisma/client';
+import { type Prisma } from '@prisma/client';
 import { OUTBOX_EVENTS } from '@winback/contracts';
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { OutboxRepository, withSystemScope, withTenantScope } from '../../src/index.js';
+
 import { createTestMerchant, getTestClient, resetDb } from './setup.js';
 
 const SHOP = 'outbox-claim-batch.myshopify.com';
@@ -79,7 +80,7 @@ async function seedEvents(
       const data: Prisma.OutboxEventUncheckedCreateInput = {
         merchantId,
         type: OUTBOX_EVENTS.customer.created,
-        payload: { idx: i } as Prisma.InputJsonValue,
+        payload: { idx: i },
       };
       if (opts?.explicitTimestamps === true) {
         data.createdAt = new Date(baseTime.getTime() + i * 1000);
@@ -157,7 +158,7 @@ describe('OutboxRepository.claimBatch', () => {
         data: Array.from({ length: 150 }, (_, i) => ({
           merchantId,
           type: OUTBOX_EVENTS.customer.created,
-          payload: { idx: i } as Prisma.InputJsonValue,
+          payload: { idx: i },
         })),
       });
     });

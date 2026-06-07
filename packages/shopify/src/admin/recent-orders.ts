@@ -91,19 +91,19 @@ export interface RecentOrderProduct {
 interface RawRecentOrdersResponse {
   customer?: {
     orders?: {
-      edges?: ReadonlyArray<{
+      edges?: readonly {
         node?: {
           id?: string | null;
           processedAt?: string | null;
           lineItems?: {
-            edges?: ReadonlyArray<{
+            edges?: readonly {
               node?: {
                 title?: string | null;
               } | null;
-            }> | null;
+            }[] | null;
           } | null;
         } | null;
-      }> | null;
+      }[] | null;
     } | null;
   } | null;
 }

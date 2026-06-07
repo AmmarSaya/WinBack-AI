@@ -4,6 +4,7 @@ import { ValidationError } from '@winback/errors';
 import { toShopifyCustomerGid } from '../gid.js';
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';
 import type { ShopifyCustomerWebhookBody } from '../webhook-bodies.js';
+
 import { BaseRepository } from './base.js';
 
 /**

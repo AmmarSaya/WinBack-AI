@@ -56,9 +56,9 @@ export const shopifyMockServer = setupServer(
  * don't leak.
  */
 export function setupShopifyMocks(): void {
-  beforeAll(() => shopifyMockServer.listen({ onUnhandledRequest: 'error' }));
-  afterEach(() => shopifyMockServer.resetHandlers());
-  afterAll(() => shopifyMockServer.close());
+  beforeAll(() => { shopifyMockServer.listen({ onUnhandledRequest: 'error' }); });
+  afterEach(() => { shopifyMockServer.resetHandlers(); });
+  afterAll(() => { shopifyMockServer.close(); });
 }
 
 /**

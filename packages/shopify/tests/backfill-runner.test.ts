@@ -12,7 +12,6 @@ import { withTenantScope } from '@winback/db';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ShopifyTokenRevokedError } from '../src/admin/errors.js';
-import { BackfillRunner } from '../src/backfill/runner.js';
 import {
   CustomerPageFetcher,
   extractNumericIdFromGid,
@@ -21,6 +20,7 @@ import {
   parseIntOrZero,
   type ShopifyCustomerNode,
 } from '../src/backfill/customer-backfill.js';
+import { BackfillRunner } from '../src/backfill/runner.js';
 import type { PageFetcher, PageProcessor, ResourcePage } from '../src/backfill/types.js';
 
 const MERCHANT_ID = 'm_test';
@@ -202,7 +202,7 @@ describe('CustomerPageFetcher', () => {
     // Sample the formula at a few pageSizes — the cost gate is the
     // safety mechanism for the whole backfill; the formula must match
     // what the code does.
-    const cases: Array<{ pageSize: number; expected: number }> = [
+    const cases: { pageSize: number; expected: number }[] = [
       { pageSize: 5, expected: 10 }, //  max(10, 1)  = 10  (floor)
       { pageSize: 25, expected: 10 }, // max(10, 5)  = 10  (still floor)
       { pageSize: 50, expected: 10 }, // max(10, 10) = 10  (edge)

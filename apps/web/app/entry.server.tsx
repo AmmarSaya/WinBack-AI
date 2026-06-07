@@ -75,7 +75,7 @@ function handleBotRequest(
           pipe(body);
         },
         onShellError(error: unknown) {
-          reject(error as Error);
+          reject(error);
         },
         onError(error: unknown) {
           responseStatusCode = 500;
@@ -109,7 +109,7 @@ function handleBrowserRequest(
           pipe(body);
         },
         onShellError(error: unknown) {
-          reject(error as Error);
+          reject(error);
         },
         onError(error: unknown) {
           responseStatusCode = 500;

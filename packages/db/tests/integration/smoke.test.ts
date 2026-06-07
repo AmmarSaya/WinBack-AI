@@ -28,6 +28,7 @@ import {
   withSystemScope,
   withTenantScope,
 } from '../../src/index.js';
+
 import { createTestMerchant, getTestClient, resetDb } from './setup.js';
 
 const SHOP = 'smoke.myshopify.com';

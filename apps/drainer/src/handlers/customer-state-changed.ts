@@ -32,6 +32,12 @@
  */
 
 import type { Prisma } from '@prisma/client';
+import {
+  type WinbackTriggerState,
+  buildWinbackPrompt,
+  estimateCostMicrocents,
+  getAiConfig,
+} from '@winback/ai';
 import { AUDIT_ACTIONS, parseAiTone } from '@winback/contracts';
 import {
   AiGenerationRepository,
@@ -43,12 +49,6 @@ import {
   customerStateChangedPayloadSchema,
   withTenantScope,
 } from '@winback/db';
-import {
-  type WinbackTriggerState,
-  buildWinbackPrompt,
-  estimateCostMicrocents,
-  getAiConfig,
-} from '@winback/ai';
 import { getLogger } from '@winback/logger';
 import {
   type RecentOrderProduct,

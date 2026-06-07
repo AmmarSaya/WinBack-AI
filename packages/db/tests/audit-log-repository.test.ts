@@ -19,8 +19,8 @@
 import { Prisma } from '@prisma/client';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { WinbackPrisma } from '../src/client.js';
 import { withAudit } from '../src/audit-scope.js';
+import type { WinbackPrisma } from '../src/client.js';
 import { AuditLogRepository } from '../src/repositories/audit-log.repository.js';
 
 function makeMockClient() {
@@ -92,15 +92,15 @@ describe('AuditLogRepository.append — data shape', () => {
       context: { merged: true, count: 3 },
     });
 
-    const args = own.create.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(args.data['merchantId']).toBe('m_1');
-    expect(args.data['shop']).toBe('foo.myshopify.com');
-    expect(args.data['actorType']).toBe('system');
-    expect(args.data['actorId']).toBe('gdpr.processor');
-    expect(args.data['action']).toBe('gdpr.customer_redact');
-    expect(args.data['targetType']).toBe('customer');
-    expect(args.data['targetId']).toBe('c_42');
-    expect(args.data['context']).toEqual({ merged: true, count: 3 });
+    const args = own.create.mock.calls[0]![0];
+    expect(args.data.merchantId).toBe('m_1');
+    expect(args.data.shop).toBe('foo.myshopify.com');
+    expect(args.data.actorType).toBe('system');
+    expect(args.data.actorId).toBe('gdpr.processor');
+    expect(args.data.action).toBe('gdpr.customer_redact');
+    expect(args.data.targetType).toBe('customer');
+    expect(args.data.targetId).toBe('c_42');
+    expect(args.data.context).toEqual({ merged: true, count: 3 });
   });
 
   it('defaults absent actorId / targetType / targetId to null (Prisma nullable column shape)', async () => {
@@ -114,10 +114,10 @@ describe('AuditLogRepository.append — data shape', () => {
       action: 'gdpr.customer_redact_malformed',
     });
 
-    const args = own.create.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(args.data['actorId']).toBeNull();
-    expect(args.data['targetType']).toBeNull();
-    expect(args.data['targetId']).toBeNull();
+    const args = own.create.mock.calls[0]![0];
+    expect(args.data.actorId).toBeNull();
+    expect(args.data.targetType).toBeNull();
+    expect(args.data.targetId).toBeNull();
   });
 
   it('uses Prisma.JsonNull when context is omitted (NOT plain null, which Prisma rejects on Json columns)', async () => {
@@ -131,8 +131,8 @@ describe('AuditLogRepository.append — data shape', () => {
       action: 'gdpr.customer_redact_malformed',
     });
 
-    const args = own.create.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(args.data['context']).toBe(Prisma.JsonNull);
+    const args = own.create.mock.calls[0]![0];
+    expect(args.data.context).toBe(Prisma.JsonNull);
   });
 
   it('preserves merchantId=null on tombstone rows (system-scope writes)', async () => {
@@ -150,9 +150,9 @@ describe('AuditLogRepository.append — data shape', () => {
       targetType: 'merchant',
     });
 
-    const args = own.create.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(args.data['merchantId']).toBeNull();
-    expect(args.data['shop']).toBe('foo.myshopify.com');
+    const args = own.create.mock.calls[0]![0];
+    expect(args.data.merchantId).toBeNull();
+    expect(args.data.shop).toBe('foo.myshopify.com');
   });
 
   it('passes through an actor of type "operator"', async () => {
@@ -167,9 +167,9 @@ describe('AuditLogRepository.append — data shape', () => {
       action: 'gdpr.customer_redact',
     });
 
-    const args = own.create.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(args.data['actorType']).toBe('operator');
-    expect(args.data['actorId']).toBe('ops-engineer@example.com');
+    const args = own.create.mock.calls[0]![0];
+    expect(args.data.actorType).toBe('operator');
+    expect(args.data.actorId).toBe('ops-engineer@example.com');
   });
 });
 
@@ -232,15 +232,15 @@ describe('AuditLogRepository.appendFromContext', () => {
       () => repo.appendFromContext({ merchantId: 'm_1', shop: 'foo.myshopify.com' }),
     );
 
-    const args = own.create.mock.calls[0]![0] as { data: Record<string, unknown> };
-    expect(args.data['merchantId']).toBe('m_1');
-    expect(args.data['shop']).toBe('foo.myshopify.com');
-    expect(args.data['actorType']).toBe('system');
-    expect(args.data['actorId']).toBe('gdpr.processor');
-    expect(args.data['action']).toBe('gdpr.customer_redact');
-    expect(args.data['targetType']).toBe('customer');
-    expect(args.data['targetId']).toBe('c_42');
-    expect(args.data['context']).toEqual({ source: 'als' });
+    const args = own.create.mock.calls[0]![0];
+    expect(args.data.merchantId).toBe('m_1');
+    expect(args.data.shop).toBe('foo.myshopify.com');
+    expect(args.data.actorType).toBe('system');
+    expect(args.data.actorId).toBe('gdpr.processor');
+    expect(args.data.action).toBe('gdpr.customer_redact');
+    expect(args.data.targetType).toBe('customer');
+    expect(args.data.targetId).toBe('c_42');
+    expect(args.data.context).toEqual({ source: 'als' });
   });
 
   it('forwards tx to the underlying append call', async () => {

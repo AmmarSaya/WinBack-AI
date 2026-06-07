@@ -1,8 +1,8 @@
 import { type LinksFunction, type LoaderFunctionArgs, json } from '@remix-run/node';
 import { Links, Meta, Outlet, Scripts, ScrollRestoration, useLoaderData } from '@remix-run/react';
 import { AppProvider, Frame } from '@shopify/polaris';
-import polarisTranslations from '@shopify/polaris/locales/en.json';
 import polarisStyles from '@shopify/polaris/build/esm/styles.css?url';
+import polarisTranslations from '@shopify/polaris/locales/en.json';
 import { getShopifyConfig } from '@winback/shopify';
 
 export const links: LinksFunction = () => [{ rel: 'stylesheet', href: polarisStyles }];

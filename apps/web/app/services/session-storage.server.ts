@@ -1,5 +1,5 @@
-import { PrismaSessionStorage } from '@shopify/shopify-app-session-storage-prisma';
 import type { PrismaClient } from '@prisma/client';
+import { PrismaSessionStorage } from '@shopify/shopify-app-session-storage-prisma';
 import { Cipher, decodeKey } from '@winback/crypto';
 import { EncryptedSessionStorage, getShopifyConfig } from '@winback/shopify';
 
@@ -22,7 +22,7 @@ import { getPrisma } from './db.server.js';
  * passes adapter queries through untouched.
  */
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __winbackSessionStorage: EncryptedSessionStorage | undefined;
 }
 

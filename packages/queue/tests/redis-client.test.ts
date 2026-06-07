@@ -13,10 +13,10 @@
  *   4. connectionName plumbed through for CLIENT LIST visibility
  */
 
+import { getRedisConfig, type RedisConfig } from '@winback/config';
 import { Redis } from 'ioredis';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-import { getRedisConfig, type RedisConfig } from '@winback/config';
 
 import { createRedisClient } from '../src/redis-client.js';
 

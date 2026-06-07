@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import type { CustomerScoreCohortRow } from '../src/repositories/customer-score.repository.js';
 import {
   INSUFFICIENT_COHORT_THRESHOLD,
   STATE_BOUNDARIES_DAYS,
@@ -13,7 +14,6 @@ import {
   resolveScorableCustomer,
   stateFromRecency,
 } from '../src/services/scoring-math.js';
-import type { CustomerScoreCohortRow } from '../src/repositories/customer-score.repository.js';
 
 // ---------------------------------------------------------------------------
 // Test fixtures
@@ -235,7 +235,7 @@ describe('computeChurnRiskScore', () => {
   });
 
   it('5,1,1 → 0.5333… (asymmetric R win)', () => {
-    expect(computeChurnRiskScore(5, 1, 1)).toBeCloseTo((1 - 7 / 15) as number, 10);
+    expect(computeChurnRiskScore(5, 1, 1)).toBeCloseTo((1 - 7 / 15), 10);
   });
 });
 

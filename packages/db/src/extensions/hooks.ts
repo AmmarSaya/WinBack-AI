@@ -35,13 +35,13 @@ export type DataLike =
   | Record<string, unknown>
   | Record<string, unknown>[]
   | undefined;
-export type ReadArgs = { where?: WhereLike };
-export type WriteArgs = {
+export interface ReadArgs { where?: WhereLike }
+export interface WriteArgs {
   where?: WhereLike;
   data?: DataLike;
   create?: DataLike;
   update?: DataLike;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Top-level orchestrators (one each for reads and writes)
@@ -108,7 +108,7 @@ export function enforceTenantScopeOnRead(
     // Cross-tenant Merchant reads (operator dashboards, install lookup
     // by shop, GDPR processor) MUST open withSystemScope; the early
     // return at line 89 above handles that path.
-    const id = args.where?.['id'];
+    const id = args.where?.id;
     if (id === undefined) {
       throw new TenantScopeError(
         `Unscoped Merchant read in tenant scope (${scope.merchantId}). ` +
@@ -133,8 +133,8 @@ export function enforceTenantScopeOnRead(
   // which already includes merchantId. Skip injection.
   if (isFindUnique) return args;
 
-  const where = (args.where ?? {}) as Record<string, unknown>;
-  const existing = where['merchantId'];
+  const where = (args.where ?? {});
+  const existing = where.merchantId;
   if (existing === undefined) {
     return { ...args, where: { ...where, merchantId: scope.merchantId } };
   }
@@ -162,9 +162,9 @@ export function enforceTenantScopeOnWrite(
   if (scope.kind === 'system') return args;
 
   if (model === 'Merchant') {
-    const where = args.where as Record<string, unknown> | undefined;
+    const where = args.where;
     const data = args.data as Record<string, unknown> | undefined;
-    const targetId = where?.['id'] ?? data?.['id'];
+    const targetId = where?.id ?? data?.id;
     if (targetId !== undefined && targetId !== scope.merchantId) {
       throw new TenantScopeError(
         `Cross-tenant Merchant write: scope=${scope.merchantId}, target=${String(targetId)}`,
@@ -191,7 +191,7 @@ export function enforceTenantScopeOnWrite(
   }
   if (args.update !== undefined) {
     const update = args.update as Record<string, unknown>;
-    if (update['merchantId'] !== undefined && update['merchantId'] !== scope.merchantId) {
+    if (update.merchantId !== undefined && update.merchantId !== scope.merchantId) {
       throw new TenantScopeError(
         `Upsert update block carries cross-tenant merchantId on ${model}`,
         { context: { model, operation } },
@@ -200,7 +200,7 @@ export function enforceTenantScopeOnWrite(
   }
   if (args.where !== undefined) {
     const where = args.where;
-    const existing = where['merchantId'];
+    const existing = where.merchantId;
     if (existing === undefined) {
       next = { ...next, where: { ...where, merchantId: scope.merchantId } };
     } else if (existing !== scope.merchantId) {
@@ -230,7 +230,7 @@ function injectIntoRow(
   row: Record<string, unknown>,
   scopeMerchantId: string,
 ): Record<string, unknown> {
-  const existing = row['merchantId'];
+  const existing = row.merchantId;
   if (existing === undefined) {
     return { ...row, merchantId: scopeMerchantId };
   }
@@ -249,7 +249,7 @@ function injectIntoRow(
 
 export function applySoftDeleteFilter(model: string, args: ReadArgs): ReadArgs {
   if (!SOFT_DELETE_MODELS.has(model)) return args;
-  const where = (args.where ?? {}) as Record<string, unknown>;
+  const where = (args.where ?? {});
   if ('deletedAt' in where) return args;
   return { ...args, where: { ...where, deletedAt: null } };
 }
@@ -277,7 +277,7 @@ function validateAiToneInWriteBlock(block: DataLike): void {
 
 export function validateAiToneInRow(row: Record<string, unknown>): void {
   if (!('aiTone' in row)) return;
-  const value = row['aiTone'];
+  const value = row.aiTone;
   if (value === null) return;
   const result = aiToneSchema.safeParse(value);
   if (!result.success) {
@@ -292,5 +292,5 @@ export function validateAiToneInRow(row: Record<string, unknown>): void {
       cause: result.error,
     });
   }
-  row['aiTone'] = result.data;
+  row.aiTone = result.data;
 }

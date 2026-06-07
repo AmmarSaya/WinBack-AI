@@ -43,7 +43,7 @@ vi.mock('../src/redis-client.js', () => ({
     const emitter = new EventEmitter();
     const client = Object.assign(emitter, {
       connectionName,
-      status: 'ready' as 'ready' | 'end',
+      status: 'ready',
       disconnect: vi.fn(() => {
         // Match the production-code contract: after disconnect, the client
         // emits 'end' and transitions to status 'end'. Done synchronously

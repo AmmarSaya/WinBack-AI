@@ -17,11 +17,11 @@ vi.mock('@winback/logger', () => ({
 }));
 
 import type { WinbackPrisma } from '../src/client.js';
+import { TenantScopeError } from '../src/errors.js';
 import { AuditLogRepository } from '../src/repositories/audit-log.repository.js';
 import { CustomerScoreRepository } from '../src/repositories/customer-score.repository.js';
 import { CustomerScoreService } from '../src/services/customer-score.service.js';
 import { withSystemScope, withTenantScope } from '../src/tenant-scope.js';
-import { TenantScopeError } from '../src/errors.js';
 
 /**
  * Unit tests for CustomerScoreService.recompute with mocked
@@ -625,16 +625,16 @@ describe('CustomerScoreService.recompute — side-effect details on state change
     expect(warnCall).toBeDefined();
     const [warnCtx, warnMessage] = warnCall as [Record<string, unknown>, string];
 
-    expect(warnCtx['merchantId']).toBe(MERCHANT_ID);
-    expect(warnCtx['shop']).toBe(SHOP);
-    expect(warnCtx['installedAt']).toBe(installedAt.toISOString());
-    expect(warnCtx['shopDetailsFetchedAt']).toBeNull();
-    expect(warnCtx['eventTrigger']).toBe('scoring');
+    expect(warnCtx.merchantId).toBe(MERCHANT_ID);
+    expect(warnCtx.shop).toBe(SHOP);
+    expect(warnCtx.installedAt).toBe(installedAt.toISOString());
+    expect(warnCtx.shopDetailsFetchedAt).toBeNull();
+    expect(warnCtx.eventTrigger).toBe('scoring');
     // Q-S3: timeSinceInstallMs lets operators distinguish "normal
     // install window" (<10min, D3 hasn't tried yet) from "D3 sweep
     // failing repeatedly" (>10min, sweep should have healed).
-    expect(typeof warnCtx['timeSinceInstallMs']).toBe('number');
-    expect(warnCtx['timeSinceInstallMs']).toBeGreaterThanOrEqual(0);
+    expect(typeof warnCtx.timeSinceInstallMs).toBe('number');
+    expect(warnCtx.timeSinceInstallMs).toBeGreaterThanOrEqual(0);
     expect(warnMessage).toContain('D3 enrichment-sweep will heal');
   });
 

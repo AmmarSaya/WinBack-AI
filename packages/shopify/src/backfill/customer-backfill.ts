@@ -1,8 +1,9 @@
+import type { Prisma } from '@prisma/client';
 import { BACKFILL_RESOURCES, type BackfillResource } from '@winback/contracts';
 import { getLogger } from '@winback/logger';
-import type { Prisma } from '@prisma/client';
 
 import type { AdminClient } from '../admin/client.js';
+
 import type { PageFetcher, PageProcessor, ResourcePage } from './types.js';
 
 const log = getLogger('shopify.backfill.customer');
@@ -129,7 +130,7 @@ const SHOPIFY_OWNED_FIELDS = [
   'ordersCount',
   'tags',
   'shopifyUpdatedAt',
-] as const satisfies ReadonlyArray<keyof Prisma.CustomerUncheckedCreateInput>;
+] as const satisfies readonly (keyof Prisma.CustomerUncheckedCreateInput)[];
 
 /**
  * Page processor: upserts each customer USING THE PASSED `tx` so the

@@ -175,7 +175,7 @@ describe('customerStateChangedPayloadSchema validation', () => {
       customerStateChangedPayloadSchema.parse({
         ...payload,
         unknownExtra: 'should-fail',
-      } as unknown),
+      }),
     ).toThrow();
   });
 

@@ -9,8 +9,8 @@
 // Test cases T1–T8 mirror the §8 plan surfaced in STEP F Phase 1.
 // =============================================================================
 
-import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
+import { describe, test } from 'node:test';
 
 import {
   collectDeclarations,

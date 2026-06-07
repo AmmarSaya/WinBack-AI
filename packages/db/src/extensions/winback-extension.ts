@@ -22,55 +22,55 @@ export const winbackExtension = Prisma.defineExtension({
     $allModels: {
       // -------- reads --------
       async findMany({ model, args, query }) {
-        return query(applyReadHooks(model, args as ReadArgs) as typeof args);
+        return query(applyReadHooks(model, args) as typeof args);
       },
       async findFirst({ model, args, query }) {
-        return query(applyReadHooks(model, args as ReadArgs) as typeof args);
+        return query(applyReadHooks(model, args) as typeof args);
       },
       async findFirstOrThrow({ model, args, query }) {
-        return query(applyReadHooks(model, args as ReadArgs) as typeof args);
+        return query(applyReadHooks(model, args) as typeof args);
       },
       async findUnique({ model, args, query }) {
         return query(
-          applyReadHooks(model, args as ReadArgs, { findUnique: true }) as typeof args,
+          applyReadHooks(model, args, { findUnique: true }) as typeof args,
         );
       },
       async findUniqueOrThrow({ model, args, query }) {
         return query(
-          applyReadHooks(model, args as ReadArgs, { findUnique: true }) as typeof args,
+          applyReadHooks(model, args, { findUnique: true }) as typeof args,
         );
       },
       async count({ model, args, query }) {
-        return query(applyReadHooks(model, args as ReadArgs) as typeof args);
+        return query(applyReadHooks(model, args) as typeof args);
       },
       async aggregate({ model, args, query }) {
-        return query(applyReadHooks(model, args as ReadArgs) as typeof args);
+        return query(applyReadHooks(model, args) as typeof args);
       },
       async groupBy({ model, args, query }) {
-        return query(applyReadHooks(model, args as ReadArgs) as typeof args);
+        return query(applyReadHooks(model, args) as typeof args);
       },
 
       // -------- writes --------
       async create({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'create') as typeof args);
+        return query(applyWriteHooks(model, args, 'create') as typeof args);
       },
       async createMany({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'createMany') as typeof args);
+        return query(applyWriteHooks(model, args, 'createMany') as typeof args);
       },
       async update({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'update') as typeof args);
+        return query(applyWriteHooks(model, args, 'update') as typeof args);
       },
       async updateMany({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'updateMany') as typeof args);
+        return query(applyWriteHooks(model, args, 'updateMany') as typeof args);
       },
       async upsert({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'upsert') as typeof args);
+        return query(applyWriteHooks(model, args, 'upsert') as typeof args);
       },
       async delete({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'delete') as typeof args);
+        return query(applyWriteHooks(model, args, 'delete') as typeof args);
       },
       async deleteMany({ model, args, query }) {
-        return query(applyWriteHooks(model, args as WriteArgs, 'deleteMany') as typeof args);
+        return query(applyWriteHooks(model, args, 'deleteMany') as typeof args);
       },
     },
   },

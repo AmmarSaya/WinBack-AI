@@ -1,5 +1,5 @@
-import { OUTBOX_EVENTS, type OutboxEventType } from '@winback/contracts';
 import { type Prisma } from '@prisma/client';
+import { OUTBOX_EVENTS, type OutboxEventType } from '@winback/contracts';
 
 import type { WinbackPrisma } from './client.js';
 import { TenantScopeError } from './errors.js';
@@ -122,7 +122,7 @@ export class UnitOfWork {
     options: UnitOfWorkOptions = {},
   ): Promise<T> {
     const scope = getTenantScope();
-    if (scope === undefined || scope.kind !== 'tenant') {
+    if (scope?.kind !== 'tenant') {
       throw new TenantScopeError(
         'UnitOfWork.run requires an active tenant scope (withTenantScope).',
       );

@@ -63,6 +63,7 @@
  * @winback/contracts/src/system-scope-reasons.ts shipped in D2.
  */
 
+import type { Prisma } from '@prisma/client';
 import {
   MAX_OUTBOX_ATTEMPTS,
   SYSTEM_SCOPE_REASONS,
@@ -75,7 +76,6 @@ import {
 } from '@winback/db';
 import { isRetryable } from '@winback/errors';
 import { getLogger } from '@winback/logger';
-import type { Prisma } from '@prisma/client';
 
 import type { DrainerContext } from './context.js';
 import { dispatchEvent } from './dispatch.js';

@@ -2,17 +2,17 @@ import OpenAI from 'openai';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  DeepSeekProvider,
+  mapDeepSeekError,
+} from '../../src/providers/deepseek.js';
+import {
   AiProviderAuthError,
   AiProviderContentBlockedError,
-  AiProviderError,
+  type AiProviderError,
   AiProviderInvalidRequestError,
   AiProviderRateLimitError,
   AiProviderTransientError,
 } from '../../src/providers/interface.js';
-import {
-  DeepSeekProvider,
-  mapDeepSeekError,
-} from '../../src/providers/deepseek.js';
 
 /**
  * DeepSeek uses the OpenAI SDK shape, so the fixture-construction helper
@@ -63,7 +63,7 @@ function fakeChatCompletion(opts: {
     choices,
   };
   if (opts.omitUsage === true) {
-    return base as unknown as OpenAI.Chat.Completions.ChatCompletion;
+    return base;
   }
   return {
     ...base,
@@ -72,7 +72,7 @@ function fakeChatCompletion(opts: {
       completion_tokens: opts.outputTokens ?? 20,
       total_tokens: opts.totalTokens ?? 80,
     },
-  } as OpenAI.Chat.Completions.ChatCompletion;
+  };
 }
 
 function makeProvider(impl: (args: unknown) => Promise<unknown> | unknown): DeepSeekProvider {

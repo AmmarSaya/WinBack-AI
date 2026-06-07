@@ -16,8 +16,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { AiSpendBucketRepository } from '../src/repositories/ai-spend-bucket.repository.js';
 import type { WinbackPrisma } from '../src/client.js';
+import { AiSpendBucketRepository } from '../src/repositories/ai-spend-bucket.repository.js';
 
 interface AiSpendBucketRow {
   id: string;
@@ -40,8 +40,8 @@ function rowKey(merchantId: string, date: Date): string {
 /** Apply Prisma update-operator shapes onto a row. Currently supports `{ increment }`. */
 function applyUpdate(row: AiSpendBucketRow, data: Record<string, unknown>): void {
   for (const [field, value] of Object.entries(data)) {
-    if (value !== null && typeof value === 'object' && 'increment' in (value as object)) {
-      const delta = (value as { increment: unknown }).increment;
+    if (value !== null && typeof value === 'object' && 'increment' in (value)) {
+      const delta = (value).increment;
       if (field === 'spentMicrocents') {
         row.spentMicrocents = row.spentMicrocents + (delta as bigint);
       } else if (field === 'generationCount') {
@@ -86,12 +86,12 @@ function makeMockPrisma(initial: Partial<MockState> = {}) {
         state.nextId += 1;
         const row: AiSpendBucketRow = {
           id,
-          merchantId: args.create['merchantId'] as string,
-          date: args.create['date'] as Date,
+          merchantId: args.create.merchantId as string,
+          date: args.create.date as Date,
           spentMicrocents:
-            (args.create['spentMicrocents'] as bigint | undefined) ?? 0n,
+            (args.create.spentMicrocents as bigint | undefined) ?? 0n,
           generationCount:
-            (args.create['generationCount'] as number | undefined) ?? 0,
+            (args.create.generationCount as number | undefined) ?? 0,
         };
         state.rows.push(row);
         return { id };
@@ -251,8 +251,8 @@ describe('AiSpendBucketRepository.incrementSpend', () => {
       create: Record<string, unknown>;
       update: Record<string, unknown>;
     };
-    expect(upsertCall.create['spentMicrocents']).toBe(4_620n);
-    expect(upsertCall.create['generationCount']).toBe(1);
+    expect(upsertCall.create.spentMicrocents).toBe(4_620n);
+    expect(upsertCall.create.generationCount).toBe(1);
   });
 
   it('increments existing bucket spentMicrocents + generationCount on subsequent calls', async () => {
@@ -285,8 +285,8 @@ describe('AiSpendBucketRepository.incrementSpend', () => {
     const upsertCall = aiSpendBucketDelegate.upsert.mock.calls[0]![0] as {
       update: Record<string, unknown>;
     };
-    expect(upsertCall.update['spentMicrocents']).toEqual({ increment: 2_310n });
-    expect(upsertCall.update['generationCount']).toEqual({ increment: 1 });
+    expect(upsertCall.update.spentMicrocents).toEqual({ increment: 2_310n });
+    expect(upsertCall.update.generationCount).toEqual({ increment: 1 });
   });
 
   it('preserves BigInt precision on deltaMicrocents (BigInt boundary lock)', async () => {
@@ -308,8 +308,8 @@ describe('AiSpendBucketRepository.incrementSpend', () => {
     const upsertCall = aiSpendBucketDelegate.upsert.mock.calls[0]![0] as {
       create: Record<string, unknown>;
     };
-    expect(upsertCall.create['spentMicrocents']).toBe(bigDelta);
-    expect(typeof upsertCall.create['spentMicrocents']).toBe('bigint');
+    expect(upsertCall.create.spentMicrocents).toBe(bigDelta);
+    expect(typeof upsertCall.create.spentMicrocents).toBe('bigint');
   });
 
   it('normalizes date to UTC midnight in the upsert key', async () => {
@@ -424,7 +424,7 @@ describe('AiSpendBucketRepository.sumMonthSpend', () => {
     // The gte boundary MUST be the UTC midnight of the first day of June 2026.
     expect(aggregateCall.where.date.gte.toISOString()).toBe('2026-06-01T00:00:00.000Z');
     expect(aggregateCall.where.merchantId).toBe('m_1');
-    expect(aggregateCall._sum['spentMicrocents']).toBe(true);
+    expect(aggregateCall._sum.spentMicrocents).toBe(true);
   });
 
   it('handles January correctly (Date.UTC zero-indexed month edge case)', async () => {

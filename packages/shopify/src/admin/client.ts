@@ -2,6 +2,7 @@ import { RateLimitError } from '@winback/errors';
 import { getLogger } from '@winback/logger';
 
 import { type ShopifyConfig, getShopifyConfig } from '../config.js';
+
 import type { CostTracker } from './cost-tracker.js';
 import { ShopifyAdminApiError, ShopifyTokenRevokedError } from './errors.js';
 import type { ShopifyTokenResolver } from './token-resolver.js';
@@ -30,10 +31,10 @@ export interface GraphQLArgs {
 
 export interface GraphQLResponse<T> {
   readonly data?: T;
-  readonly errors?: Array<{
+  readonly errors?: {
     message: string;
     extensions?: Record<string, unknown>;
-  }>;
+  }[];
   readonly extensions?: {
     cost?: {
       requestedQueryCost: number;

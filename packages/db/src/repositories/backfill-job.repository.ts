@@ -1,7 +1,8 @@
-import type { BackfillResource } from '@winback/contracts';
 import type { BackfillJob, BackfillStatus, Prisma } from '@prisma/client';
+import type { BackfillResource } from '@winback/contracts';
 
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';
+
 import { BaseRepository } from './base.js';
 
 /**

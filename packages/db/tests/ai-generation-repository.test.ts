@@ -18,8 +18,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { AiGenerationRepository } from '../src/repositories/ai-generation.repository.js';
 import type { WinbackPrisma } from '../src/client.js';
+import { AiGenerationRepository } from '../src/repositories/ai-generation.repository.js';
 
 interface AiGenerationRow {
   id: string;
@@ -64,25 +64,25 @@ function makeMockPrisma(initial: Partial<MockState> = {}) {
 
   const aiGenerationDelegate = {
     create: vi.fn(async (args: { data: Record<string, unknown>; select?: unknown }) => {
-      state.callLog.push(`aiGeneration.create data.merchantId=${String(args.data['merchantId'])}`);
+      state.callLog.push(`aiGeneration.create data.merchantId=${String(args.data.merchantId)}`);
       const id = `gen_${String(state.nextId)}`;
       state.nextId += 1;
       const row: AiGenerationRow = {
         id,
-        merchantId: args.data['merchantId'] as string,
-        customerId: args.data['customerId'] as string,
+        merchantId: args.data.merchantId as string,
+        customerId: args.data.customerId as string,
         status: 'pending',
-        triggerState: args.data['triggerState'] as string,
-        previousState: args.data['previousState'] as string,
-        rDays: args.data['rDays'] as number,
-        fCount: args.data['fCount'] as number,
-        mCents: args.data['mCents'] as bigint,
-        currency: args.data['currency'] as string,
-        churnRiskScore: args.data['churnRiskScore'] as number | null,
-        provider: args.data['provider'] as string,
-        modelId: args.data['modelId'] as string,
-        systemPrompt: args.data['systemPrompt'] as string,
-        userPrompt: args.data['userPrompt'] as string,
+        triggerState: args.data.triggerState as string,
+        previousState: args.data.previousState as string,
+        rDays: args.data.rDays as number,
+        fCount: args.data.fCount as number,
+        mCents: args.data.mCents as bigint,
+        currency: args.data.currency as string,
+        churnRiskScore: args.data.churnRiskScore as number | null,
+        provider: args.data.provider as string,
+        modelId: args.data.modelId as string,
+        systemPrompt: args.data.systemPrompt as string,
+        userPrompt: args.data.userPrompt as string,
       };
       state.rows.push(row);
       return { id };
@@ -90,12 +90,12 @@ function makeMockPrisma(initial: Partial<MockState> = {}) {
     updateMany: vi.fn(
       async (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
         state.callLog.push(
-          `aiGeneration.updateMany where=${JSON.stringify(args.where)} data.status=${String(args.data['status'])}`,
+          `aiGeneration.updateMany where=${JSON.stringify(args.where)} data.status=${String(args.data.status)}`,
         );
         let count = 0;
         for (const row of state.rows) {
-          const whereId = args.where['id'] as string | undefined;
-          const whereStatus = args.where['status'] as string | undefined;
+          const whereId = args.where.id as string | undefined;
+          const whereStatus = args.where.status as string | undefined;
           if (whereId !== undefined && row.id !== whereId) continue;
           if (whereStatus !== undefined && row.status !== whereStatus) continue;
           Object.assign(row, args.data);
@@ -142,19 +142,19 @@ describe('AiGenerationRepository.createPending', () => {
     const createCall = aiGenerationDelegate.create.mock.calls[0]![0] as {
       data: Record<string, unknown>;
     };
-    expect(createCall.data['merchantId']).toBe('m_1');
-    expect(createCall.data['customerId']).toBe('c_1');
-    expect(createCall.data['triggerState']).toBe('at_risk');
-    expect(createCall.data['previousState']).toBe('active');
-    expect(createCall.data['rDays']).toBe(45);
-    expect(createCall.data['fCount']).toBe(3);
-    expect(createCall.data['mCents']).toBe(12500n);
-    expect(createCall.data['currency']).toBe('USD');
-    expect(createCall.data['churnRiskScore']).toBe(0.72);
-    expect(createCall.data['provider']).toBe('deepseek');
-    expect(createCall.data['modelId']).toBe('deepseek-v4-flash');
-    expect(createCall.data['systemPrompt']).toBe(VALID_CREATE_ARGS.systemPrompt);
-    expect(createCall.data['userPrompt']).toBe(VALID_CREATE_ARGS.userPrompt);
+    expect(createCall.data.merchantId).toBe('m_1');
+    expect(createCall.data.customerId).toBe('c_1');
+    expect(createCall.data.triggerState).toBe('at_risk');
+    expect(createCall.data.previousState).toBe('active');
+    expect(createCall.data.rDays).toBe(45);
+    expect(createCall.data.fCount).toBe(3);
+    expect(createCall.data.mCents).toBe(12500n);
+    expect(createCall.data.currency).toBe('USD');
+    expect(createCall.data.churnRiskScore).toBe(0.72);
+    expect(createCall.data.provider).toBe('deepseek');
+    expect(createCall.data.modelId).toBe('deepseek-v4-flash');
+    expect(createCall.data.systemPrompt).toBe(VALID_CREATE_ARGS.systemPrompt);
+    expect(createCall.data.userPrompt).toBe(VALID_CREATE_ARGS.userPrompt);
 
     // status, completedAt, generatedText, tokens, cost MUST NOT be in
     // the create payload — schema default is 'pending'; the rest are
@@ -181,8 +181,8 @@ describe('AiGenerationRepository.createPending', () => {
     const createCall = aiGenerationDelegate.create.mock.calls[0]![0] as {
       data: Record<string, unknown>;
     };
-    expect(createCall.data['mCents']).toBe(big);
-    expect(typeof createCall.data['mCents']).toBe('bigint');
+    expect(createCall.data.mCents).toBe(big);
+    expect(typeof createCall.data.mCents).toBe('bigint');
   });
 
   it('accepts null churnRiskScore (scoring engine produced none)', async () => {
@@ -194,7 +194,7 @@ describe('AiGenerationRepository.createPending', () => {
     const createCall = aiGenerationDelegate.create.mock.calls[0]![0] as {
       data: Record<string, unknown>;
     };
-    expect(createCall.data['churnRiskScore']).toBeNull();
+    expect(createCall.data.churnRiskScore).toBeNull();
   });
 
   it('uses the passed-in tx when provided', async () => {
@@ -274,7 +274,7 @@ describe('AiGenerationRepository.markCompleted', () => {
     // BOTH calls filtered on status='pending' — the regression lock.
     for (const call of aiGenerationDelegate.updateMany.mock.calls) {
       const where = (call[0] as { where: Record<string, unknown> }).where;
-      expect(where['status']).toBe('pending');
+      expect(where.status).toBe('pending');
     }
   });
 
@@ -374,7 +374,7 @@ describe('AiGenerationRepository.markFailed', () => {
     // Both calls filtered on status='pending'.
     for (const call of aiGenerationDelegate.updateMany.mock.calls) {
       const where = (call[0] as { where: Record<string, unknown> }).where;
-      expect(where['status']).toBe('pending');
+      expect(where.status).toBe('pending');
     }
   });
 

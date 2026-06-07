@@ -194,6 +194,22 @@ describe('buildWinbackPrompt — customer context', () => {
     expect(userPrompt).toContain('Address them as: valued customer');
   });
 
+  it('firstName empty string → "valued customer" salutation', () => {
+    // Locks the case where the salutation fallback was historically masked
+    // by `||` (which treats '' as falsy). After the refactor at
+    // prompt-builder.ts to satisfy prefer-nullish-coalescing without
+    // breaking behavior, the empty-string case is handled by an explicit
+    // `trimmed === ''` check rather than `||`. This test prevents a future
+    // `?? 'valued customer'` cleanup from silently reintroducing the bug
+    // (which would produce "Hi , we miss you!" for empty-string firstName).
+    const args = baseArgs();
+    const { userPrompt } = buildWinbackPrompt({
+      ...args,
+      customer: { ...args.customer, firstName: '' },
+    });
+    expect(userPrompt).toContain('Address them as: valued customer');
+  });
+
   it('mCents in BigInt formatted as currency dollars', () => {
     const args = baseArgs();
     const { userPrompt } = buildWinbackPrompt({

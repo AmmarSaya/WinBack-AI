@@ -15,16 +15,16 @@ import { HttpResponseError } from '@shopify/shopify-api';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  ShopifyInvalidShopError,
-  ShopifyTokenExchangeError,
-} from '../../src/errors.js';
-import {
   RequestedTokenType,
   _resetShopifyApiInstanceForTests,
   getShopifyApiInstance,
   tokenExchangeForShop,
 } from '../../src/auth/index.js';
 import { getShopifyConfig } from '../../src/config.js';
+import {
+  ShopifyInvalidShopError,
+  ShopifyTokenExchangeError,
+} from '../../src/errors.js';
 
 const TEST_API_KEY = 'test-api-key-12345abcdef';
 const TEST_API_SECRET =

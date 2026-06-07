@@ -1,4 +1,5 @@
 import { WEBHOOK_TOPIC_TO_EVENT } from '../webhook-topics.js';
+
 import type { AdminClient } from './client.js';
 
 /**
@@ -27,7 +28,7 @@ const SUBSCRIBE_MUTATION = `
 
 interface SubscribeResponse {
   webhookSubscriptionCreate?: {
-    userErrors?: Array<{ field?: string[]; message: string }>;
+    userErrors?: { field?: string[]; message: string }[];
     webhookSubscription?: { id: string } | null;
   };
 }
@@ -35,7 +36,7 @@ interface SubscribeResponse {
 export interface SubscribeResult {
   readonly topic: string;
   readonly subscriptionId: string | null;
-  readonly errors: ReadonlyArray<{ field?: string[]; message: string }>;
+  readonly errors: readonly { field?: string[]; message: string }[];
 }
 
 // GDPR mandatory compliance webhooks (customers/data_request,
@@ -102,7 +103,7 @@ export async function subscribeAllWebhooks(
   client: AdminClient,
   merchantId: string,
   callbackUrl: string,
-): Promise<ReadonlyArray<SubscribeResult>> {
+): Promise<readonly SubscribeResult[]> {
   const topics = Object.keys(WEBHOOK_TOPIC_TO_EVENT).filter(
     (topic) => !SUBSCRIBE_EXCLUDED_TOPICS.has(topic),
   );

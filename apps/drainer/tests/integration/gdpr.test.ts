@@ -50,7 +50,7 @@ vi.mock('@winback/shopify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@winback/shopify')>();
   return {
     ...actual,
-    buildAdminClient: vi.fn(() => ({}) as unknown),
+    buildAdminClient: vi.fn(() => ({})),
     fetchRecentOrders: vi.fn(async () => []),
   };
 });
@@ -59,12 +59,12 @@ vi.mock('@winback/shopify', async (importOriginal) => {
 // Imports — AFTER mocks.
 // ---------------------------------------------------------------------------
 
-import { AUDIT_ACTIONS } from '@winback/contracts';
 import {
   type AiGenerateArgs,
   type AiGenerateResult,
   selectActiveProvider,
 } from '@winback/ai';
+import { AUDIT_ACTIONS } from '@winback/contracts';
 import {
   CUSTOMER_REDACT_CHILD_TABLES,
   REDACTED_GID_SENTINEL_PREFIX,
@@ -125,7 +125,7 @@ function makeDrainerCtx(): { ctx: DrainerContext; queueAdd: Mock } {
       outboxDrain: {} as never,
       cronRollup: {} as never,
       cronSweep: {} as never,
-    } as unknown as Queues,
+    },
     shopifyConfig: {} as unknown as ShopifyConfig,
   };
 

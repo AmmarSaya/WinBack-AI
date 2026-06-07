@@ -68,7 +68,7 @@ const redisSchema = z
   .superRefine((data, ctx) => {
     if (
       data.NODE_ENV === 'production' &&
-      data.REDIS_TLS_REJECT_UNAUTHORIZED === false
+      !data.REDIS_TLS_REJECT_UNAUTHORIZED
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

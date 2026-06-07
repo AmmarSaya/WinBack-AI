@@ -2,6 +2,7 @@ import { type CustomerState, Prisma } from '@prisma/client';
 
 import type { CustomerStateValue } from '../events/customer-state-changed.js';
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';
+
 import { BaseRepository } from './base.js';
 
 /**
@@ -201,7 +202,7 @@ export class CustomerScoreRepository extends BaseRepository {
       insufficient_data: 0,
     };
     for (const row of groups) {
-      counts[row.state as CustomerStateValue] = row._count._all;
+      counts[row.state] = row._count._all;
     }
     return counts;
   }
@@ -307,7 +308,7 @@ export class CustomerScoreRepository extends BaseRepository {
         email: row.customer.email,
         firstName: row.customer.firstName,
         lastName: row.customer.lastName,
-        state: row.customer.state as CustomerStateValue,
+        state: row.customer.state,
         lastOrderAt: row.customer.lastOrderAt,
         rDays: row.rDays,
         fCount: row.fCount,

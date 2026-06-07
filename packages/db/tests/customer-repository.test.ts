@@ -54,7 +54,7 @@ function makeBody(overrides: Partial<ShopifyCustomerWebhookBody> = {}): ShopifyC
     email_marketing_consent: { state: 'subscribed' },
     sms_marketing_consent: { state: 'not_subscribed' },
     ...overrides,
-  } as ShopifyCustomerWebhookBody;
+  };
 }
 
 describe('CustomerRepository.upsertFromWebhook', () => {
@@ -215,7 +215,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
     await withSystemScope('test.upsert_customer', async () =>
       repo.upsertFromWebhook({
         merchantId: MERCHANT_ID,
-        body: bodyWithState as ShopifyCustomerWebhookBody,
+        body: bodyWithState,
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );

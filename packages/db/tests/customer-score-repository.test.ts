@@ -2,9 +2,9 @@ import type { Prisma } from '@prisma/client';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { WinbackPrisma } from '../src/client.js';
+import { TenantScopeError } from '../src/errors.js';
 import { CustomerScoreRepository } from '../src/repositories/customer-score.repository.js';
 import { withSystemScope, withTenantScope } from '../src/tenant-scope.js';
-import { TenantScopeError } from '../src/errors.js';
 
 /**
  * Unit tests for CustomerScoreRepository.readCohort + upsertScore against

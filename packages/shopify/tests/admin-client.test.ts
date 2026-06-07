@@ -46,7 +46,7 @@ function mockFetchOk(data: unknown, throttleStatus = defaultThrottle()): typeof 
       }),
       { status: 200, headers: { 'Content-Type': 'application/json' } },
     ),
-  ) as unknown as typeof fetch;
+  );
 }
 
 function defaultThrottle() {

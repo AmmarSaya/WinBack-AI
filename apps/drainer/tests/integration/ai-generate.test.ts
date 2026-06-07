@@ -58,7 +58,7 @@ vi.mock('@winback/shopify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@winback/shopify')>();
   return {
     ...actual,
-    buildAdminClient: vi.fn(() => ({}) as unknown),
+    buildAdminClient: vi.fn(() => ({})),
     fetchRecentOrders: vi.fn(async () => []),
   };
 });
@@ -67,7 +67,6 @@ vi.mock('@winback/shopify', async (importOriginal) => {
 // Imports — AFTER mocks
 // ---------------------------------------------------------------------------
 
-import { AUDIT_ACTIONS } from '@winback/contracts';
 import {
   AiProviderAuthError,
   AiProviderContentBlockedError,
@@ -75,6 +74,7 @@ import {
   type AiGenerateResult,
   selectActiveProvider,
 } from '@winback/ai';
+import { AUDIT_ACTIONS } from '@winback/contracts';
 import {
   type OutboxEventRow,
   type WinbackPrisma,
@@ -90,8 +90,8 @@ import type { Queues } from '@winback/queue';
 import type { ShopifyConfig } from '@winback/shopify';
 import type { Job } from 'bullmq';
 
-import { handleCustomerStateChanged } from '../../src/handlers/customer-state-changed.js';
 import type { DrainerContext } from '../../src/context.js';
+import { handleCustomerStateChanged } from '../../src/handlers/customer-state-changed.js';
 import {
   type AiGenerateJobPayload,
   processAiGenerateJob,
@@ -126,7 +126,7 @@ function makeAiCtx(): MakeCtxResult {
       outboxDrain: {} as never,
       cronRollup: {} as never,
       cronSweep: {} as never,
-    } as unknown as Queues,
+    },
     shopifyConfig: {} as unknown as ShopifyConfig,
   };
 

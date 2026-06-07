@@ -38,7 +38,7 @@ export function toHttp(
       ? error.message
       : (options.safeMessage ?? GENERIC_MESSAGE);
 
-    const fields = error.context['fields'];
+    const fields = error.context.fields;
     const fieldsPart =
       typeof fields === 'object' && fields !== null
         ? { fields: fields as Readonly<Record<string, string>> }

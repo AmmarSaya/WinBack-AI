@@ -35,7 +35,7 @@ vi.mock('@winback/shopify', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@winback/shopify')>();
   return {
     ...actual,
-    buildAdminClient: vi.fn(() => ({}) as unknown),
+    buildAdminClient: vi.fn(() => ({})),
     fetchRecentOrders: vi.fn(async () => []),
   };
 });
@@ -62,8 +62,8 @@ import type { Queues } from '@winback/queue';
 import { fetchRecentOrders } from '@winback/shopify';
 import type { ShopifyConfig } from '@winback/shopify';
 
-import { handleCustomerStateChanged } from '../../src/handlers/customer-state-changed.js';
 import type { DrainerContext } from '../../src/context.js';
+import { handleCustomerStateChanged } from '../../src/handlers/customer-state-changed.js';
 
 // ---------------------------------------------------------------------------
 // Mock plumbing
@@ -81,10 +81,10 @@ interface MockState {
   settings: { monthlyAiSpendCapCents: bigint; aiTone: unknown } | null;
   customer: { firstName: string | null; lastName: string | null } | null;
   spendBucketSumMicrocents: bigint;
-  aiGenerationRows: Array<{ id: string; data: Record<string, unknown> }>;
-  messageRows: Array<{ id: string; data: Record<string, unknown> }>;
-  auditLogRows: Array<{ data: Record<string, unknown> }>;
-  queueAddCalls: Array<{ name: string; payload: unknown; opts: unknown }>;
+  aiGenerationRows: { id: string; data: Record<string, unknown> }[];
+  messageRows: { id: string; data: Record<string, unknown> }[];
+  auditLogRows: { data: Record<string, unknown> }[];
+  queueAddCalls: { name: string; payload: unknown; opts: unknown }[];
   nextAiGenerationId: number;
   nextMessageId: number;
 }
@@ -264,25 +264,25 @@ describe('handleCustomerStateChanged — happy path', () => {
     expect(state.messageRows).toHaveLength(1);
 
     const aiGenData = state.aiGenerationRows[0]!.data;
-    expect(aiGenData['merchantId']).toBe('m_1');
-    expect(aiGenData['customerId']).toBe('c_1');
-    expect(aiGenData['triggerState']).toBe('at_risk');
-    expect(aiGenData['previousState']).toBe('active');
-    expect(aiGenData['rDays']).toBe(45);
-    expect(aiGenData['fCount']).toBe(3);
-    expect(aiGenData['churnRiskScore']).toBeNull();
-    expect(aiGenData['provider']).toBe('deepseek');
-    expect(aiGenData['modelId']).toBe('deepseek-v4-flash');
-    expect(typeof aiGenData['systemPrompt']).toBe('string');
-    expect(typeof aiGenData['userPrompt']).toBe('string');
-    expect((aiGenData['systemPrompt'] as string).length).toBeGreaterThan(0);
-    expect((aiGenData['userPrompt'] as string).length).toBeGreaterThan(0);
+    expect(aiGenData.merchantId).toBe('m_1');
+    expect(aiGenData.customerId).toBe('c_1');
+    expect(aiGenData.triggerState).toBe('at_risk');
+    expect(aiGenData.previousState).toBe('active');
+    expect(aiGenData.rDays).toBe(45);
+    expect(aiGenData.fCount).toBe(3);
+    expect(aiGenData.churnRiskScore).toBeNull();
+    expect(aiGenData.provider).toBe('deepseek');
+    expect(aiGenData.modelId).toBe('deepseek-v4-flash');
+    expect(typeof aiGenData.systemPrompt).toBe('string');
+    expect(typeof aiGenData.userPrompt).toBe('string');
+    expect((aiGenData.systemPrompt as string).length).toBeGreaterThan(0);
+    expect((aiGenData.userPrompt as string).length).toBeGreaterThan(0);
 
     const msgData = state.messageRows[0]!.data;
-    expect(msgData['merchantId']).toBe('m_1');
-    expect(msgData['customerId']).toBe('c_1');
-    expect(msgData['aiGenerationId']).toBe('gen_1');
-    expect(msgData['generatedText']).toBe('');
+    expect(msgData.merchantId).toBe('m_1');
+    expect(msgData.customerId).toBe('c_1');
+    expect(msgData.aiGenerationId).toBe('gen_1');
+    expect(msgData.generatedText).toBe('');
 
     // Both writes inside ONE prisma.$transaction.
     expect(prismaMocks.transaction).toHaveBeenCalledTimes(1);
@@ -317,8 +317,8 @@ describe('handleCustomerStateChanged — happy path', () => {
     await handleCustomerStateChanged(ctx, row);
 
     const aiGenData = state.aiGenerationRows[0]!.data;
-    expect(typeof aiGenData['mCents']).toBe('bigint');
-    expect(aiGenData['mCents']).toBe(BigInt(big));
+    expect(typeof aiGenData.mCents).toBe('bigint');
+    expect(aiGenData.mCents).toBe(BigInt(big));
   });
 
   it('passes recentProducts from fetchRecentOrders into the prompt builder', async () => {
@@ -335,7 +335,7 @@ describe('handleCustomerStateChanged — happy path', () => {
 
     // The prompt builder is a pure function called inside the handler;
     // verify its output (userPrompt) includes the product titles.
-    const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
+    const userPrompt = state.aiGenerationRows[0]!.data.userPrompt as string;
     expect(userPrompt).toContain('Sneakers');
     expect(userPrompt).toContain('Hoodie');
   });
@@ -437,18 +437,18 @@ describe('handleCustomerStateChanged — spend ceiling check (Step 5)', () => {
     // Audit row written with the correct action + structured context.
     expect(state.auditLogRows).toHaveLength(1);
     const audit = state.auditLogRows[0]!.data;
-    expect(audit['action']).toBe(AUDIT_ACTIONS.ai.spend_cap_exceeded);
-    expect(audit['actorType']).toBe('system');
-    expect(audit['actorId']).toBe('drainer');
-    expect(audit['merchantId']).toBe('m_1');
-    expect(audit['shop']).toBe('foo.myshopify.com');
-    expect(audit['targetType']).toBe('customer');
-    expect(audit['targetId']).toBe('c_1');
-    const context = audit['context'] as Record<string, unknown>;
-    expect(context['currentSpendMicrocents']).toBe('4999999999');
-    expect(context['capMicrocents']).toBe('5000000000'); // 50_000n × 100_000n
-    expect(context['eventId']).toBe('evt_1');
-    expect(typeof context['estimatedCallMicrocents']).toBe('string');
+    expect(audit.action).toBe(AUDIT_ACTIONS.ai.spend_cap_exceeded);
+    expect(audit.actorType).toBe('system');
+    expect(audit.actorId).toBe('drainer');
+    expect(audit.merchantId).toBe('m_1');
+    expect(audit.shop).toBe('foo.myshopify.com');
+    expect(audit.targetType).toBe('customer');
+    expect(audit.targetId).toBe('c_1');
+    const context = audit.context as Record<string, unknown>;
+    expect(context.currentSpendMicrocents).toBe('4999999999');
+    expect(context.capMicrocents).toBe('5000000000'); // 50_000n × 100_000n
+    expect(context.eventId).toBe('evt_1');
+    expect(typeof context.estimatedCallMicrocents).toBe('string');
   });
 
   it('monthlyAiSpendCapCents=0n → every call denied with audit', async () => {
@@ -464,7 +464,7 @@ describe('handleCustomerStateChanged — spend ceiling check (Step 5)', () => {
     expect(state.aiGenerationRows).toHaveLength(0);
     expect(queueAdd).not.toHaveBeenCalled();
     expect(state.auditLogRows).toHaveLength(1);
-    expect(state.auditLogRows[0]!.data['action']).toBe(
+    expect(state.auditLogRows[0]!.data.action).toBe(
       AUDIT_ACTIONS.ai.spend_cap_exceeded,
     );
   });
@@ -550,7 +550,7 @@ describe('handleCustomerStateChanged — Shopify recent-orders outage', () => {
 
     // userPrompt does NOT include the "Their recent purchases included"
     // marker since recentProducts is empty.
-    const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
+    const userPrompt = state.aiGenerationRows[0]!.data.userPrompt as string;
     expect(userPrompt).not.toContain('recent purchases included');
   });
 });
@@ -594,22 +594,22 @@ describe('handleCustomerStateChanged — un-enriched-currency WARN log (Q-H1)', 
       expect(warnCall).toBeDefined();
       const [warnCtx, warnMessage] = warnCall as [Record<string, unknown>, string];
 
-      expect(warnCtx['eventId']).toBe('evt_1');
-      expect(warnCtx['merchantId']).toBe('m_1');
-      expect(warnCtx['shop']).toBe('un-enriched.myshopify.com');
-      expect(warnCtx['installedAt']).toBe(installedAt.toISOString());
-      expect(warnCtx['shopDetailsFetchedAt']).toBeNull();
-      expect(warnCtx['eventTrigger']).toBe('customer.state_changed');
+      expect(warnCtx.eventId).toBe('evt_1');
+      expect(warnCtx.merchantId).toBe('m_1');
+      expect(warnCtx.shop).toBe('un-enriched.myshopify.com');
+      expect(warnCtx.installedAt).toBe(installedAt.toISOString());
+      expect(warnCtx.shopDetailsFetchedAt).toBeNull();
+      expect(warnCtx.eventTrigger).toBe('customer.state_changed');
       // Q-S3 addition: timeSinceInstallMs lets operators distinguish
       // "normal install window" (<10min) from "D3 sweep failing
       // repeatedly" (>10min).
-      expect(warnCtx['timeSinceInstallMs']).toBe(5 * 60_000);
+      expect(warnCtx.timeSinceInstallMs).toBe(5 * 60_000);
       expect(warnMessage).toContain('D3 enrichment-sweep will heal');
 
       // (2) The AI prompt still gets built — USD fallback IS the v1
       // behaviour. We don't skip generation; we just log + fall back.
       expect(state.aiGenerationRows).toHaveLength(1);
-      const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
+      const userPrompt = state.aiGenerationRows[0]!.data.userPrompt as string;
       // The prompt-builder renders currency into the spend context.
       // 'USD' should appear somewhere downstream of the fallback.
       expect(userPrompt).toContain('USD');
@@ -642,7 +642,7 @@ describe('handleCustomerStateChanged — un-enriched-currency WARN log (Q-H1)', 
 
     // Prompt uses the merchant's actual currency.
     expect(state.aiGenerationRows).toHaveLength(1);
-    const userPrompt = state.aiGenerationRows[0]!.data['userPrompt'] as string;
+    const userPrompt = state.aiGenerationRows[0]!.data.userPrompt as string;
     expect(userPrompt).toContain('EUR');
   });
 });

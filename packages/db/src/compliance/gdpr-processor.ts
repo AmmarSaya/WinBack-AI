@@ -59,7 +59,7 @@ export interface CustomerDataRequestPayload {
     readonly email?: string | null;
     readonly phone?: string | null;
   };
-  readonly orders_requested?: ReadonlyArray<number | string>;
+  readonly orders_requested?: readonly (number | string)[];
   readonly data_request?: { readonly id?: number | string };
 }
 
@@ -71,7 +71,7 @@ export interface CustomerRedactPayload {
     readonly email?: string | null;
     readonly phone?: string | null;
   };
-  readonly orders_to_redact?: ReadonlyArray<number | string>;
+  readonly orders_to_redact?: readonly (number | string)[];
 }
 
 export interface ShopRedactPayload {
@@ -370,12 +370,10 @@ export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Pr
       // crafted payload could in theory target a different merchant's
       // customer; with it, the filter is bounded to the active tenant's
       // FK graph regardless of input.
-      type CustomerRedactDelegate = {
+      interface CustomerRedactDelegate {
         deleteMany: (a: unknown) => Promise<unknown>;
-      };
-      type CustomerRedactDelegates = {
-        [K in (typeof CUSTOMER_REDACT_CHILD_TABLES)[number]]: CustomerRedactDelegate;
-      };
+      }
+      type CustomerRedactDelegates = Record<(typeof CUSTOMER_REDACT_CHILD_TABLES)[number], CustomerRedactDelegate>;
       const childDelegates = ctx.db as unknown as CustomerRedactDelegates;
       for (const table of CUSTOMER_REDACT_CHILD_TABLES) {
         await childDelegates[table].deleteMany({
@@ -607,11 +605,11 @@ async function chunkedDeleteTenant(
   // delegates this function uses. ShopRedactTable keys are static; the
   // narrow type means TS doesn't widen them to `string | undefined` under
   // noUncheckedIndexedAccess.
-  type TenantDelegate = {
-    findMany: (a: unknown) => Promise<Array<{ id: string }>>;
+  interface TenantDelegate {
+    findMany: (a: unknown) => Promise<{ id: string }[]>;
     deleteMany: (a: unknown) => Promise<unknown>;
-  };
-  type TenantDelegates = { [K in ShopRedactTable]: TenantDelegate };
+  }
+  type TenantDelegates = Record<ShopRedactTable, TenantDelegate>;
 
   // 1:1 tables — single tx is enough.
   if (table === 'merchantSettings' || table === 'billingSubscription') {

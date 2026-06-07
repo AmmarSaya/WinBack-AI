@@ -1,6 +1,6 @@
+import { Prisma } from '@prisma/client';
 import { type AiTone, aiToneSchema } from '@winback/contracts';
 import { ValidationError } from '@winback/errors';
-import { Prisma } from '@prisma/client';
 
 import type { WinbackPrisma } from '../client.js';
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';

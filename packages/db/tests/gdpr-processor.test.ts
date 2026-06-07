@@ -33,13 +33,13 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
+import type { WinbackPrisma } from '../src/client.js';
 import {
   DEFAULT_SHOP_REDACT_BATCH_SIZE,
   processCustomerDataRequest,
   processCustomerRedact,
   processShopRedact,
 } from '../src/compliance/gdpr-processor.js';
-import type { WinbackPrisma } from '../src/client.js';
 
 const MERCHANT_ID = 'm_test';
 const SHOP = 'test-shop.myshopify.com';
@@ -78,7 +78,7 @@ interface MockTenantTable {
 interface MockState {
   merchant: { id: string; shop: string } | null;
   customers: MockCustomer[];
-  orderCustomerIdUpdates: Array<{ merchantId: string; customerId: string }>;
+  orderCustomerIdUpdates: { merchantId: string; customerId: string }[];
   tenantTables: Record<string, MockTenantTable>;
   sessionDeleteCount: number;
   merchantDeleteCount: number;
@@ -229,14 +229,14 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
   const merchantDelegate = {
     findUnique: vi.fn(async (args: { where: { shop: string } }) => {
       callLog.push('merchant.findUnique');
-      if (state.merchant && state.merchant.shop === args.where.shop) {
+      if (state.merchant?.shop === args.where.shop) {
         return { id: state.merchant.id };
       }
       return null;
     }),
     delete: vi.fn(async (args: { where: { id: string } }) => {
       callLog.push('merchant.delete');
-      if (state.merchant && state.merchant.id === args.where.id) {
+      if (state.merchant?.id === args.where.id) {
         state.merchant = null;
       }
       state.merchantDeleteCount += 1;

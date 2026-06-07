@@ -1,5 +1,5 @@
-import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { getRedisConfig } from '@winback/config';
+import { SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { withSystemScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import { Redis, type RedisOptions } from 'ioredis';
@@ -224,7 +224,7 @@ export async function loader() {
       // DLQ depth. Failure or timeout → warning, NOT 503.
       try {
         const dlqRows = await raceWithTimeout(
-          prisma.$queryRaw<Array<{ count: bigint }>>`
+          prisma.$queryRaw<{ count: bigint }[]>`
             SELECT COUNT(*)::bigint AS count
             FROM "OutboxEvent"
             WHERE "deadLetteredAt" IS NOT NULL
@@ -248,7 +248,7 @@ export async function loader() {
       // Failure or timeout → warning, NOT 503 (same reasoning as DLQ).
       try {
         const stallRows = await raceWithTimeout(
-          prisma.$queryRaw<Array<{ oldest: Date | null }>>`
+          prisma.$queryRaw<{ oldest: Date | null }[]>`
             SELECT MIN("createdAt") AS oldest
             FROM "OutboxEvent"
             WHERE "processedAt" IS NULL AND "deadLetteredAt" IS NULL

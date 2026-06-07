@@ -27,12 +27,12 @@ import { randomUUID } from 'node:crypto';
 import { QUEUE_NAMES } from '@winback/contracts';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { createRedisClient } from '../../src/redis-client.js';
 import {
   __getSharedClientForTesting,
   closeQueues,
   getQueues,
 } from '../../src/queues.js';
+import { createRedisClient } from '../../src/redis-client.js';
 
 import { resetRedis, teardown } from './setup.js';
 

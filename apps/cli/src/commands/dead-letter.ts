@@ -19,6 +19,7 @@
  * this was an operator action, not a drainer-side error capture.
  */
 
+import type { Prisma } from '@prisma/client';
 import { AUDIT_ACTIONS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import {
   AuditLogRepository,
@@ -26,7 +27,6 @@ import {
   type WinbackPrisma,
   withSystemScope,
 } from '@winback/db';
-import type { Prisma } from '@prisma/client';
 
 import type { EventSummary } from './replay.js';
 

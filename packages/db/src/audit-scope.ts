@@ -36,7 +36,7 @@ export interface AuditContext {
 // to / reading from different stores, and audit context goes silently
 // missing in dev. Production is unaffected (single module instantiation).
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __winbackAuditStore: AsyncLocalStorage<AuditContext> | undefined;
 }
 

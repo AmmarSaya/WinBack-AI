@@ -2,8 +2,8 @@ import type { LoaderFunctionArgs } from '@remix-run/node';
 import { withSystemScope } from '@winback/db';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
-import { loader as customersLoader } from '../../app/routes/customers.js';
 import { loader as indexLoader } from '../../app/routes/_index.js';
+import { loader as customersLoader } from '../../app/routes/customers.js';
 import { loader as settingsLoader } from '../../app/routes/settings.js';
 
 import { makeSessionToken } from './jwt-helper.js';
@@ -83,7 +83,7 @@ async function assertNoDataLeak401(res: Response): Promise<void> {
 async function invokeIndex(request: Request): Promise<Response> {
   const args: LoaderFunctionArgs = { request, params: {}, context: {} };
   try {
-    return (await indexLoader(args)) as Response;
+    return (await indexLoader(args));
   } catch (thrown) {
     if (thrown instanceof Response) return thrown;
     throw thrown;
@@ -93,7 +93,7 @@ async function invokeIndex(request: Request): Promise<Response> {
 async function invokeSettings(request: Request): Promise<Response> {
   const args: LoaderFunctionArgs = { request, params: {}, context: {} };
   try {
-    return (await settingsLoader(args)) as Response;
+    return (await settingsLoader(args));
   } catch (thrown) {
     if (thrown instanceof Response) return thrown;
     throw thrown;
@@ -103,7 +103,7 @@ async function invokeSettings(request: Request): Promise<Response> {
 async function invokeCustomers(request: Request): Promise<Response> {
   const args: LoaderFunctionArgs = { request, params: {}, context: {} };
   try {
-    return (await customersLoader(args)) as Response;
+    return (await customersLoader(args));
   } catch (thrown) {
     if (thrown instanceof Response) return thrown;
     throw thrown;
