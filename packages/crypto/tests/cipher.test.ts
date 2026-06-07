@@ -46,7 +46,7 @@ describe('Cipher — AES-256-GCM', () => {
     // Decoding back to a buffer and flipping is more reliable than text edits.
     const [version, payload] = ct.split(':');
     const buf = Buffer.from(payload!, 'base64');
-    buf[buf.length - 1] ^= 0xff;
+    buf[buf.length - 1]! ^= 0xff;
     const tampered = `${version}:${buf.toString('base64')}`;
     expect(() => c.decrypt(tampered)).toThrow(CipherError);
   });

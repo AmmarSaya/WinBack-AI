@@ -59,6 +59,8 @@ function makeRow(type: string): OutboxEventRow {
     payload: {},
     createdAt: new Date(),
     attempts: 0,
+    deadLetteredAt: null,
+    deferredFailedAt: null,
   };
 }
 

@@ -65,6 +65,7 @@ const TEST_API_SECRET =
   'test-api-secret-at-least-thirty-two-bytes-long-for-hmac-key-safety-OK';
 
 const TEST_ENV: NodeJS.ProcessEnv = {
+  NODE_ENV: 'test',
   SHOPIFY_API_KEY: TEST_API_KEY,
   SHOPIFY_API_SECRET: TEST_API_SECRET,
   SHOPIFY_APP_URL: 'https://test.invalid',

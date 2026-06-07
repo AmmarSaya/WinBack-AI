@@ -34,6 +34,7 @@ const FAKE_JWT = 'fake.jwt.token';
 const FAKE_ACCESS_TOKEN = 'shpat_fake_test_token_for_unit_tests';
 
 const TEST_ENV: NodeJS.ProcessEnv = {
+  NODE_ENV: 'test',
   SHOPIFY_API_KEY: TEST_API_KEY,
   SHOPIFY_API_SECRET: TEST_API_SECRET,
   SHOPIFY_APP_URL: 'https://test.invalid',
@@ -146,7 +147,6 @@ describe('tokenExchangeForShop — invalid input', () => {
       tokenExchangeForShop({
         shop: 'not a real shop',
         sessionToken: FAKE_JWT,
-        _api: api,
       }),
     ).rejects.toBeInstanceOf(ShopifyInvalidShopError);
 
@@ -173,7 +173,6 @@ describe('tokenExchangeForShop — SDK error mapping', () => {
       await tokenExchangeForShop({
         shop: SHOP,
         sessionToken: FAKE_JWT,
-        _api: api,
       });
       throw new Error('expected ShopifyTokenExchangeError');
     } catch (err) {
@@ -196,7 +195,6 @@ describe('tokenExchangeForShop — SDK error mapping', () => {
       await tokenExchangeForShop({
         shop: SHOP,
         sessionToken: FAKE_JWT,
-        _api: api,
       });
       throw new Error('expected ShopifyTokenExchangeError');
     } catch (err) {
@@ -217,7 +215,6 @@ describe('tokenExchangeForShop — SDK error mapping', () => {
       await tokenExchangeForShop({
         shop: SHOP,
         sessionToken: FAKE_JWT,
-        _api: api,
       });
       throw new Error('expected ShopifyTokenExchangeError');
     } catch (err) {

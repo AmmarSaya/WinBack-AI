@@ -14,7 +14,7 @@
  */
 
 import { Redis } from 'ioredis';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import { getRedisConfig, type RedisConfig } from '@winback/config';
 
@@ -29,7 +29,14 @@ vi.mock('ioredis', () => ({
 }));
 
 const getRedisConfigMock = vi.mocked(getRedisConfig);
-const RedisMock = vi.mocked(Redis);
+// Cast RedisMock to a typed Mock with the ioredis constructor signature
+// (vi.mocked alone infers `mock.calls[0]` as `[]` because the real
+// Redis class's typed constructor overloads don't reach the mock layer).
+// The cast at the import site centralises the typing so every access site
+// gets `[url, options]` instead of `[]`.
+const RedisMock = vi.mocked(Redis) as unknown as Mock<
+  (url: string, options?: Record<string, unknown>) => unknown
+>;
 
 function configFixture(overrides?: Partial<RedisConfig>): RedisConfig {
   return {

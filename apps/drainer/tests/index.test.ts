@@ -141,10 +141,13 @@ describe('main — boot', () => {
 
     // Each Worker receives the SAME DrainerContext (prisma/queues/
     // shopifyConfig from the boot-time builders).
-    const [drainerCtx] = mocks.createDrainerWorker.mock.calls[0] as [
+    // mock.calls[0] is typed as `[] | undefined` because the vi.fn factory
+    // didn't get an explicit signature; cast through unknown to assert the
+    // arg-tuple shape we know we passed at runtime.
+    const [drainerCtx] = mocks.createDrainerWorker.mock.calls[0] as unknown as [
       Record<string, unknown>,
     ];
-    const [aiCtx] = mocks.createAiGenerateWorker.mock.calls[0] as [
+    const [aiCtx] = mocks.createAiGenerateWorker.mock.calls[0] as unknown as [
       Record<string, unknown>,
     ];
     expect(drainerCtx).toBe(aiCtx);
@@ -154,7 +157,7 @@ describe('main — boot', () => {
     await main();
 
     expect(mocks.enqueueInitialTick).toHaveBeenCalledTimes(1);
-    const [arg] = mocks.enqueueInitialTick.mock.calls[0] as [
+    const [arg] = mocks.enqueueInitialTick.mock.calls[0] as unknown as [
       Record<string, unknown>,
     ];
     expect(arg).toMatchObject({ __mock: 'outboxDrain' });

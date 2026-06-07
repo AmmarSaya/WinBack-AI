@@ -102,7 +102,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.acceptsMarketing).toBe(true);
+    expect(tx.customer.upsert.mock.calls[0]![0].create.acceptsMarketing).toBe(true);
   });
 
   it('email_marketing_consent.state = "unsubscribed" → acceptsMarketing NOT written (preserves existing value on update)', async () => {
@@ -118,7 +118,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
     // For other states, don't override — schema default `false` applies on
     // create; existing value preserved on update. This prevents a "consent
     // pending" webhook from clobbering a previously-confirmed subscription.
-    expect(tx.customer.upsert.mock.calls[0][0].create.acceptsMarketing).toBeUndefined();
+    expect(tx.customer.upsert.mock.calls[0]![0].create.acceptsMarketing).toBeUndefined();
   });
 
   it('no email_marketing_consent object → acceptsMarketing NOT written', async () => {
@@ -132,7 +132,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.acceptsMarketing).toBeUndefined();
+    expect(tx.customer.upsert.mock.calls[0]![0].create.acceptsMarketing).toBeUndefined();
   });
 
   it('sms_marketing_consent.state = "subscribed" → acceptsSms=true', async () => {
@@ -144,7 +144,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.acceptsSms).toBe(true);
+    expect(tx.customer.upsert.mock.calls[0]![0].create.acceptsSms).toBe(true);
   });
 
   // -------- tags split (P-6) --------
@@ -158,7 +158,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.tags).toEqual([
+    expect(tx.customer.upsert.mock.calls[0]![0].create.tags).toEqual([
       'vip',
       'repeat-buyer',
       'loyal',
@@ -174,7 +174,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.tags).toEqual([]);
+    expect(tx.customer.upsert.mock.calls[0]![0].create.tags).toEqual([]);
   });
 
   it('null tags → []', async () => {
@@ -186,7 +186,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.tags).toEqual([]);
+    expect(tx.customer.upsert.mock.calls[0]![0].create.tags).toEqual([]);
   });
 
   it('tags with whitespace + empty entries → trimmed + filtered', async () => {
@@ -198,7 +198,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customer.upsert.mock.calls[0][0].create.tags).toEqual(['vip', 'loyal']);
+    expect(tx.customer.upsert.mock.calls[0]![0].create.tags).toEqual(['vip', 'loyal']);
   });
 
   // -------- Customer.state NOT written from Shopify (C9 lock) --------
@@ -219,7 +219,7 @@ describe('CustomerRepository.upsertFromWebhook', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    const upsertArgs = tx.customer.upsert.mock.calls[0][0];
+    const upsertArgs = tx.customer.upsert.mock.calls[0]![0];
     expect(upsertArgs.create).not.toHaveProperty('state');
     expect(upsertArgs.update).not.toHaveProperty('state');
   });
@@ -272,7 +272,7 @@ describe('CustomerRepository.softDelete', () => {
       }),
     );
     expect(result.existed).toBe(true);
-    const updateCall = tx.customer.updateMany.mock.calls[0][0];
+    const updateCall = tx.customer.updateMany.mock.calls[0]![0];
     expect(updateCall.where.deletedAt).toBeNull();
     expect(updateCall.data.deletedAt).toBeInstanceOf(Date);
   });

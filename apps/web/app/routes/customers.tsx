@@ -227,7 +227,11 @@ export default function Customers() {
                     <Text
                       as="span"
                       variant="bodyMd"
-                      tone={row.churnRiskScore === null ? 'subdued' : undefined}
+                      // Conditional spread instead of `tone={cond ? 'subdued' : undefined}`
+                      // — with `exactOptionalPropertyTypes`, passing `undefined`
+                      // to an optional prop is a type error; the prop must be
+                      // either present-with-a-value or absent.
+                      {...(row.churnRiskScore === null && { tone: 'subdued' as const })}
                     >
                       {formatChurnRisk(row.churnRiskScore)}
                     </Text>

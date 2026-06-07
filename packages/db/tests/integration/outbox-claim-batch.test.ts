@@ -122,7 +122,7 @@ describe('OutboxRepository.claimBatch', () => {
     // No scope at all — `getTenantScope()` returns undefined, scope.kind is
     // never 'system', method throws.
     await expect(
-      prisma.$transaction((tx) => repo.claimBatch(tx, 5)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,5)),
     ).rejects.toThrow(/system scope/);
 
     // Tenant scope is also not system scope — must reject. Pins the
@@ -130,7 +130,7 @@ describe('OutboxRepository.claimBatch', () => {
     // accidentally drain another tenant's outbox.
     await expect(
       withTenantScope(merchantId, () =>
-        prisma.$transaction((tx) => repo.claimBatch(tx, 5)),
+        prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,5)),
       ),
     ).rejects.toThrow(/system scope/);
   });
@@ -140,7 +140,7 @@ describe('OutboxRepository.claimBatch', () => {
     const expectedIdsByTime = seeded.map((r) => r.id);
 
     const result = await withSystemScope('test.claim_ordered', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx, 5)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,5)),
     );
 
     expect(result).toHaveLength(5);
@@ -164,13 +164,13 @@ describe('OutboxRepository.claimBatch', () => {
 
     // Default limit: claimBatch(tx) → 100.
     const defaultResult = await withSystemScope('test.claim_default_limit', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient)),
     );
     expect(defaultResult).toHaveLength(100);
 
     // Custom limit: claimBatch(tx, 25) → 25.
     const customResult = await withSystemScope('test.claim_custom_limit', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx, 25)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,25)),
     );
     expect(customResult).toHaveLength(25);
   });
@@ -191,7 +191,7 @@ describe('OutboxRepository.claimBatch', () => {
     // Claim with a limit larger than the unprocessed count to prove the
     // exclusion is a filter, not a coincidence of limit.
     const result = await withSystemScope('test.claim_filter', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx, 20)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,20)),
     );
 
     expect(result).toHaveLength(5);
@@ -214,7 +214,7 @@ describe('OutboxRepository.claimBatch', () => {
       Promise.all([
         prisma.$transaction(
           async (txA) => {
-            const batch = await repo.claimBatch(txA, 5);
+            const batch = await repo.claimBatch(txA as unknown as Prisma.TransactionClient,5);
             aClaimed.resolve();
             await bClaimed.promise; // hold txA's locks until B has claimed
             return batch;
@@ -227,7 +227,7 @@ describe('OutboxRepository.claimBatch', () => {
         prisma.$transaction(
           async (txB) => {
             await aClaimed.promise; // wait for A to hold its locks first
-            const batch = await repo.claimBatch(txB, 5);
+            const batch = await repo.claimBatch(txB as unknown as Prisma.TransactionClient,5);
             bClaimed.resolve();
             return batch;
           },
@@ -259,14 +259,14 @@ describe('OutboxRepository.claimBatch', () => {
     // semantic backstops correctness: the rows are still claimable next
     // pass and no events are silently lost.
     const firstBatch = await withSystemScope('test.claim_first_pass', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx, 10)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,10)),
     );
     expect(firstBatch).toHaveLength(3);
 
     // Second claim — rows were never marked processed; tx-commit released
     // the row-level locks; they must be reclaimable.
     const secondBatch = await withSystemScope('test.claim_second_pass', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx, 10)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,10)),
     );
     expect(secondBatch.map((r) => r.id).sort()).toEqual(seededIds);
   });
@@ -281,7 +281,7 @@ describe('OutboxRepository.claimBatch', () => {
     await expect(
       withSystemScope('test.claim_then_throw', () =>
         prisma.$transaction(async (tx) => {
-          const batch = await repo.claimBatch(tx, 10);
+          const batch = await repo.claimBatch(tx as unknown as Prisma.TransactionClient,10);
           expect(batch).toHaveLength(3);
           throw new Error('simulated drainer error mid-batch');
         }),
@@ -290,7 +290,7 @@ describe('OutboxRepository.claimBatch', () => {
 
     // Recovery claim — rollback released the locks; rows are claimable.
     const recoveryBatch = await withSystemScope('test.claim_recovery', () =>
-      prisma.$transaction((tx) => repo.claimBatch(tx, 10)),
+      prisma.$transaction((tx) => repo.claimBatch(tx as unknown as Prisma.TransactionClient,10)),
     );
     expect(recoveryBatch.map((r) => r.id).sort()).toEqual(seededIds);
   });

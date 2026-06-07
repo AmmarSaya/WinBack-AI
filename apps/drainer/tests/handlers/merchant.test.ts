@@ -69,6 +69,8 @@ function makeRow(payload: unknown): OutboxEventRow {
     payload,
     createdAt: new Date(),
     attempts: 0,
+    deadLetteredAt: null,
+    deferredFailedAt: null,
   };
 }
 
@@ -170,6 +172,8 @@ describe('handleMerchantUninstalled', () => {
       payload: { topic: 'app/uninstalled', webhookId: 'wh-xyz', body: {} },
       createdAt: new Date(),
       attempts: 0,
+      deadLetteredAt: null,
+      deferredFailedAt: null,
     };
   }
 
