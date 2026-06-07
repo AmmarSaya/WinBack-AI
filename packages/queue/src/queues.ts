@@ -187,7 +187,7 @@ export async function closeQueues(): Promise<void> {
       // right instance.
       const client = sharedClient;
       const endPromise = new Promise<void>((resolve) => {
-        client.once('end', () => resolve());
+        client.once('end', () => { resolve(); });
       });
       client.disconnect();
       await endPromise;

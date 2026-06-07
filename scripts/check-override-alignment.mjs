@@ -26,10 +26,10 @@
 // 21b7963 for the coupled-commit pattern Dependabot can't produce.
 // =============================================================================
 
-import { readFile } from 'node:fs/promises';
 import { readdirSync, statSync } from 'node:fs';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { readFile } from 'node:fs/promises';
 import { dirname, join, relative } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKSPACE_DIRS = ['apps', 'packages']; // mirrors pnpm-workspace.yaml

@@ -33,7 +33,7 @@ interface Row {
   readonly hasDefaultMessage: boolean;
 }
 
-const TABLE: ReadonlyArray<Row> = [
+const TABLE: readonly Row[] = [
   {
     subclass: ValidationError,
     name: 'ValidationError',
@@ -170,7 +170,7 @@ describe('subclass overrides', () => {
     const e = new ValidationError('bad input', {
       fields: { email: 'must be present', age: 'must be a number' },
     });
-    expect(e.context['fields']).toEqual({
+    expect(e.context.fields).toEqual({
       email: 'must be present',
       age: 'must be a number',
     });
@@ -179,7 +179,7 @@ describe('subclass overrides', () => {
   it('RateLimitError exposes retryAfterSeconds on the instance + in context', () => {
     const e = new RateLimitError('slow down', { retryAfterSeconds: 30 });
     expect(e.retryAfterSeconds).toBe(30);
-    expect(e.context['retryAfterSeconds']).toBe(30);
+    expect(e.context.retryAfterSeconds).toBe(30);
   });
 
   it('IntegrationError attaches provider + providerStatus to instance + context', () => {
@@ -189,8 +189,8 @@ describe('subclass overrides', () => {
     });
     expect(e.provider).toBe('shopify');
     expect(e.providerStatus).toBe(502);
-    expect(e.context['provider']).toBe('shopify');
-    expect(e.context['providerStatus']).toBe(502);
+    expect(e.context.provider).toBe('shopify');
+    expect(e.context.providerStatus).toBe(502);
   });
 
   it('IntegrationError allows opting out of retryability', () => {

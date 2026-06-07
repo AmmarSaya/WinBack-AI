@@ -13,8 +13,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { MessageRepository } from '../src/repositories/message.repository.js';
 import type { WinbackPrisma } from '../src/client.js';
+import { MessageRepository } from '../src/repositories/message.repository.js';
 
 interface MessageRow {
   id: string;
@@ -41,16 +41,16 @@ function makeMockPrisma(initial: Partial<MockState> = {}) {
   const messageDelegate = {
     create: vi.fn(async (args: { data: Record<string, unknown>; select?: unknown }) => {
       state.callLog.push(
-        `message.create merchantId=${String(args.data['merchantId'])} aiGenerationId=${String(args.data['aiGenerationId'])}`,
+        `message.create merchantId=${String(args.data.merchantId)} aiGenerationId=${String(args.data.aiGenerationId)}`,
       );
       const id = `msg_${String(state.nextId)}`;
       state.nextId += 1;
       const row: MessageRow = {
         id,
-        merchantId: args.data['merchantId'] as string,
-        customerId: args.data['customerId'] as string,
-        aiGenerationId: args.data['aiGenerationId'] as string,
-        generatedText: args.data['generatedText'] as string,
+        merchantId: args.data.merchantId as string,
+        customerId: args.data.customerId as string,
+        aiGenerationId: args.data.aiGenerationId as string,
+        generatedText: args.data.generatedText as string,
         status: 'draft',
       };
       state.rows.push(row);
@@ -63,7 +63,7 @@ function makeMockPrisma(initial: Partial<MockState> = {}) {
         );
         let count = 0;
         for (const row of state.rows) {
-          const whereGenId = args.where['aiGenerationId'] as string | undefined;
+          const whereGenId = args.where.aiGenerationId as string | undefined;
           if (whereGenId !== undefined && row.aiGenerationId !== whereGenId) continue;
           Object.assign(row, args.data);
           count += 1;
@@ -97,10 +97,10 @@ describe('MessageRepository.createDraft', () => {
     const createCall = messageDelegate.create.mock.calls[0]![0] as {
       data: Record<string, unknown>;
     };
-    expect(createCall.data['merchantId']).toBe('m_1');
-    expect(createCall.data['customerId']).toBe('c_1');
-    expect(createCall.data['aiGenerationId']).toBe('gen_1');
-    expect(createCall.data['generatedText']).toBe('');
+    expect(createCall.data.merchantId).toBe('m_1');
+    expect(createCall.data.customerId).toBe('c_1');
+    expect(createCall.data.aiGenerationId).toBe('gen_1');
+    expect(createCall.data.generatedText).toBe('');
 
     // status NOT in the create payload — schema default is 'draft'.
     // Explicit pin so a future refactor that hardcodes the status
@@ -167,13 +167,10 @@ describe('MessageRepository.updateGeneratedText', () => {
 
     // The where clause MUST be keyed on aiGenerationId, NOT on id
     // (messageId). Regression lock.
-    const updateCall = messageDelegate.updateMany.mock.calls[0]![0] as {
-      where: Record<string, unknown>;
-      data: Record<string, unknown>;
-    };
+    const updateCall = messageDelegate.updateMany.mock.calls[0]![0];
     expect(updateCall.where).toEqual({ aiGenerationId: 'gen_1' });
     expect(updateCall.where).not.toHaveProperty('id');
-    expect(updateCall.data['generatedText']).toBe(text);
+    expect(updateCall.data.generatedText).toBe(text);
 
     expect(state.rows[0]!.generatedText).toBe(text);
   });

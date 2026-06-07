@@ -19,14 +19,14 @@ import { createHmac } from 'node:crypto';
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
-  ShopifySessionTokenError,
-  type ShopifySessionTokenErrorReason,
-} from '../../src/errors.js';
-import {
   _resetShopifyApiInstanceForTests,
   decodeAndVerifySessionToken,
 } from '../../src/auth/index.js';
 import { getShopifyConfig } from '../../src/config.js';
+import {
+  ShopifySessionTokenError,
+  type ShopifySessionTokenErrorReason,
+} from '../../src/errors.js';
 
 // ---------------------------------------------------------------------------
 // Test fixtures

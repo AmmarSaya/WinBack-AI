@@ -33,5 +33,5 @@ export function defineConfig<S extends ZodTypeAny>(
   if (!result.success) {
     throw ConfigError.fromZod(result.error, source);
   }
-  return result.data as z.infer<S>;
+  return result.data;
 }

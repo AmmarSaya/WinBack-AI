@@ -80,7 +80,7 @@ describe('AppError.context', () => {
     expect(e.context).toEqual({ merchantId: 'm_1', count: 42 });
     expect(Object.isFrozen(e.context)).toBe(true);
     // Mutating source after construction must not reach into AppError's copy.
-    source['merchantId'] = 'm_2';
+    source.merchantId = 'm_2';
     expect(e.context).toEqual({ merchantId: 'm_1', count: 42 });
   });
 
@@ -89,7 +89,7 @@ describe('AppError.context', () => {
     // Frozen — assigning silently fails in non-strict mode, throws in strict.
     // Vitest runs strict; expect throw.
     expect(() => {
-      (e.context as Record<string, unknown>)['a'] = 2;
+      (e.context as Record<string, unknown>).a = 2;
     }).toThrow(TypeError);
   });
 });

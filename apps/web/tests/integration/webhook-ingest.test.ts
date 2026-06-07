@@ -22,7 +22,7 @@ async function invokeWebhook(request: Request): Promise<Response> {
   // Type the args explicitly. `params` and `context` are unused by this
   // action but required by Remix's signature. Empty defaults are safe.
   const args: ActionFunctionArgs = { request, params: {}, context: {} };
-  return (await action(args)) as Response;
+  return (await action(args));
 }
 
 describe('webhook ingest (integration, real Postgres)', () => {

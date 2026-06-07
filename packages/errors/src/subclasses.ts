@@ -104,7 +104,7 @@ export class RateLimitError extends AppError {
   constructor(message = 'Rate limited', options: RateLimitErrorOptions = {}) {
     const ctx: Record<string, unknown> = { ...(options.context ?? {}) };
     if (options.retryAfterSeconds !== undefined) {
-      ctx['retryAfterSeconds'] = options.retryAfterSeconds;
+      ctx.retryAfterSeconds = options.retryAfterSeconds;
     }
     super({
       code: options.code ?? 'rate_limit.exceeded',
@@ -153,8 +153,8 @@ export class IntegrationError extends AppError {
   readonly providerStatus: number | undefined;
   constructor(message: string, options: IntegrationErrorOptions = {}) {
     const ctx: Record<string, unknown> = { ...(options.context ?? {}) };
-    if (options.provider !== undefined) ctx['provider'] = options.provider;
-    if (options.providerStatus !== undefined) ctx['providerStatus'] = options.providerStatus;
+    if (options.provider !== undefined) ctx.provider = options.provider;
+    if (options.providerStatus !== undefined) ctx.providerStatus = options.providerStatus;
     super({
       code: options.code ?? 'integration.failed',
       message,

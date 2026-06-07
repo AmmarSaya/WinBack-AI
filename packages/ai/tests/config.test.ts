@@ -189,7 +189,7 @@ describe('getAiConfig', () => {
             ...baseEnv,
             AI_PROVIDER: 'groq',
             AI_MODEL: 'mixtral',
-            // eslint-disable-next-line @typescript-eslint/naming-convention
+             
             GROQ_API_KEY: 'sk-fake',
           },
         }),

@@ -38,7 +38,7 @@ describe('handleRequest wiring — security headers arrive on the response Heade
       200,
       responseHeaders,
       {} as EntryContext,
-      {} as AppLoadContext,
+      {},
     );
 
     // Headers populated before any await — setSecurityHeaders runs

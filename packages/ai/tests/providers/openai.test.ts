@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   AiProviderAuthError,
   AiProviderContentBlockedError,
-  AiProviderError,
+  type AiProviderError,
   AiProviderInvalidRequestError,
   AiProviderRateLimitError,
   AiProviderTransientError,
@@ -51,7 +51,7 @@ function fakeChatCompletion(opts: {
     choices,
   };
   if (opts.omitUsage === true) {
-    return base as unknown as OpenAI.Chat.Completions.ChatCompletion;
+    return base;
   }
   return {
     ...base,
@@ -60,7 +60,7 @@ function fakeChatCompletion(opts: {
       completion_tokens: opts.outputTokens ?? 25,
       total_tokens: opts.totalTokens ?? 75,
     },
-  } as OpenAI.Chat.Completions.ChatCompletion;
+  };
 }
 
 function makeProvider(impl: (args: unknown) => Promise<unknown> | unknown): OpenAiProvider {

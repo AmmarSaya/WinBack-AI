@@ -216,7 +216,17 @@ function buildSystemPrompt(args: WinbackPromptArgs): string {
 }
 
 function buildUserPrompt(args: WinbackPromptArgs): string {
-  const salutation = args.customer.firstName?.trim() || 'valued customer';
+  // Salutation fallback: anything that resolves to "no usable name" — null,
+  // empty string, or whitespace-only after trim — becomes 'valued customer'.
+  // Explicit two-step form (rather than `firstName?.trim() || 'valued customer'`)
+  // because the `||` form is a behavioral trap under a ?? rewrite: ?? only
+  // catches null/undefined, so empty/whitespace would fall through and produce
+  // "Hi , we miss you!". The explicit empty-check makes the rule-intent honest
+  // and removes a `||`-on-string site from the prefer-nullish-coalescing
+  // sweep without breaking the behavior. Covered by build-winback-prompt.test.ts
+  // (firstName null / '' / whitespace-only / normal cases).
+  const trimmedFirstName = args.customer.firstName?.trim() ?? '';
+  const salutation = trimmedFirstName === '' ? 'valued customer' : trimmedFirstName;
   const dollars = (Number(args.customer.mCents) / 100).toFixed(2);
   const orderWord = args.customer.fCount === 1 ? 'order' : 'orders';
 

@@ -70,11 +70,11 @@ vi.mock('@winback/ai', async (importOriginal) => {
 // factory test exercises it; processAiGenerateJob tests bypass the
 // Worker entirely and drive the processor directly. Capturing
 // construction options without a live Redis dependency.
-const workerConstructorCalls: Array<{
+const workerConstructorCalls: {
   name: string;
   opts: { connection: unknown; concurrency: number; lockDuration: number };
-}> = [];
-const workerInstances: Array<{ on: Mock; close: Mock }> = [];
+}[] = [];
+const workerInstances: { on: Mock; close: Mock }[] = [];
 
 vi.mock('bullmq', () => ({
   Worker: vi.fn().mockImplementation((name: string, _processor, opts) => {
@@ -101,10 +101,6 @@ vi.mock('@winback/queue', () => ({
 // Imports after mocks
 // ---------------------------------------------------------------------------
 
-import { AUDIT_ACTIONS } from '@winback/contracts';
-import type { WinbackPrisma } from '@winback/db';
-import type { Queues } from '@winback/queue';
-import type { ShopifyConfig } from '@winback/shopify';
 import {
   AiProviderAuthError,
   AiProviderContentBlockedError,
@@ -113,15 +109,19 @@ import {
   AiProviderTransientError,
   selectActiveProvider,
 } from '@winback/ai';
+import { AUDIT_ACTIONS } from '@winback/contracts';
+import type { WinbackPrisma } from '@winback/db';
+import type { Queues } from '@winback/queue';
 import { createRedisClient } from '@winback/queue';
+import type { ShopifyConfig } from '@winback/shopify';
 import type { Job } from 'bullmq';
 
+import type { DrainerContext } from '../../src/context.js';
 import {
   type AiGenerateJobPayload,
   createAiGenerateWorker,
   processAiGenerateJob,
 } from '../../src/workers/ai-generate.worker.js';
-import type { DrainerContext } from '../../src/context.js';
 
 // ---------------------------------------------------------------------------
 // Mock plumbing (modelled on customer-state-changed.test.ts:70+)
@@ -139,15 +139,15 @@ interface AiGenRowMock {
 interface MockState {
   aiGenRow: AiGenRowMock | null;
   markCompletedUpdatedCount: number;
-  markCompletedRows: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }>;
-  markFailedRows: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }>;
-  messageUpdates: Array<{ where: Record<string, unknown>; data: Record<string, unknown> }>;
-  spendBucketUpserts: Array<{
+  markCompletedRows: { where: Record<string, unknown>; data: Record<string, unknown> }[];
+  markFailedRows: { where: Record<string, unknown>; data: Record<string, unknown> }[];
+  messageUpdates: { where: Record<string, unknown>; data: Record<string, unknown> }[];
+  spendBucketUpserts: {
     where: Record<string, unknown>;
     create: Record<string, unknown>;
     update: Record<string, unknown>;
-  }>;
-  auditLogRows: Array<{ data: Record<string, unknown> }>;
+  }[];
+  auditLogRows: { data: Record<string, unknown> }[];
 }
 
 interface PrismaMocks {
@@ -194,11 +194,11 @@ function makeCtx(initial: Partial<MockState> = {}): {
   // simulation); always `count: 1` for failed.
   const aiGenUpdateMany = vi.fn(
     async (args: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
-      if (args.data['status'] === 'completed') {
+      if (args.data.status === 'completed') {
         state.markCompletedRows.push(args);
         return { count: state.markCompletedUpdatedCount };
       }
-      if (args.data['status'] === 'failed') {
+      if (args.data.status === 'failed') {
         state.markFailedRows.push(args);
         return { count: 1 };
       }
@@ -484,24 +484,24 @@ describe('processAiGenerateJob — happy path', () => {
 
     const mc = state.markCompletedRows[0]!;
     expect(mc.where).toMatchObject({ id: 'gen_1', status: 'pending' });
-    expect(mc.data['status']).toBe('completed');
-    expect(mc.data['generatedText']).toBe('Hey Alice!');
-    expect(mc.data['inputTokens']).toBe(200);
-    expect(mc.data['outputTokens']).toBe(100);
-    expect(mc.data['totalTokens']).toBe(300);
-    expect(mc.data['latencyMs']).toBe(500);
-    expect(typeof mc.data['costMicrocents']).toBe('bigint');
+    expect(mc.data.status).toBe('completed');
+    expect(mc.data.generatedText).toBe('Hey Alice!');
+    expect(mc.data.inputTokens).toBe(200);
+    expect(mc.data.outputTokens).toBe(100);
+    expect(mc.data.totalTokens).toBe(300);
+    expect(mc.data.latencyMs).toBe(500);
+    expect(typeof mc.data.costMicrocents).toBe('bigint');
 
     const mu = state.messageUpdates[0]!;
     expect(mu.where).toMatchObject({ aiGenerationId: 'gen_1' });
-    expect(mu.data['generatedText']).toBe('Hey Alice!');
+    expect(mu.data.generatedText).toBe('Hey Alice!');
 
     const su = state.spendBucketUpserts[0]!;
     expect(su.where).toMatchObject({
       merchantId_date: expect.objectContaining({ merchantId: 'm_1' }) as unknown,
     });
-    expect(typeof (su.create as Record<string, unknown>)['spentMicrocents']).toBe('bigint');
-    expect((su.create as Record<string, unknown>)['merchantId']).toBe('m_1');
+    expect(typeof (su.create).spentMicrocents).toBe('bigint');
+    expect((su.create).merchantId).toBe('m_1');
   });
 
   it('cost arithmetic: BigInt costMicrocents preserved (no Number cast) — flows into BOTH markCompleted.costMicrocents AND incrementSpend.deltaMicrocents', async () => {
@@ -517,13 +517,13 @@ describe('processAiGenerateJob — happy path', () => {
     // 14_000_000 + 28_000_000 = 42_000_000 microcents.
     const expectedCost = 42_000_000n;
 
-    const completedCost = state.markCompletedRows[0]!.data['costMicrocents'];
+    const completedCost = state.markCompletedRows[0]!.data.costMicrocents;
     expect(typeof completedCost).toBe('bigint');
     expect(completedCost).toBe(expectedCost);
 
-    const upsertCreate = state.spendBucketUpserts[0]!.create as Record<string, unknown>;
-    expect(typeof upsertCreate['spentMicrocents']).toBe('bigint');
-    expect(upsertCreate['spentMicrocents']).toBe(expectedCost);
+    const upsertCreate = state.spendBucketUpserts[0]!.create;
+    expect(typeof upsertCreate.spentMicrocents).toBe('bigint');
+    expect(upsertCreate.spentMicrocents).toBe(expectedCost);
   });
 });
 
@@ -602,19 +602,19 @@ describe('processAiGenerateJob — non-retryable provider errors (markFailed + a
     expect(state.markFailedRows).toHaveLength(1);
     const mf = state.markFailedRows[0]!;
     expect(mf.where).toMatchObject({ id: 'gen_1', status: 'pending' });
-    expect(mf.data['status']).toBe('failed');
-    expect(mf.data['lastError']).toBe('content_blocked');
+    expect(mf.data.status).toBe('failed');
+    expect(mf.data.lastError).toBe('content_blocked');
 
     expect(state.auditLogRows).toHaveLength(1);
     const audit = state.auditLogRows[0]!.data;
-    expect(audit['merchantId']).toBe('m_1');
-    expect(audit['shop']).toBe('foo.myshopify.com');
-    expect(audit['actorType']).toBe('system');
-    expect(audit['actorId']).toBe('drainer');
-    expect(audit['action']).toBe(AUDIT_ACTIONS.ai.content_blocked);
-    expect(audit['targetType']).toBe('ai_generation');
-    expect(audit['targetId']).toBe('gen_1');
-    expect(audit['context']).toMatchObject({
+    expect(audit.merchantId).toBe('m_1');
+    expect(audit.shop).toBe('foo.myshopify.com');
+    expect(audit.actorType).toBe('system');
+    expect(audit.actorId).toBe('drainer');
+    expect(audit.action).toBe(AUDIT_ACTIONS.ai.content_blocked);
+    expect(audit.targetType).toBe('ai_generation');
+    expect(audit.targetId).toBe('gen_1');
+    expect(audit.context).toMatchObject({
       providerErrorCode: 'content_blocked',
       jobId: 'gen_1',
       attempt: 1,
@@ -634,10 +634,10 @@ describe('processAiGenerateJob — non-retryable provider errors (markFailed + a
 
     await processAiGenerateJob(ctx, makeJob());
 
-    expect(state.markFailedRows[0]!.data['lastError']).toBe('auth');
+    expect(state.markFailedRows[0]!.data.lastError).toBe('auth');
     const audit = state.auditLogRows[0]!.data;
-    expect(audit['action']).toBe(AUDIT_ACTIONS.ai.generation_failed);
-    expect((audit['context'] as Record<string, unknown>)['providerErrorCode']).toBe('auth');
+    expect(audit.action).toBe(AUDIT_ACTIONS.ai.generation_failed);
+    expect((audit.context as Record<string, unknown>).providerErrorCode).toBe('auth');
   });
 
   it('AiProviderInvalidRequestError → markFailed(lastError="invalid_request") + audit AUDIT_ACTIONS.ai.generation_failed', async () => {
@@ -648,10 +648,10 @@ describe('processAiGenerateJob — non-retryable provider errors (markFailed + a
 
     await processAiGenerateJob(ctx, makeJob());
 
-    expect(state.markFailedRows[0]!.data['lastError']).toBe('invalid_request');
+    expect(state.markFailedRows[0]!.data.lastError).toBe('invalid_request');
     const audit = state.auditLogRows[0]!.data;
-    expect(audit['action']).toBe(AUDIT_ACTIONS.ai.generation_failed);
-    expect((audit['context'] as Record<string, unknown>)['providerErrorCode']).toBe(
+    expect(audit.action).toBe(AUDIT_ACTIONS.ai.generation_failed);
+    expect((audit.context as Record<string, unknown>).providerErrorCode).toBe(
       'invalid_request',
     );
   });
@@ -676,8 +676,8 @@ describe('processAiGenerateJob — non-retryable provider errors (markFailed + a
 
     await processAiGenerateJob(ctx, makeJob());
 
-    const ctxField = state.auditLogRows[0]!.data['context'] as Record<string, unknown>;
-    const errorMessage = ctxField['errorMessage'] as string;
+    const ctxField = state.auditLogRows[0]!.data.context as Record<string, unknown>;
+    const errorMessage = ctxField.errorMessage as string;
     expect(errorMessage).toHaveLength(500);
     expect(errorMessage).toBe('x'.repeat(500));
   });

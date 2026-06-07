@@ -18,8 +18,8 @@
 
 import { describe, expect, it, vi } from 'vitest';
 
-import { MerchantRepository } from '../src/repositories/merchant.repository.js';
 import type { WinbackPrisma } from '../src/client.js';
+import { MerchantRepository } from '../src/repositories/merchant.repository.js';
 import { withSystemScope, withTenantScope } from '../src/tenant-scope.js';
 
 interface MerchantRow {
@@ -29,8 +29,8 @@ interface MerchantRow {
 
 interface MockState {
   merchants: MerchantRow[];
-  updates: Array<{ where: { id: string }; data: Record<string, unknown> }>;
-  deletes: Array<{ id: string }>;
+  updates: { where: { id: string }; data: Record<string, unknown> }[];
+  deletes: { id: string }[];
   callLog: string[];
 }
 
@@ -157,8 +157,8 @@ describe('MerchantRepository.upsertInstall', () => {
       create: Record<string, unknown>;
       update: Record<string, unknown>;
     };
-    expect(upsertCall.create['shop']).toBe('new.myshopify.com');
-    expect(upsertCall.create['installedAt']).toBeInstanceOf(Date);
+    expect(upsertCall.create.shop).toBe('new.myshopify.com');
+    expect(upsertCall.create.installedAt).toBeInstanceOf(Date);
     expect(upsertCall.update).toEqual({ tokenRevokedAt: null, uninstalledAt: null });
 
     // Pre-check (findUnique) happens before upsert.
@@ -225,13 +225,13 @@ describe('MerchantRepository.updateEnrichment', () => {
     expect(state.updates).toHaveLength(1);
     const update = state.updates[0]!;
     expect(update.where).toEqual({ id: 'm_1' });
-    expect(update.data['email']).toBe('owner@example.com');
-    expect(update.data['name']).toBe('Foo Store');
-    expect(update.data['country']).toBe('US');
-    expect(update.data['currency']).toBe('USD');
-    expect(update.data['timezone']).toBe('America/Los_Angeles');
-    expect(update.data['shopifyPlan']).toBe('basic');
-    const ts = update.data['shopDetailsFetchedAt'] as Date;
+    expect(update.data.email).toBe('owner@example.com');
+    expect(update.data.name).toBe('Foo Store');
+    expect(update.data.country).toBe('US');
+    expect(update.data.currency).toBe('USD');
+    expect(update.data.timezone).toBe('America/Los_Angeles');
+    expect(update.data.shopifyPlan).toBe('basic');
+    const ts = update.data.shopDetailsFetchedAt as Date;
     expect(ts).toBeInstanceOf(Date);
     expect(ts.getTime()).toBeGreaterThanOrEqual(before);
     expect(ts.getTime()).toBeLessThanOrEqual(after);
@@ -253,15 +253,15 @@ describe('MerchantRepository.updateEnrichment', () => {
     });
 
     const update = state.updates[0]!;
-    expect(update.data['email']).toBeNull();
-    expect(update.data['name']).toBeNull();
-    expect(update.data['country']).toBeNull();
-    expect(update.data['currency']).toBeNull();
-    expect(update.data['timezone']).toBeNull();
-    expect(update.data['shopifyPlan']).toBeNull();
+    expect(update.data.email).toBeNull();
+    expect(update.data.name).toBeNull();
+    expect(update.data.country).toBeNull();
+    expect(update.data.currency).toBeNull();
+    expect(update.data.timezone).toBeNull();
+    expect(update.data.shopifyPlan).toBeNull();
     // Timestamp still set even when fields are null — distinguishes
     // "not yet fetched" from "fetched, but Shopify returned nulls."
-    expect(update.data['shopDetailsFetchedAt']).toBeInstanceOf(Date);
+    expect(update.data.shopDetailsFetchedAt).toBeInstanceOf(Date);
   });
 
   it('uses the passed-in tx (joins the enrichInstall UoW)', async () => {

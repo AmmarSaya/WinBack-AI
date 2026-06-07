@@ -1,6 +1,7 @@
-import { type OrderFinancialStatus, type OrderFulfillmentStatus, Prisma } from '@prisma/client';
+import { type OrderFinancialStatus, type OrderFulfillmentStatus, type Prisma } from '@prisma/client';
 import { ValidationError } from '@winback/errors';
 import { getLogger } from '@winback/logger';
+
 import type { WinbackPrisma } from '../client.js';
 import {
   toShopifyCustomerGid,
@@ -399,10 +400,10 @@ interface FkLookupResult {
 async function batchedFkLookups(
   tx: Prisma.TransactionClient,
   merchantId: string,
-  lineItems: ReadonlyArray<{
+  lineItems: readonly {
     product_id?: number | string | null | undefined;
     variant_id?: number | string | null | undefined;
-  }>,
+  }[],
 ): Promise<FkLookupResult> {
   const productGids = new Set<string>();
   const variantGids = new Set<string>();

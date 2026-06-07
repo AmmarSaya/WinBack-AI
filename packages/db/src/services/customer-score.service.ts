@@ -1,11 +1,12 @@
+import { type Prisma } from '@prisma/client';
 import { AUDIT_ACTIONS, OUTBOX_EVENTS } from '@winback/contracts';
 import { getLogger } from '@winback/logger';
-import { Prisma } from '@prisma/client';
 
 import { buildCustomerStateChangedPayload } from '../events/customer-state-changed.js';
 import type { AuditLogRepository } from '../repositories/audit-log.repository.js';
 import type { CustomerScoreRepository } from '../repositories/customer-score.repository.js';
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';
+
 import {
   INSUFFICIENT_COHORT_THRESHOLD,
   resolveLurker,
@@ -201,7 +202,7 @@ export class CustomerScoreService {
       });
     }
 
-    const previousState = customer.state as CustomerStateValue;
+    const previousState = customer.state;
     const newState = resolved.newState;
     const stateChanged = previousState !== newState;
 
@@ -282,7 +283,7 @@ export class CustomerScoreService {
         data: {
           merchantId,
           type: OUTBOX_EVENTS.customer.state_changed,
-          payload: payload as unknown as Prisma.InputJsonValue,
+          payload: payload,
         },
       });
     }

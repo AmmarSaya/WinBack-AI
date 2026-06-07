@@ -1,11 +1,11 @@
 import { ALL_SYSTEM_SCOPE_REASONS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { describe, expect, it, vi } from 'vitest';
 
+import type { WinbackPrisma } from '../src/client.js';
 import { TenantScopeError } from '../src/errors.js';
 import { applyReadHooks, applyWriteHooks } from '../src/extensions/hooks.js';
 import { OutboxRepository } from '../src/repositories/outbox.repository.js';
 import { withSystemScope, withTenantScope } from '../src/tenant-scope.js';
-import type { WinbackPrisma } from '../src/client.js';
 
 describe('tenant scope — reads', () => {
   it('throws when no scope is active', () => {

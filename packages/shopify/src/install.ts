@@ -1,7 +1,7 @@
+import type { Prisma } from '@prisma/client';
 import { OUTBOX_EVENTS, SYSTEM_SCOPE_REASONS } from '@winback/contracts';
 import { MerchantRepository, type WinbackPrisma, withSystemScope } from '@winback/db';
 import { getLogger } from '@winback/logger';
-import type { Prisma } from '@prisma/client';
 
 import { ShopifyInvalidShopError } from './errors.js';
 import { isValidShopDomain } from './shop-domain.js';

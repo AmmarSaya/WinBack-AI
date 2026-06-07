@@ -139,7 +139,7 @@ describe('AiProviderErrorCode -> audit-action mapping (closes L6-M2)', () => {
   });
 
   it('all non-content_blocked codes deliberately fall through to ai.generation_failed', () => {
-    const drifters: Array<{ code: string; auditAction: string }> = [];
+    const drifters: { code: string; auditAction: string }[] = [];
     for (const [code, decision] of Object.entries(ERROR_CODE_MAPPING)) {
       if (code === 'content_blocked') continue;
       if (decision.auditAction !== AUDIT_ACTIONS.ai.generation_failed) {

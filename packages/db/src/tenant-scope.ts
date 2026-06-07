@@ -126,7 +126,7 @@ export type TenantScope =
 //
 // Same pattern used for `__winbackPrisma` in apps/web/app/services/db.server.ts.
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __winbackScopeStore: AsyncLocalStorage<TenantScope> | undefined;
 }
 
@@ -149,7 +149,7 @@ const scopeStore: AsyncLocalStorage<TenantScope> = (globalThis.__winbackScopeSto
  */
 export function withTenantScope<T>(merchantId: string, fn: () => Promise<T>): Promise<T> {
   const parent = scopeStore.getStore();
-  if (parent !== undefined && parent.kind === 'tenant' && parent.merchantId !== merchantId) {
+  if (parent?.kind === 'tenant' && parent.merchantId !== merchantId) {
     return Promise.reject(
       new TenantScopeError(
         `Nested tenant scope mismatch: outer=${parent.merchantId}, inner=${merchantId}`,

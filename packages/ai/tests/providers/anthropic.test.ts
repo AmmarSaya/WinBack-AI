@@ -2,6 +2,10 @@ import Anthropic from '@anthropic-ai/sdk';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  AnthropicProvider,
+  mapAnthropicError,
+} from '../../src/providers/anthropic.js';
+import {
   AiProviderAuthError,
   AiProviderContentBlockedError,
   type AiProviderError,
@@ -9,10 +13,6 @@ import {
   AiProviderRateLimitError,
   AiProviderTransientError,
 } from '../../src/providers/interface.js';
-import {
-  AnthropicProvider,
-  mapAnthropicError,
-} from '../../src/providers/anthropic.js';
 
 function fakeMessage(opts: {
   textContent?: string | null;

@@ -36,8 +36,11 @@ vi.mock('@winback/shopify', async (importOriginal) => {
 });
 
 import { loader } from '../../app/routes/auth.js';
+
 import { assertRead, createTestMerchant, getTestClient, resetDb } from './setup.js';
+
 import { getSessionStorage } from '../../app/services/session-storage.server.js';
+
 import {
   mockSubscribeFailure,
   mockTokenExchangeFailure,
@@ -62,7 +65,7 @@ const MOCK_NEW_SCOPE = 'read_customers,read_orders,write_discounts';
 async function invokeAuthLoader(request: Request): Promise<Response> {
   const args: LoaderFunctionArgs = { request, params: {}, context: {} };
   try {
-    return (await loader(args)) as Response;
+    return (await loader(args));
   } catch (thrown) {
     if (thrown instanceof Response) return thrown;
     throw thrown;

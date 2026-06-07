@@ -193,12 +193,12 @@ export async function ingestWebhook(
 }
 
 function tryParseJson(raw: string): Prisma.InputJsonValue {
-  if (raw.length === 0) return {} as Prisma.InputJsonValue;
+  if (raw.length === 0) return {};
   try {
     return JSON.parse(raw) as Prisma.InputJsonValue;
   } catch {
     // Malformed body. Log a truncated raw fragment so debuggers can see it
     // without unbounded storage.
-    return { _malformed: true, _raw_prefix: raw.slice(0, 500) } as Prisma.InputJsonValue;
+    return { _malformed: true, _raw_prefix: raw.slice(0, 500) };
   }
 }

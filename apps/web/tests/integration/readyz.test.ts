@@ -50,7 +50,7 @@ async function invokeReadyz(): Promise<Response> {
   // readyz.loader() takes no args (it's a side-effect-only health probe;
   // see app/routes/readyz.tsx:195). Calling without args matches the
   // production signature; LoaderFunctionArgs setup is unnecessary.
-  return (await mod.loader()) as Response;
+  return (await mod.loader());
 }
 
 async function readBody(res: Response): Promise<ReadyzBody> {
@@ -112,7 +112,7 @@ async function insertOutboxEvents(opts: {
  *   - 'throw' → reject with a simulated error
  */
 function mockDbWithPerCallBehavior(
-  behaviors: Array<'pass' | 'hang' | 'throw'>,
+  behaviors: ('pass' | 'hang' | 'throw')[],
 ): void {
   const realClient = getTestClient();
   vi.doMock('~/services/db.server.js', () => {
@@ -159,7 +159,7 @@ function mockIoredisWithPingBehavior(behavior: 'throw' | 'hang'): void {
   vi.doMock('ioredis', async () => {
     const actual = await vi.importActual<typeof import('ioredis')>('ioredis');
     class FakeRedis {
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+       
       constructor(_url?: string, _options?: unknown) {
         // Intentionally accepts and discards the constructor args. Real
         // ioredis would open a connection here; we want NO real connection.

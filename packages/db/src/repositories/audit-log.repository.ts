@@ -1,8 +1,8 @@
-import { type AuditAction } from '@winback/contracts';
 import { Prisma } from '@prisma/client';
+import { type AuditAction } from '@winback/contracts';
 
-import type { WinbackPrisma } from '../client.js';
 import { getAuditContext } from '../audit-scope.js';
+import type { WinbackPrisma } from '../client.js';
 
 export interface AppendAuditLogInput {
   /** Tenant scope of the action; null only for cross-tenant operator ops. */
@@ -110,7 +110,7 @@ export class AuditLogRepository {
         action: ctx.action,
         ...(ctx.targetType !== undefined && { targetType: ctx.targetType }),
         ...(ctx.targetId !== undefined && { targetId: ctx.targetId }),
-        ...(ctx.context !== undefined && { context: ctx.context as Record<string, unknown> }),
+        ...(ctx.context !== undefined && { context: ctx.context }),
       },
       tx,
     );

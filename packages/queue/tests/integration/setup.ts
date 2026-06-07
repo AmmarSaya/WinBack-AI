@@ -14,7 +14,7 @@ let _adminClient: Redis | null = null;
 
 export function getTestRedisClient(): Redis {
   if (_adminClient === null) {
-    const url = process.env['REDIS_URL'];
+    const url = process.env.REDIS_URL;
     if (url === undefined || url === '') {
       throw new Error(
         '[queue/integration] REDIS_URL not set. Run via `pnpm queue:test` ' +

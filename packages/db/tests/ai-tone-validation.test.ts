@@ -38,7 +38,7 @@ describe('AiTone validation in extension write hooks', () => {
         'MerchantSettings',
         {
           where: { merchantId: 'm_1' },
-          data: { aiTone: { style: 'casual' } } as Record<string, unknown>,
+          data: { aiTone: { style: 'casual' } },
         },
         'update',
       );
@@ -47,7 +47,7 @@ describe('AiTone validation in extension write hooks', () => {
       // reference is not affected because the data block was copied during
       // tenant-id injection.
       const resultData = result.data as Record<string, unknown>;
-      expect(resultData['aiTone']).toMatchObject({
+      expect(resultData.aiTone).toMatchObject({
         style: 'casual',
         emojiPolicy: 'minimal',
         avoid: [],

@@ -21,10 +21,11 @@
  * contract.
  */
 
+import { randomBytes } from 'node:crypto';
+
 import { Session } from '@shopify/shopify-api';
 import type { SessionStorage } from '@shopify/shopify-app-session-storage';
 import { Cipher, decodeKey } from '@winback/crypto';
-import { randomBytes } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 
 import { EncryptedSessionStorage } from '../src/session-storage.js';

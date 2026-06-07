@@ -29,18 +29,15 @@
  */
 
 import { Prisma } from '@prisma/client';
-import { describe, expect, it } from 'vitest';
-
-import { ALL_OUTBOX_EVENT_TYPES } from '@winback/contracts';
-
 import {
   ANTHROPIC_MODELS,
   DEEPSEEK_MODELS,
   OPENAI_MODELS,
   PROVIDER_COST_RATES,
 } from '@winback/ai';
-
+import { ALL_OUTBOX_EVENT_TYPES } from '@winback/contracts';
 import { WEBHOOK_TOPIC_TO_EVENT } from '@winback/shopify';
+import { describe, expect, it } from 'vitest';
 
 import {
   CUSTOMER_REDACT_CHILD_TABLES,
@@ -314,9 +311,9 @@ describe('customerStateValues <-> Prisma CustomerState enum (closes L6-H3)', () 
 
 describe('WEBHOOK_TOPIC_TO_EVENT shape (closes L6-M3)', () => {
   it('every mapped event is a valid OutboxEventType', () => {
-    const bad: Array<{ topic: string; event: string }> = [];
+    const bad: { topic: string; event: string }[] = [];
     for (const [topic, event] of Object.entries(WEBHOOK_TOPIC_TO_EVENT)) {
-      if (!ALL_OUTBOX_EVENT_TYPES.has(event as never)) {
+      if (!ALL_OUTBOX_EVENT_TYPES.has(event)) {
         bad.push({ topic, event });
       }
     }

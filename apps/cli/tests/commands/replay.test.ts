@@ -12,9 +12,9 @@
  * module boundary. The findUnique call is mocked on the prisma stub.
  */
 
+import { AUDIT_ACTIONS } from '@winback/contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AUDIT_ACTIONS } from '@winback/contracts';
 
 vi.mock('@winback/db', async () => {
   const actual = await vi.importActual<typeof import('@winback/db')>('@winback/db');

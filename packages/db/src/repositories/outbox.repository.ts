@@ -1,5 +1,5 @@
-import type { OutboxEventType } from '@winback/contracts';
 import type { Prisma } from '@prisma/client';
+import type { OutboxEventType } from '@winback/contracts';
 
 import type { WinbackPrisma } from '../client.js';
 import { assertScopeMatchesMerchant, getTenantScope } from '../tenant-scope.js';

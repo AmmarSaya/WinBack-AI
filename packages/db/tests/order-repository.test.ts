@@ -89,7 +89,7 @@ function makeBody(overrides: Partial<ShopifyOrderWebhookBody> = {}): ShopifyOrde
     cancelled_at: null,
     line_items: [],
     ...overrides,
-  } as ShopifyOrderWebhookBody;
+  };
 }
 
 describe('OrderRepository.upsertFromWebhook', () => {

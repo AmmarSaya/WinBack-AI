@@ -88,6 +88,13 @@
  */
 
 import type { Prisma } from '@prisma/client';
+import {
+  AiProviderContentBlockedError,
+  AiProviderError,
+  estimateCostMicrocents,
+  getAiConfig,
+  selectActiveProvider,
+} from '@winback/ai';
 import { AUDIT_ACTIONS, QUEUE_NAMES } from '@winback/contracts';
 import {
   AiGenerationRepository,
@@ -96,13 +103,6 @@ import {
   MessageRepository,
   withTenantScope,
 } from '@winback/db';
-import {
-  AiProviderContentBlockedError,
-  AiProviderError,
-  estimateCostMicrocents,
-  getAiConfig,
-  selectActiveProvider,
-} from '@winback/ai';
 import { getLogger } from '@winback/logger';
 import { createRedisClient } from '@winback/queue';
 import { Worker, type Job } from 'bullmq';

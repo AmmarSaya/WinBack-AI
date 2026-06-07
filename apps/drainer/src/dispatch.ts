@@ -23,12 +23,12 @@ import type { OutboxEventRow } from '@winback/db';
 import { ValidationError } from '@winback/errors';
 
 import type { DrainerContext } from './context.js';
+import { handleCustomerStateChanged } from './handlers/customer-state-changed.js';
 import {
   handleCustomerCreated,
   handleCustomerDeleted,
   handleCustomerUpdated,
 } from './handlers/customer.js';
-import { handleCustomerStateChanged } from './handlers/customer-state-changed.js';
 import {
   handleCustomerDataRequested,
   handleCustomerRedacted,

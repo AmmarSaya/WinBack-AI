@@ -69,7 +69,7 @@ export class AnthropicProvider implements AiProvider {
     // retrying produces the same structured non-response. ContentBlocked,
     // not InvalidRequest.
     const firstBlock = response.content[0];
-    if (firstBlock === undefined || firstBlock.type !== 'text') {
+    if (firstBlock?.type !== 'text') {
       throw new AiProviderContentBlockedError(
         `Anthropic returned non-text content block (type=${firstBlock?.type ?? 'undefined'}); treating as content block.`,
         response,

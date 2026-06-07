@@ -12,7 +12,7 @@ import { type WinbackPrisma, createWinbackPrisma } from '@winback/db';
  * after the first call.
  */
 declare global {
-  // eslint-disable-next-line no-var
+   
   var __winbackPrisma: WinbackPrisma | undefined;
 }
 

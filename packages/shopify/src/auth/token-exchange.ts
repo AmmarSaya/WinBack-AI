@@ -42,6 +42,7 @@ import { RequestedTokenType, type Session } from '@shopify/shopify-api';
 
 import { ShopifyInvalidShopError, ShopifyTokenExchangeError } from '../errors.js';
 import { isValidShopDomain } from '../shop-domain.js';
+
 import { getShopifyApiInstance } from './shopify-api-instance.js';
 
 // Re-export the SDK's enum so callers don't import directly from the
@@ -132,7 +133,7 @@ function extractProviderStatus(err: unknown): number | null {
     maybeResponse !== null &&
     typeof maybeResponse === 'object' &&
     'code' in maybeResponse &&
-    typeof (maybeResponse as { code: unknown }).code === 'number'
+    typeof (maybeResponse).code === 'number'
   ) {
     return (maybeResponse as { code: number }).code;
   }
