@@ -94,8 +94,14 @@ export const customerStateChangedPayloadSchema = z
     shopifyCustomerId: z.string().startsWith('gid://shopify/Customer/'),
     oldState: customerStateSchema,
     newState: customerStateSchema,
-    /** ISO 8601 UTC; `new Date().toISOString()` at the producer call site. */
-    computedAt: z.string().datetime({ offset: false }),
+    /**
+     * ISO 8601 UTC; `new Date().toISOString()` at the producer call site.
+     * zod 4: `z.iso.datetime(...)` is the new top-level form; replaces the
+     * deprecated chainable `z.string().datetime(...)`. Same params shape
+     * (offset, etc.) — the chainable form's body is literally
+     * `inst.check(iso.datetime(params))` per zod 4 source schemas.ts:562.
+     */
+    computedAt: z.iso.datetime({ offset: false }),
     rfmScore: rfmScoreSchema,
   })
   .strict();

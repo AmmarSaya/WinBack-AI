@@ -44,7 +44,10 @@ import { defineConfig, type DefineConfigOptions } from './define.js';
  */
 
 const REDIS_URL_SCHEMA = z
-  .string()
+  // zod 4: `z.url(msg)` is the new top-level form; replaces the deprecated
+  // chainable `z.string().url(msg)`. Both call into core._url(ZodURL,...)
+  // with identical validation semantics — `z.url()` returns ZodURL (a
+  // ZodStringFormat subtype) so the `.refine(...)` chain below still works.
   .url('REDIS_URL must be a valid URL.')
   .refine(
     (v) => v.startsWith('redis://') || v.startsWith('rediss://'),
@@ -71,7 +74,10 @@ const redisSchema = z
       !data.REDIS_TLS_REJECT_UNAUTHORIZED
     ) {
       ctx.addIssue({
-        code: z.ZodIssueCode.custom,
+        // zod 4: `ZodIssueCode` is deprecated in favor of the raw string
+        // literal. `ZodIssueCode.custom === 'custom'` at runtime; pure
+        // value-for-reference swap, no semantic change to the issue emitted.
+        code: 'custom',
         path: ['REDIS_TLS_REJECT_UNAUTHORIZED'],
         message:
           'REDIS_TLS_REJECT_UNAUTHORIZED=false is refused in production. ' +

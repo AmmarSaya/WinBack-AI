@@ -94,7 +94,7 @@ export const orderEventPayloadSchema = z
     webhookId: z.string().min(1),
     body: shopifyOrderWebhookBodySchema,
   })
-  .passthrough();
+  .loose();
 
 export type OrderEventPayload = z.infer<typeof orderEventPayloadSchema>;
 
@@ -104,6 +104,6 @@ export const customerEventPayloadSchema = z
     webhookId: z.string().min(1),
     body: shopifyCustomerWebhookBodySchema,
   })
-  .passthrough();
+  .loose();
 
 export type CustomerEventPayload = z.infer<typeof customerEventPayloadSchema>;

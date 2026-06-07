@@ -1,4 +1,4 @@
-import type { ZodTypeAny, z } from 'zod';
+import type { z } from 'zod';
 
 import { ConfigError } from './error.js';
 
@@ -24,7 +24,10 @@ export interface DefineConfigOptions {
  * Direct `process.env.X` reads outside this package are an anti-pattern and
  * will eventually be enforced by a lint rule.
  */
-export function defineConfig<S extends ZodTypeAny>(
+// zod 4: `ZodTypeAny` is deprecated in favor of `z.ZodType` (without
+// generics). The constraint is functionally identical — any Zod schema
+// satisfies it; the rename is type-system hygiene, no runtime impact.
+export function defineConfig<S extends z.ZodType>(
   schema: S,
   options: DefineConfigOptions = {},
 ): z.infer<S> {

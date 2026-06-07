@@ -22,9 +22,11 @@ const SHOP_DOMAIN = /\.myshopify\.com$/i;
 const shopifyConfigSchema = z.object({
   SHOPIFY_API_KEY: z.string().min(1, 'SHOPIFY_API_KEY is required'),
   SHOPIFY_API_SECRET: z.string().min(1, 'SHOPIFY_API_SECRET is required'),
-  SHOPIFY_APP_URL: z
-    .string()
-    .url('SHOPIFY_APP_URL must be a valid URL (e.g. https://app.example.com)'),
+  // zod 4: `z.url(msg)` is the new top-level form; replaces deprecated
+  // `z.string().url(msg)`. Same `core._url(ZodURL, params)` implementation.
+  SHOPIFY_APP_URL: z.url(
+    'SHOPIFY_APP_URL must be a valid URL (e.g. https://app.example.com)',
+  ),
   /** Comma-separated list, e.g. "read_customers,read_orders,write_discounts". */
   SHOPIFY_SCOPES: z.string().min(1, 'SHOPIFY_SCOPES is required'),
   SHOPIFY_API_VERSION: z

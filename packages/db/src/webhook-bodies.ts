@@ -11,7 +11,7 @@ import { z } from 'zod';
  *   - P-4: `_set` money objects are authoritative; flat `total_price` etc.
  *     are validated as strings for cross-check but the repository reads
  *     from `_set.shop_money.amount` when storing to BigInt cents columns.
- *   - P-9: every object uses `.passthrough()` so Shopify-added fields in
+ *   - P-9: every object uses `.loose()` so Shopify-added fields in
  *     future API versions don't reject ingestion. Unknown fields are
  *     ignored (not stored).
  *
@@ -53,15 +53,15 @@ const moneySetSchema = z
         amount: moneyStringSchema,
         currency_code: z.string(),
       })
-      .passthrough(),
+      .loose(),
     presentment_money: z
       .object({
         amount: moneyStringSchema,
         currency_code: z.string(),
       })
-      .passthrough(),
+      .loose(),
   })
-  .passthrough();
+  .loose();
 
 export type ShopifyMoneySet = z.infer<typeof moneySetSchema>;
 
@@ -83,7 +83,7 @@ const emailMarketingConsentSchema = z
     opt_in_level: z.string().nullable().optional(),
     consent_updated_at: z.string().nullable().optional(),
   })
-  .passthrough();
+  .loose();
 
 const smsMarketingConsentSchema = z
   .object({
@@ -92,7 +92,7 @@ const smsMarketingConsentSchema = z
     consent_updated_at: z.string().nullable().optional(),
     consent_collected_from: z.string().nullable().optional(),
   })
-  .passthrough();
+  .loose();
 
 // ===========================================================================
 // Order — embedded customer (P-10: FK only, not used to upsert Customer rows)
@@ -102,7 +102,7 @@ const orderEmbeddedCustomerSchema = z
   .object({
     id: z.union([z.number(), z.string()]),
   })
-  .passthrough();
+  .loose();
 
 // ===========================================================================
 // Order — line items
@@ -118,7 +118,7 @@ const orderLineItemSchema = z
     price: moneyStringSchema,
     price_set: moneySetSchema,
   })
-  .passthrough();
+  .loose();
 
 export type ShopifyOrderLineItem = z.infer<typeof orderLineItemSchema>;
 
@@ -137,7 +137,7 @@ export type ShopifyOrderLineItem = z.infer<typeof orderLineItemSchema>;
  * null for guest checkout).
  *
  * EXCLUDED fields (per the mapping doc) are NOT enumerated here — they
- * pass through via `.passthrough()` without rejection or extraction.
+ * pass through via `.loose()` without rejection or extraction.
  */
 export const shopifyOrderWebhookBodySchema = z
   .object({
@@ -189,7 +189,7 @@ export const shopifyOrderWebhookBodySchema = z
     // Line items (row #54)
     line_items: z.array(orderLineItemSchema),
   })
-  .passthrough();
+  .loose();
 
 export type ShopifyOrderWebhookBody = z.infer<typeof shopifyOrderWebhookBodySchema>;
 
@@ -237,6 +237,6 @@ export const shopifyCustomerWebhookBodySchema = z
     email_marketing_consent: emailMarketingConsentSchema.nullable().optional(),
     sms_marketing_consent: smsMarketingConsentSchema.nullable().optional(),
   })
-  .passthrough();
+  .loose();
 
 export type ShopifyCustomerWebhookBody = z.infer<typeof shopifyCustomerWebhookBodySchema>;
