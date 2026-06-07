@@ -1,0 +1,76 @@
+{
+  // Lint-only TypeScript project. Used by ESLint's typescript-eslint parser
+  // to provide type information for the workspace's lint rules.
+  //
+  // Why this file exists:
+  //   - Each package's tsconfig.json restricts `include` to ["src/**/*"] so
+  //     tsc's emit/composite contract stays scoped to compilation outputs.
+  //     Tests, vitest configs, and scripts/*.mjs are intentionally outside
+  //     that scope.
+  //   - typescript-eslint's `projectService: true` mode walks up looking
+  //     for the nearest tsconfig; if a file isn't in any tsconfig's include,
+  //     it fails to parse with "X was not found by the project service."
+  //   - The simple escape hatch `allowDefaultProject: ['**/*.test.ts']` is
+  //     rejected by typescript-eslint's perf guard against `**` globs (see
+  //     https://tseslint.com/allowdefaultproject-glob-too-wide).
+  //   - This file is the workspace-wide superset: includes every TS/TSX/JS
+  //     file ESLint should typecheck, sets noEmit:true so it never produces
+  //     output, and overrides composite:false so it stands alone (no
+  //     references to the per-package projects).
+  //
+  // Module/lib settings match apps/web's bundler-resolution profile so a
+  // single project can cover both Remix bundler-mode source AND
+  // NodeNext-mode service code. Bundler resolution is the most permissive
+  // — it accepts the .js-extension imports the per-package configs use.
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "composite": false,
+    "declaration": false,
+    "declarationMap": false,
+    "incremental": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "jsx": "react-jsx",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    // vite/client is only installed in apps/web/node_modules; including it
+    // here makes the whole lint project fail to load at the workspace root.
+    // apps/web files that read `import.meta.env` will produce a small number
+    // of lint errors at those specific sites — acceptable trade for the
+    // workspace-wide project staying loadable.
+    "types": ["node"],
+    // Needed so scripts/*.mjs are part of the project (lint-only).
+    "allowJs": true,
+    "checkJs": false,
+    // Mirror apps/web/tsconfig.json's `~/*` path alias so imports like
+    // `~/services/admin-auth.server.js` resolve under this project; without
+    // it every apps/web/app/**/* file that uses the alias produces a
+    // "type that could not be resolved" cascade.
+    //
+    // ⚠ DRIFT COUPLING: this `paths` block mirrors apps/web/tsconfig.json.
+    // If that file's path aliases change (new alias added, existing alias
+    // re-targeted), THIS FILE MUST CHANGE IN LOCKSTEP, otherwise lint
+    // silently desyncs from build — apps/web imports that work at build
+    // time produce phantom "type could not be resolved" lint errors. Same
+    // drift class as the registries (B1's territory). No CI guard today;
+    // operator discipline + this comment is the lock.
+    "baseUrl": ".",
+    "paths": {
+      "~/*": ["./apps/web/app/*"]
+    },
+    // baseUrl is deprecated in TS 7.0 but still required for `paths`
+    // to resolve in TS 5/6. Suppress the deprecation warning until the
+    // workspace moves to TS 7 + the modern path-mapping syntax.
+    "ignoreDeprecations": "6.0"
+  },
+  "include": [
+    "apps/**/*.ts",
+    "apps/**/*.tsx",
+    "packages/**/*.ts",
+    "packages/**/*.tsx",
+    "scripts/**/*.ts",
+    "scripts/**/*.mjs",
+    "scripts/**/*.js",
+    "eslint.config.js"
+  ]
+}
