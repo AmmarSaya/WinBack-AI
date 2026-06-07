@@ -39,6 +39,7 @@ const SHOP = 'foo.myshopify.com';
 const SHOP_OTHER = 'other-shop.myshopify.com';
 
 const TEST_ENV: NodeJS.ProcessEnv = {
+  NODE_ENV: 'test',
   SHOPIFY_API_KEY: TEST_API_KEY,
   SHOPIFY_API_SECRET: TEST_API_SECRET,
   SHOPIFY_APP_URL: 'https://test.invalid',

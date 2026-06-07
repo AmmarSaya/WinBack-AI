@@ -166,7 +166,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       },
       select: { id: true },
     });
-    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    const upsertCall = tx.order.upsert.mock.calls[0]![0];
     expect(upsertCall.create.customerId).toBe('local_customer_1');
   });
 
@@ -178,7 +178,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       tx: tx as unknown as Prisma.TransactionClient,
     });
     expect(tx.customer.findUnique).not.toHaveBeenCalled();
-    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    const upsertCall = tx.order.upsert.mock.calls[0]![0];
     expect(upsertCall.create.customerId).toBeNull();
   });
 
@@ -190,7 +190,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       body: makeBody({ customer: { id: 999 } }),
       tx: tx as unknown as Prisma.TransactionClient,
     });
-    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    const upsertCall = tx.order.upsert.mock.calls[0]![0];
     expect(upsertCall.create.customerId).toBeNull();
   });
 
@@ -206,7 +206,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       body,
       tx: tx as unknown as Prisma.TransactionClient,
     });
-    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    const upsertCall = tx.order.upsert.mock.calls[0]![0];
     expect(upsertCall.create.totalTaxCents).toBe(0n);
   });
 
@@ -219,7 +219,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       body,
       tx: tx as unknown as Prisma.TransactionClient,
     });
-    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    const upsertCall = tx.order.upsert.mock.calls[0]![0];
     expect(upsertCall.create.totalDiscountCents).toBe(0n);
   });
 
@@ -254,7 +254,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       tx: tx as unknown as Prisma.TransactionClient,
     });
     expect(tx.orderLineItem.upsert).toHaveBeenCalledTimes(1);
-    const liCall = tx.orderLineItem.upsert.mock.calls[0][0];
+    const liCall = tx.orderLineItem.upsert.mock.calls[0]![0];
     expect(liCall.create.productId).toBe('prod_local_1');
     expect(liCall.create.productVariantId).toBe('var_local_1');
     expect(liCall.create.quantity).toBe(2);
@@ -285,7 +285,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       }),
       tx: tx as unknown as Prisma.TransactionClient,
     });
-    const liCall = tx.orderLineItem.upsert.mock.calls[0][0];
+    const liCall = tx.orderLineItem.upsert.mock.calls[0]![0];
     expect(liCall.create.productId).toBeNull();
     expect(liCall.create.productVariantId).toBeNull();
   });
@@ -318,7 +318,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
     // findUnique-skip path can't be exploited by a future caller writing
     // outside the active tenant scope.  Locked here so a refactor that
     // drops merchantId from the composite-key accessor fails loud.
-    const liCall = tx.orderLineItem.upsert.mock.calls[0][0];
+    const liCall = tx.orderLineItem.upsert.mock.calls[0]![0];
     expect(liCall.where).toEqual({
       merchantId_orderId_shopifyLineItemId: {
         merchantId: MERCHANT_ID,
@@ -348,7 +348,7 @@ describe('OrderRepository.upsertFromWebhook', () => {
       body: makeBody({ fulfillment_status: 'partially_fulfilled' /* Shopify-could-add-later */ }),
       tx: tx as unknown as Prisma.TransactionClient,
     });
-    const upsertCall = tx.order.upsert.mock.calls[0][0];
+    const upsertCall = tx.order.upsert.mock.calls[0]![0];
     expect(upsertCall.create.fulfillmentStatus).toBeNull();
   });
 

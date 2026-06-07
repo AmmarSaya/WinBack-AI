@@ -74,9 +74,9 @@ describe('CustomerScoreRepository.readCohort', () => {
       }),
     );
     expect(result).toHaveLength(2);
-    expect(typeof result[0].mCents).toBe('bigint');
-    expect(result[0].mCents).toBe(19995n);
-    expect(result[1].mCents).toBe(4999n);
+    expect(typeof result[0]!.mCents).toBe('bigint');
+    expect(result[0]!.mCents).toBe(19995n);
+    expect(result[1]!.mCents).toBe(4999n);
   });
 
   it('uses args.tx (NOT this.prisma) for the cohort read — TX invariant', async () => {
@@ -102,7 +102,7 @@ describe('CustomerScoreRepository.readCohort', () => {
     );
     // Prisma.sql template binds JS values as `values[]` on the Sql object.
     // The order in the SQL is [now, merchantId, windowStart].
-    const sqlArg = tx.$queryRaw.mock.calls[0][0] as { values: unknown[] };
+    const sqlArg = tx.$queryRaw.mock.calls[0]![0] as { values: unknown[] };
     expect(sqlArg.values).toContain(MERCHANT_ID);
     // Window start = NOW - 365 days
     const expectedWindowStart = new Date(NOW.getTime() - 365 * 86400000);
@@ -178,7 +178,7 @@ describe('CustomerScoreRepository.upsertScore', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    const upsertCall = tx.customerScore.upsert.mock.calls[0][0];
+    const upsertCall = tx.customerScore.upsert.mock.calls[0]![0];
     expect(upsertCall.create).toMatchObject({
       merchantId: MERCHANT_ID,
       customerId: CUSTOMER_ID,
@@ -219,7 +219,7 @@ describe('CustomerScoreRepository.upsertScore', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    const upsertCall = tx.customerScore.upsert.mock.calls[0][0];
+    const upsertCall = tx.customerScore.upsert.mock.calls[0]![0];
     expect(upsertCall.create.rQuintile).toBeNull();
     expect(upsertCall.create.fQuintile).toBeNull();
     expect(upsertCall.create.mQuintile).toBeNull();
@@ -235,8 +235,8 @@ describe('CustomerScoreRepository.upsertScore', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     );
-    expect(tx.customerScore.upsert.mock.calls[0][0].where).toEqual({ customerId: CUSTOMER_ID });
-    expect(tx.customerScore.findUnique.mock.calls[0][0].where).toEqual({ customerId: CUSTOMER_ID });
+    expect(tx.customerScore.upsert.mock.calls[0]![0].where).toEqual({ customerId: CUSTOMER_ID });
+    expect(tx.customerScore.findUnique.mock.calls[0]![0].where).toEqual({ customerId: CUSTOMER_ID });
   });
 
   it('uses args.tx for both the pre-write findUnique AND the upsert — TX invariant', async () => {

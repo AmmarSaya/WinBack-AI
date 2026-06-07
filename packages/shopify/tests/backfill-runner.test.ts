@@ -153,7 +153,7 @@ describe('CustomerPageFetcher', () => {
     const adminGraphql = vi.fn(graphqlImpl);
     const fetcher = new CustomerPageFetcher({
       graphql: adminGraphql,
-    } as unknown as Parameters<typeof CustomerPageFetcher.prototype.constructor>[0]);
+    } as unknown as ConstructorParameters<typeof CustomerPageFetcher>[0]);
     return { fetcher, adminGraphql };
   }
 
@@ -283,7 +283,7 @@ function applyUpdateData(job: JobState, data: Record<string, unknown>): JobState
   for (const [k, v] of Object.entries(data)) {
     if (v !== null && typeof v === 'object' && 'increment' in v) {
       const inc = (v as { increment: number }).increment;
-      (next as Record<string, unknown>)[k] = ((next as Record<string, number>)[k] ?? 0) + inc;
+      (next as Record<string, unknown>)[k] = ((next as unknown as Record<string, number>)[k] ?? 0) + inc;
     } else {
       (next as Record<string, unknown>)[k] = v;
     }
@@ -403,7 +403,7 @@ describe('BackfillRunner — orchestration', () => {
     const processor = makeRecorderProcessor();
 
     const runner = new BackfillRunner(
-      prisma as unknown as Parameters<typeof BackfillRunner.prototype.constructor>[0],
+      prisma as unknown as ConstructorParameters<typeof BackfillRunner>[0],
       fetcher,
       processor,
     );
@@ -453,7 +453,7 @@ describe('BackfillRunner — orchestration', () => {
     ]);
     const processor = makeRecorderProcessor();
     const runner = new BackfillRunner(
-      prisma as unknown as Parameters<typeof BackfillRunner.prototype.constructor>[0],
+      prisma as unknown as ConstructorParameters<typeof BackfillRunner>[0],
       fetcher,
       processor,
     );
@@ -484,7 +484,7 @@ describe('BackfillRunner — orchestration', () => {
     };
     const processor = makeRecorderProcessor();
     const runner = new BackfillRunner(
-      prisma as unknown as Parameters<typeof BackfillRunner.prototype.constructor>[0],
+      prisma as unknown as ConstructorParameters<typeof BackfillRunner>[0],
       fetcher,
       processor,
     );
@@ -515,7 +515,7 @@ describe('BackfillRunner — orchestration', () => {
       }),
     };
     const runner = new BackfillRunner(
-      prisma as unknown as Parameters<typeof BackfillRunner.prototype.constructor>[0],
+      prisma as unknown as ConstructorParameters<typeof BackfillRunner>[0],
       fetcher,
       processor,
     );
@@ -550,7 +550,7 @@ describe('BackfillRunner — orchestration', () => {
     const fetcher = makeScriptedFetcher([]);
     const processor = makeRecorderProcessor();
     const runner = new BackfillRunner(
-      prisma as unknown as Parameters<typeof BackfillRunner.prototype.constructor>[0],
+      prisma as unknown as ConstructorParameters<typeof BackfillRunner>[0],
       fetcher,
       processor,
     );
@@ -582,7 +582,7 @@ describe('BackfillRunner — orchestration', () => {
     ]);
     const processor = makeRecorderProcessor();
     const runner = new BackfillRunner(
-      prisma as unknown as Parameters<typeof BackfillRunner.prototype.constructor>[0],
+      prisma as unknown as ConstructorParameters<typeof BackfillRunner>[0],
       fetcher,
       processor,
     );

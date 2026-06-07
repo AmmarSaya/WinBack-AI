@@ -47,12 +47,10 @@ type ReadyzBody = ReadyzOkBody | ReadyzUnhealthyBody;
  */
 async function invokeReadyz(): Promise<Response> {
   const mod = await import('../../app/routes/readyz.js');
-  const args: LoaderFunctionArgs = {
-    request: new Request('http://localhost/readyz'),
-    params: {},
-    context: {},
-  };
-  return (await mod.loader(args)) as Response;
+  // readyz.loader() takes no args (it's a side-effect-only health probe;
+  // see app/routes/readyz.tsx:195). Calling without args matches the
+  // production signature; LoaderFunctionArgs setup is unnecessary.
+  return (await mod.loader()) as Response;
 }
 
 async function readBody(res: Response): Promise<ReadyzBody> {

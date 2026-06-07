@@ -29,7 +29,11 @@ function envSource(
     NODE_ENV: 'test',
     REDIS_URL: 'redis://localhost:6380',
   };
-  return { ...base, ...overrides };
+  // `overrides` is Record<string, string | undefined> so the spread result
+  // doesn't satisfy the structural requirement of NodeJS.ProcessEnv's
+  // required `NODE_ENV`. Cast: `base` always supplies NODE_ENV, callers
+  // override only the keys they care about.
+  return { ...base, ...overrides } as NodeJS.ProcessEnv;
 }
 
 // ===========================================================================

@@ -4,6 +4,9 @@ import { describe, expect, it } from 'vitest';
 import { getAiConfig } from '../src/config.js';
 
 const baseEnv = {
+  // `@types/node` made NODE_ENV required on NodeJS.ProcessEnv; include it
+  // in the spread base so every test's env-source object satisfies the type.
+  NODE_ENV: 'test',
   AI_MAX_TOKENS: '300',
   AI_TEMPERATURE: '0.7',
 } as const;
@@ -198,6 +201,7 @@ describe('getAiConfig', () => {
         getAiConfig({
           reset: true,
           source: {
+            NODE_ENV: 'test',
             AI_PROVIDER: 'deepseek',
             AI_MODEL: 'deepseek-v4-flash',
             DEEPSEEK_API_KEY: 'sk-fake',
@@ -213,6 +217,7 @@ describe('getAiConfig', () => {
         getAiConfig({
           reset: true,
           source: {
+            NODE_ENV: 'test',
             AI_PROVIDER: 'deepseek',
             AI_MODEL: 'deepseek-v4-flash',
             DEEPSEEK_API_KEY: 'sk-fake',
@@ -229,6 +234,7 @@ describe('getAiConfig', () => {
       const cfg = getAiConfig({
         reset: true,
         source: {
+          NODE_ENV: 'test',
           AI_PROVIDER: 'deepseek',
           AI_MODEL: 'deepseek-v4-flash',
           DEEPSEEK_API_KEY: 'sk-fake',
@@ -242,6 +248,7 @@ describe('getAiConfig', () => {
       const cfg = getAiConfig({
         reset: true,
         source: {
+          NODE_ENV: 'test',
           AI_PROVIDER: 'deepseek',
           AI_MODEL: 'deepseek-v4-flash',
           DEEPSEEK_API_KEY: 'sk-fake',
