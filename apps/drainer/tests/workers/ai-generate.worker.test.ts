@@ -81,6 +81,7 @@ vi.mock('bullmq', () => ({
     workerConstructorCalls.push({ name, opts });
     const instance = {
       on: vi.fn(),
+      // eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op mock for vi.fn return-typing; empty body documents deliberate-no-op rather than a forgotten stub.
       close: vi.fn(async () => {}),
     };
     workerInstances.push(instance);

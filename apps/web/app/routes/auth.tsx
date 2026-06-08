@@ -64,6 +64,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
     const shop = shopParam !== null ? normalizeShopDomain(shopParam) : null;
     if (shop === null) {
       log.warn({ shop: shopParam }, 'auth: invalid shop param');
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- Remix framework pattern: thrown Response routes to the route's ErrorBoundary; wrapping in `new Error()` would break the boundary contract.
       throw new Response('Invalid shop parameter', { status: 400 });
     }
 

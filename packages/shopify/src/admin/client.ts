@@ -103,6 +103,7 @@ export class AdminClient {
     const url = `https://${shop}/admin/api/${config.SHOPIFY_API_VERSION}/graphql.json`;
 
     let attempt = 0;
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Idiomatic infinite-retry loop; the condition IS always-truthy by design. Loop exits via explicit `return` (success) or `throw` (terminal error / retry exhaustion) inside the body.
     while (true) {
       const wait = this.costTracker.msUntilAvailable(shop, estimatedCost);
       if (wait > 0) {

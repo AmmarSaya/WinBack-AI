@@ -76,8 +76,14 @@ export class DeepSeekProvider implements AiProvider {
       );
     }
 
+    // SDK declares `ChatCompletionMessage.content: string | null` (verified
+    // against node_modules/.pnpm/openai@4.104.0/.../completions.d.ts:653).
+    // The previous `content === undefined` clause was dead per the SDK
+    // type, and DeepSeek's documented divergence is about empty-STRING
+    // content on moderation blocks (covered by `.trim() === ''`), not
+    // undefined. Removed (5c-2 audit).
     const content = choice.message.content;
-    if (content === null || content === undefined || content.trim() === '') {
+    if (content === null || content.trim() === '') {
       // Empty content from DeepSeek — most commonly a silent moderation
       // block per the divergence above. Surface as content-blocked so it
       // does NOT trigger a retry that will produce the same empty response.

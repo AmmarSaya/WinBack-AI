@@ -60,6 +60,7 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // (this is a Remix framework pattern; wrapping in `new Error()`
       // would break the boundary contract).
       log.warn({ merchantId: ctx.merchantId }, 'settings: MerchantSettings row missing');
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- Remix framework pattern: thrown Response routes to the route's ErrorBoundary; wrapping in `new Error()` would break the boundary contract.
       throw new Response('Settings not found', { status: 500 });
     }
 

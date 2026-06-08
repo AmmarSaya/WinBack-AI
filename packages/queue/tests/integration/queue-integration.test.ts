@@ -41,6 +41,7 @@ beforeEach(async () => {
   // test (and any test that doesn't open queues), and the warning is
   // expected, not a regression. LOG_LEVEL=fatal in queue-test.mjs only
   // affects pino loggers; console.warn bypasses it.
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op to silence the documented double-close warning; empty body IS the silenced output.
   vi.spyOn(console, 'warn').mockImplementation(() => {});
 
   // Each test starts with empty Redis. FLUSHDB is fast (sub-millisecond

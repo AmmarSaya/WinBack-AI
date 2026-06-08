@@ -118,6 +118,7 @@ export function enforceTenantScopeOnRead(
     }
     if (id !== scope.merchantId) {
       throw new TenantScopeError(
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Forensic operator-debug message on `unknown ${id}`; `[object Object]` IS the signal that an unexpected shape arrived at the tenant-scope boundary. JSON.stringify could throw on circular/null-proto values; disable is the safer surface.
         `Cross-tenant Merchant read: scope=${scope.merchantId}, requested=${String(id)}`,
         { context: { model } },
       );
@@ -140,6 +141,7 @@ export function enforceTenantScopeOnRead(
   }
   if (existing !== scope.merchantId) {
     throw new TenantScopeError(
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Forensic operator-debug message on `unknown ${existing}` at the tenant-scope-mismatch boundary; `[object Object]` IS the signal that an unexpected shape arrived. JSON.stringify could throw on circular/null-proto values.
       `Tenant scope mismatch on ${model}: scope=${scope.merchantId}, where.merchantId=${String(existing)}`,
       { context: { model } },
     );
@@ -167,6 +169,7 @@ export function enforceTenantScopeOnWrite(
     const targetId = where?.id ?? data?.id;
     if (targetId !== undefined && targetId !== scope.merchantId) {
       throw new TenantScopeError(
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Forensic operator-debug message on `unknown ${targetId}` at the cross-tenant-write boundary; `[object Object]` IS the signal that an unexpected shape arrived. JSON.stringify could throw on circular/null-proto values.
         `Cross-tenant Merchant write: scope=${scope.merchantId}, target=${String(targetId)}`,
         { context: { model, operation } },
       );
@@ -205,6 +208,7 @@ export function enforceTenantScopeOnWrite(
       next = { ...next, where: { ...where, merchantId: scope.merchantId } };
     } else if (existing !== scope.merchantId) {
       throw new TenantScopeError(
+        // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Forensic operator-debug message on `unknown ${existing}` at the tenant-scope-write-mismatch boundary; `[object Object]` IS the signal that an unexpected shape arrived. JSON.stringify could throw on circular/null-proto values.
         `Tenant scope mismatch on ${model} (${operation}): scope=${scope.merchantId}, where.merchantId=${String(existing)}`,
         { context: { model, operation } },
       );
@@ -236,6 +240,7 @@ function injectIntoRow(
   }
   if (existing !== scopeMerchantId) {
     throw new TenantScopeError(
+      // eslint-disable-next-line @typescript-eslint/no-base-to-string -- Forensic operator-debug message on `unknown ${existing}` at the write-data-tenant-mismatch boundary; `[object Object]` IS the signal that an unexpected shape arrived. JSON.stringify could throw on circular/null-proto values.
       `Write data on ${model} carries cross-tenant merchantId: scope=${scopeMerchantId}, data.merchantId=${String(existing)}`,
       { context: { model } },
     );
