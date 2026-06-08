@@ -117,3 +117,68 @@ still ask "could this be a repository method?" at every direct-prisma
 call site outside `@winback/db`. The answer is sometimes "yes, and it
 should be" — see the open `MerchantRepository` task in the pre-CP-2 prep
 register.
+
+---
+
+## Customer State Single-Owner Policy (lock #22 / C9 — amended A1a)
+
+**Decision.** `Customer.state` is written **only** by `CustomerScoreService`.
+The service has **two** authorized state-writing methods:
+
+- `recompute` — steady-state, per-customer, inline in the drainer's order /
+  customer webhook handlers. The **transition detector**.
+- `bulkRescore` — the operator bulk-rescore pass (A1b). The **batch
+  (re)assigner** that runs a merchant's initial scoring pass.
+
+No other method, repository, handler, or webhook upsert may write
+`Customer.state`.
+
+**Why — two invariants this protects.**
+
+1. **Provenance.** `Customer.state` is the RFM-computed lifecycle band
+   (`active/warm/at_risk/dormant/lost/insufficient_data`). It collides *by
+   name* with Shopify's customer `state` enum
+   (`enabled/disabled/invited/declined`) — an unrelated account-lifecycle
+   concept that arrives on every `customers/*` webhook. The single-owner rule
+   is why `CustomerRepository.upsertFromWebhook` excludes `state` from its
+   writable fields: a webhook upsert must never clobber the computed band with
+   Shopify's colliding value. Both authorized methods write the band
+   **exclusively** from the pure `scoring-math` functions — never from any
+   Shopify-sourced field.
+
+2. **Side-effect routing.** Emission of `customer.state_changed` (the winback
+   send-driver OutboxEvent + its forensic AuditLog) flows through exactly one
+   **transition detector**: `recompute`, gated on
+   `Merchant.scoringInitializedAt` (suppressed while null — first-pass
+   suppression, Lock V10). `bulkRescore` performs batch assignment and
+   **NEVER emits** `customer.state_changed` — a batch pass is not a transition
+   stream, so it correctly has no transition side-effect. This makes the
+   install-day storm structurally impossible: there is no flag value, no
+   force flag, and no code path by which a bulk pass fires winback events.
+   Catching up genuinely-missed lapses with sends is the job of a separate,
+   **rate-limited** periodic decay-rescore sweep (future), never of
+   `bulkRescore`.
+
+**Why this is a widening, not a loosening.** The lock moves from
+single-*writer* (`recompute` only) to single-*owner* (the service, two
+methods). Both invariants hold unchanged: provenance (RFM-only writes) and
+side-effect routing (emission via exactly one gated transition detector).
+`bulkRescore` writing state without emitting does not punch a hole — a batch
+assignment is definitionally not a transition.
+
+**Constraints this imposes on code.**
+
+1. Any new `Customer.state` write goes through `CustomerScoreService`. Adding
+   a third writer requires amending this section first.
+2. `recompute` gates emission on `Merchant.scoringInitializedAt`; the
+   `Customer.state` update + `CustomerScore` upsert are unconditional (the
+   band must always be correct).
+3. `bulkRescore` always suppresses `customer.state_changed` emission,
+   regardless of flag state, and sets `scoringInitializedAt` in the same tx as
+   its final batch (atomic — a partial pass leaves the flag null so a rerun
+   re-attempts the whole pass under suppression). It refuses to run when the
+   flag is already set (idempotency guard; `--force` re-baselines silently,
+   never emitting).
+4. A grep for `Customer.state` writes must return only the two
+   `CustomerScoreService` methods. The `POST-EPIC-E-AUDIT.md` §1.6 / §5.1
+   single-writer check is updated to a single-owner (two-method) check.

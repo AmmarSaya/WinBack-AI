@@ -115,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the twelve actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 3 Epic F batch 4 ai)', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(12);
+  it('contains the thirteen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 3 Epic F batch 4 ai)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(13);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -128,6 +128,9 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(AUDIT_ACTIONS.outbox.replay).toBe('outbox.replay');
     expect(AUDIT_ACTIONS.outbox.dead_letter_forced).toBe('outbox.dead_letter_forced');
     expect(AUDIT_ACTIONS.customer.state_changed).toBe('customer.state_changed');
+    // A1a (POST-EPIC-F §1 / Lock V10) — first-pass scoring complete. Written
+    // by the bulk-rescore pass (A1b) at the scoringInitializedAt flag-flip.
+    expect(AUDIT_ACTIONS.merchant.scoring_initialized).toBe('merchant.scoring_initialized');
     // Epic F batch 4 — AI generation pipeline outcomes. See
     // EPIC-F-DESIGN.md §F-8 / §F-9 for the producer call sites.
     expect(AUDIT_ACTIONS.ai.generation_failed).toBe('ai.generation_failed');
