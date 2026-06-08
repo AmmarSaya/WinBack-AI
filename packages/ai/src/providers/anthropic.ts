@@ -1,4 +1,4 @@
-import Anthropic from '@anthropic-ai/sdk';
+import Anthropic, { APIError as AnthropicAPIError } from '@anthropic-ai/sdk';
 
 import {
   AiProviderAuthError,
@@ -125,14 +125,19 @@ export function createAnthropicProvider(config: {
  *   - connection errors    → AiProviderTransientError  (retryable)
  */
 export function mapAnthropicError(err: unknown): Error {
-  if (err instanceof Anthropic.APIError) {
-    const status = err.status;
-    const message = err.message;
+  if (err instanceof AnthropicAPIError) {
+    // `instanceof GenericClass` widens the SDK's generic type parameters
+    // to `any`; cast back to the default-instantiated class so `.status`
+    // and `.message` resolve to their declared types (`number | undefined`
+    // and `string`). Verified against the SDK's `core/error.d.ts`.
+    const e = err as AnthropicAPIError;
+    const status = e.status;
+    const message = e.message;
     if (status === 401 || status === 403) {
-      return new AiProviderAuthError(`Anthropic auth failed (${status}): ${message}`, err);
+      return new AiProviderAuthError(`Anthropic auth failed (${String(status)}): ${message}`, err);
     }
     if (status === 429) {
-      return new AiProviderRateLimitError(`Anthropic rate limit (${status}): ${message}`, err);
+      return new AiProviderRateLimitError(`Anthropic rate limit (${String(status)}): ${message}`, err);
     }
     if (status === 400) {
       // Anthropic's error envelope is `{ type: 'error', error: { type, message } }`.
@@ -170,19 +175,19 @@ export function mapAnthropicError(err: unknown): Error {
         );
       }
       return new AiProviderInvalidRequestError(
-        `Anthropic invalid request (${status}): ${message}`,
+        `Anthropic invalid request (${String(status)}): ${message}`,
         err,
       );
     }
     // 529 'overloaded_error' is Anthropic-specific; 500/502/503/504 standard.
     if (status !== undefined && status >= 500 && status < 600) {
       return new AiProviderTransientError(
-        `Anthropic server error (${status}): ${message}`,
+        `Anthropic server error (${String(status)}): ${message}`,
         err,
       );
     }
     return new AiProviderInvalidRequestError(
-      `Anthropic unmapped error (${status ?? 'no-status'}): ${message}`,
+      `Anthropic unmapped error (${String(status ?? 'no-status')}): ${message}`,
       err,
     );
   }

@@ -49,8 +49,18 @@ export async function loader({ request }: LoaderFunctionArgs) {
       // Shouldn't happen — install creates MerchantSettings as part of
       // the same transaction. Log and surface a generic message rather
       // than crash; M10 hardening can add automatic re-creation.
+      //
+      // THROW (not return) the Response so the loader's inferred return
+      // type stays `TypedResponse<{...}>` rather than collapsing to
+      // `Response | TypedResponse<{...}>` (which makes `typeof loader`'s
+      // SerializeFrom widen `useLoaderData()` to `any`). Remix routes a
+      // thrown Response to the route's ErrorBoundary; no custom boundary
+      // exists yet for this route, so it falls through to the workspace
+      // default. Per-site disable lives with 5c's only-throw-error sweep
+      // (this is a Remix framework pattern; wrapping in `new Error()`
+      // would break the boundary contract).
       log.warn({ merchantId: ctx.merchantId }, 'settings: MerchantSettings row missing');
-      return new Response('Settings not found', { status: 500 });
+      throw new Response('Settings not found', { status: 500 });
     }
 
     // BigInt is not JSON-serializable by default — coerce to string at
@@ -75,15 +85,15 @@ export default function Settings() {
         <BlockStack gap="400">
           <SettingRow
             label="Attribution window — direct"
-            value={`${s.attributionDirectWindowDays} days`}
+            value={`${String(s.attributionDirectWindowDays)} days`}
           />
           <SettingRow
             label="Attribution window — assisted"
-            value={`${s.attributionAssistedWindowDays} days`}
+            value={`${String(s.attributionAssistedWindowDays)} days`}
           />
           <SettingRow
             label="Send time window"
-            value={`${s.sendTimeStartHour}:00 – ${s.sendTimeEndHour}:00 (merchant local time)`}
+            value={`${String(s.sendTimeStartHour)}:00 – ${String(s.sendTimeEndHour)}:00 (merchant local time)`}
           />
           <SettingRow
             label="Monthly AI spend cap"

@@ -1,4 +1,4 @@
-import OpenAI from 'openai';
+import OpenAI, { APIError as OpenAIAPIError } from 'openai';
 
 import {
   AiProviderAuthError,
@@ -119,14 +119,19 @@ export function createOpenAiProvider(config: {
  *                             request doesn't burn the retry budget)
  */
 export function mapOpenAiError(err: unknown): Error {
-  if (err instanceof OpenAI.APIError) {
-    const status = err.status;
-    const message = err.message;
+  if (err instanceof OpenAIAPIError) {
+    // `instanceof GenericClass` widens the SDK's generic type parameters
+    // to `any`; cast back to the default-instantiated class so `.status`
+    // and `.message` resolve to their declared types (`number | undefined`
+    // and `string`). Verified against the OpenAI SDK's `error.d.ts`.
+    const e = err as OpenAIAPIError;
+    const status = e.status;
+    const message = e.message;
     if (status === 401 || status === 403) {
-      return new AiProviderAuthError(`OpenAI auth failed (${status}): ${message}`, err);
+      return new AiProviderAuthError(`OpenAI auth failed (${String(status)}): ${message}`, err);
     }
     if (status === 429) {
-      return new AiProviderRateLimitError(`OpenAI rate limit (${status}): ${message}`, err);
+      return new AiProviderRateLimitError(`OpenAI rate limit (${String(status)}): ${message}`, err);
     }
     if (status === 400) {
       // OpenAI marks content-policy refusals as 400 with a specific code.
@@ -150,20 +155,20 @@ export function mapOpenAiError(err: unknown): Error {
         );
       }
       return new AiProviderInvalidRequestError(
-        `OpenAI invalid request (${status}): ${message}`,
+        `OpenAI invalid request (${String(status)}): ${message}`,
         err,
       );
     }
     if (status !== undefined && status >= 500 && status < 600) {
       return new AiProviderTransientError(
-        `OpenAI server error (${status}): ${message}`,
+        `OpenAI server error (${String(status)}): ${message}`,
         err,
       );
     }
     // Unmapped APIError status — treat as invalid request (non-retryable)
     // so we don't burn retry budget on a status we don't understand.
     return new AiProviderInvalidRequestError(
-      `OpenAI unmapped error (${status ?? 'no-status'}): ${message}`,
+      `OpenAI unmapped error (${String(status ?? 'no-status')}): ${message}`,
       err,
     );
   }
