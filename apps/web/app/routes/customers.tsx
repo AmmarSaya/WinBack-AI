@@ -334,7 +334,7 @@ function stateLabel(state: CustomerStateValue): string {
  */
 function formatChurnRisk(score: number | null): string {
   if (score === null) return '—';
-  return `${Math.round(score * 100)}%`;
+  return `${String(Math.round(score * 100))}%`;
 }
 
 /**

@@ -47,7 +47,7 @@ describe('Cipher — AES-256-GCM', () => {
     const [version, payload] = ct.split(':');
     const buf = Buffer.from(payload!, 'base64');
     buf[buf.length - 1]! ^= 0xff;
-    const tampered = `${version}:${buf.toString('base64')}`;
+    const tampered = `${version ?? ''}:${buf.toString('base64')}`;
     expect(() => c.decrypt(tampered)).toThrow(CipherError);
   });
 

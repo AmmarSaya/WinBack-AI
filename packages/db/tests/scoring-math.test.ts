@@ -118,7 +118,7 @@ describe('computeQuintileBoundaries', () => {
 
   it('10-element cohort → boundaries at indices 1, 3, 5, 7', () => {
     const cohort = Array.from({ length: 10 }, (_, i) =>
-      row(`c${i}`, i * 10, i, BigInt(i) * 100n),
+      row(`c${String(i)}`, i * 10, i, BigInt(i) * 100n),
     );
     // ceil(10 * .2)-1 = 1; ceil(10*.4)-1 = 3; ceil(10*.6)-1 = 5; ceil(10*.8)-1 = 7
     const { r } = computeQuintileBoundaries(cohort);

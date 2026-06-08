@@ -131,7 +131,7 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
   function buildTenantDelegate(table: string) {
     return {
       findMany: vi.fn(async (args: { where: { merchantId: string }; take: number }) => {
-        callLog.push(`${table}.findMany take=${args.take}`);
+        callLog.push(`${table}.findMany take=${String(args.take)}`);
         const t = state.tenantTables[table];
         if (t === undefined) throw new Error(`unexpected table: ${table}`);
         const batch = t.rows.slice(0, args.take);
@@ -206,7 +206,7 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
 
   const idempotencyKeyDelegate = {
     findMany: vi.fn(async (args: { where: { merchantId: string }; take: number }) => {
-      callLog.push(`idempotencyKey.findMany take=${args.take}`);
+      callLog.push(`idempotencyKey.findMany take=${String(args.take)}`);
       const t = state.tenantTables.idempotencyKey;
       if (t === undefined) throw new Error('mock: idempotencyKey missing');
       const batch = t.rows.slice(0, args.take);

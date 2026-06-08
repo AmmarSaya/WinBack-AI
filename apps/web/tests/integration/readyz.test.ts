@@ -131,7 +131,7 @@ function mockDbWithPerCallBehavior(
               });
             case 'throw':
               return Promise.reject(
-                new Error(`simulated postgres failure (call ${callIndex})`),
+                new Error(`simulated postgres failure (call ${String(callIndex)})`),
               );
             case 'pass':
             default:

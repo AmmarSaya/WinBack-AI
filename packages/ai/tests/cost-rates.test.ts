@@ -29,7 +29,7 @@ describe('PROVIDER_COST_RATES table', () => {
       for (const [model, rates] of Object.entries(models)) {
         expect(
           rates.outputPer1M >= rates.inputPer1M,
-          `${provider}/${model}: output (${rates.outputPer1M}) must be >= input (${rates.inputPer1M})`,
+          `${provider}/${model}: output (${String(rates.outputPer1M)}) must be >= input (${String(rates.inputPer1M)})`,
         ).toBe(true);
       }
     }

@@ -429,7 +429,7 @@ describe('CustomerScoreRepository.listWithCustomer', () => {
 
   it('result = limit+1 → trims to limit and returns last-trimmed id as nextCursor', async () => {
     const rows = Array.from({ length: 51 }, (_, i) =>
-      makeJoinedRow({ id: `s${i}`, customerId: `c${i}` }),
+      makeJoinedRow({ id: `s${String(i)}`, customerId: `c${String(i)}` }),
     );
     prisma.customerScore.findMany.mockResolvedValue(rows);
     const result = await withSystemScope('test.list_scores', async () =>

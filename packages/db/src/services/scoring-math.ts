@@ -86,7 +86,7 @@ export function computeQuintileBoundaries(
 ): QuintileBoundaries {
   if (cohort.length < INSUFFICIENT_COHORT_THRESHOLD) {
     throw new Error(
-      `computeQuintileBoundaries called with insufficient cohort (size=${cohort.length}, threshold=${INSUFFICIENT_COHORT_THRESHOLD})`,
+      `computeQuintileBoundaries called with insufficient cohort (size=${String(cohort.length)}, threshold=${String(INSUFFICIENT_COHORT_THRESHOLD)})`,
     );
   }
 
