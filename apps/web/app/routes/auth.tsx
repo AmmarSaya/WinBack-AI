@@ -243,7 +243,7 @@ async function runTokenExchangeBootstrap(args: BootstrapArgs): Promise<Response>
 async function logScopeDriftIfAny(shop: string, newScope: string): Promise<void> {
   try {
     const prior = await getSessionStorage().loadSession(`offline_${shop}`);
-    if (prior !== undefined && prior !== null) {
+    if (prior !== undefined) {
       const priorScope = prior.scope ?? '';
       if (priorScope !== newScope) {
         log.info(
