@@ -78,7 +78,6 @@ import {
   getTestClient,
   resetDb,
 } from '@winback/db/test-utils';
-import type { Queues } from '@winback/queue';
 import type { ShopifyConfig } from '@winback/shopify';
 import type { Job } from 'bullmq';
 

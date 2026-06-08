@@ -77,7 +77,6 @@ import {
 import { AUDIT_ACTIONS } from '@winback/contracts';
 import {
   type OutboxEventRow,
-  type WinbackPrisma,
   withSystemScope,
 } from '@winback/db';
 import {
@@ -86,7 +85,6 @@ import {
   resetDb,
   assertRead,
 } from '@winback/db/test-utils';
-import type { Queues } from '@winback/queue';
 import type { ShopifyConfig } from '@winback/shopify';
 import type { Job } from 'bullmq';
 

@@ -46,7 +46,7 @@ export class Cipher {
   constructor(private readonly key: Buffer) {
     if (key.length !== KEY_LEN) {
       throw new ValidationError(
-        `Cipher key must be exactly ${KEY_LEN} bytes; got ${key.length}.`,
+        `Cipher key must be exactly ${String(KEY_LEN)} bytes; got ${String(key.length)}.`,
         { code: 'crypto.invalid_key_length' },
       );
     }
@@ -126,7 +126,7 @@ export function decodeKey(base64: string): Buffer {
   }
   if (buf.length !== KEY_LEN) {
     throw new ValidationError(
-      `ENCRYPTION_KEY must decode to ${KEY_LEN} bytes; got ${buf.length}.`,
+      `ENCRYPTION_KEY must decode to ${String(KEY_LEN)} bytes; got ${String(buf.length)}.`,
       { code: 'crypto.invalid_key_length' },
     );
   }

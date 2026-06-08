@@ -75,7 +75,7 @@ function fakeChatCompletion(opts: {
   };
 }
 
-function makeProvider(impl: (args: unknown) => Promise<unknown> | unknown): DeepSeekProvider {
+function makeProvider(impl: (args: unknown) => unknown): DeepSeekProvider {
   const client = {
     chat: { completions: { create: vi.fn(impl) } },
   } as unknown as OpenAI;

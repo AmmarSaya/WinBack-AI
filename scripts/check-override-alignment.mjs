@@ -171,6 +171,7 @@ export function formatFailureMessage(drifts) {
     'guardrail enforces, and reference sync commits 7266138 / 1393448 /\n' +
     '21b7963 for the coupled-commit pattern (override + per-package devDep +\n' +
     'lockfile in one commit).\n';
+  // eslint-disable-next-line @typescript-eslint/restrict-plus-operands -- `body` is inferred any from drifts.map(formatDrift).join('\n\n') in this untyped .mjs (drifts parameter has no type); the three string concatenands are runtime-strings (formatDrift returns string, header/footer are template literals). Same root as the no-unsafe-* in this file — gets relaxed in 5d.
   return header + body + footer;
 }
 

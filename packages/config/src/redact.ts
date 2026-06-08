@@ -32,8 +32,8 @@ export function redact<T extends Record<string, unknown>>(
  * Never rely on this as a security primitive — its sole purpose is to keep
  * boot-time "config loaded" log lines free of obvious secrets.
  */
-export function redactSecrets<T extends Record<string, unknown>>(
-  obj: T,
+export function redactSecrets(
+  obj: Record<string, unknown>,
 ): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(obj)) {

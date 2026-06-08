@@ -33,6 +33,7 @@ export type WinbackPrisma = ReturnType<typeof createWinbackPrismaInternal>;
 
 // Internal alias whose only purpose is to give the `ReturnType` above a
 // nominal target. Do not export `createWinbackPrismaInternal`.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- referenced via `typeof` on line 32 for the public WinbackPrisma type; never invoked as a value
 function createWinbackPrismaInternal() {
   return new PrismaClient().$extends(winbackExtension);
 }

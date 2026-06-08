@@ -11,9 +11,7 @@ import { type WinbackPrisma, createWinbackPrisma } from '@winback/db';
 let cached: WinbackPrisma | null = null;
 
 export function getPrisma(): WinbackPrisma {
-  if (cached === null) {
-    cached = createWinbackPrisma();
-  }
+  cached ??= createWinbackPrisma();
   return cached;
 }
 

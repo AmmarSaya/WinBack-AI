@@ -17,8 +17,6 @@ declare global {
 }
 
 export function getPrisma(): WinbackPrisma {
-  if (globalThis.__winbackPrisma === undefined) {
-    globalThis.__winbackPrisma = createWinbackPrisma();
-  }
+  globalThis.__winbackPrisma ??= createWinbackPrisma();
   return globalThis.__winbackPrisma;
 }
