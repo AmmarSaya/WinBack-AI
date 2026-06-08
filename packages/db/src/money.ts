@@ -45,7 +45,22 @@ export function parseMoneyToCents(value: string): bigint {
       },
     );
   }
-  const intPart = match[1]!;
+  const intPart = match[1];
+  if (intPart === undefined) {
+    // Unreachable today — MONEY_PATTERN's first capture group `(\d+)` is
+    // required, and a non-null `match` guarantees `match[1]` is defined.
+    // Kept as a real guard against a future edit that makes capture 1
+    // optional: without this branch, an undefined intPart would silently
+    // flow into `BigInt(undefined)` and throw or corrupt the parse on a
+    // financial-data path. Cheap insurance.
+    throw new ValidationError(
+      `parseMoneyToCents: regex matched but capture 1 missing for ${JSON.stringify(value)}`,
+      {
+        code: 'money.invalid_format',
+        fields: { received: value },
+      },
+    );
+  }
   // Pad with trailing zeros so "100" → "00", "100.5" → "50", "100.95" → "95".
   const decPart = (match[2] ?? '').padEnd(2, '0').slice(0, 2);
   return BigInt(intPart) * 100n + BigInt(decPart);

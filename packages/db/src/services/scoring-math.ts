@@ -58,11 +58,20 @@ export interface ResolvedCustomerScore {
   readonly newState: CustomerStateValue;
 }
 
-/** Per-dimension quintile boundaries — 4 cutpoints between 5 buckets. */
+/**
+ * Per-dimension quintile boundaries — 4 cutpoints between 5 buckets.
+ *
+ * Tupled (not `readonly T[]`) so the 4-element invariant is enforced by the
+ * type system at every access site. `pickPercentilePositions` constructs the
+ * tuple hand-element-by-hand from the literal 4-element `[0.2, 0.4, 0.6, 0.8]`
+ * percentile array, so the 4-ness is provable at compile time — the tuple
+ * type makes the compiler see what the code already guarantees, not assert
+ * an invariant that the runtime might violate.
+ */
 export interface QuintileBoundaries {
-  readonly r: readonly number[]; // length 4, ascending in rDays
-  readonly f: readonly number[]; // length 4, ascending in fCount
-  readonly m: readonly bigint[]; // length 4, ascending in mCents
+  readonly r: readonly [number, number, number, number]; // 20/40/60/80 percentile cutpoints, ascending in rDays
+  readonly f: readonly [number, number, number, number]; // ascending in fCount
+  readonly m: readonly [bigint, bigint, bigint, bigint]; // ascending in mCents
 }
 
 // ---------------------------------------------------------------------------
@@ -109,29 +118,40 @@ export function computeQuintileBoundaries(
  * Assign R quintile.  Lower rDays = more recent = better → quintile 5.
  * Boundaries arrive ascending in rDays; inversion is `6 - rank`.
  */
-export function assignRQuintile(rDays: number, boundaries: readonly number[]): number {
+export function assignRQuintile(
+  rDays: number,
+  boundaries: readonly [number, number, number, number],
+): number {
   return invert(rankByAscendingBoundaries(rDays, boundaries));
 }
 
 /**
  * Assign F quintile.  Higher fCount = more orders = better → quintile 5.
  */
-export function assignFQuintile(fCount: number, boundaries: readonly number[]): number {
+export function assignFQuintile(
+  fCount: number,
+  boundaries: readonly [number, number, number, number],
+): number {
   return rankByAscendingBoundaries(fCount, boundaries);
 }
 
 /**
  * Assign M quintile.  Higher mCents = more spend = better → quintile 5.
  * BigInt arithmetic preserves precision against any realistic order total.
+ *
+ * The 4-tuple boundary type type-enforces the previously-comment-enforced
+ * "caller guarantees exactly 4 boundary values" invariant; indices 0..3
+ * are statically known to be defined, so no `!` is needed.
  */
-export function assignMQuintile(mCents: bigint, boundaries: readonly bigint[]): number {
-  // Caller guarantees exactly 4 boundary values (see computeQuintileBoundaries).
-  // The `!` reflects that invariant for noUncheckedIndexedAccess.
+export function assignMQuintile(
+  mCents: bigint,
+  boundaries: readonly [bigint, bigint, bigint, bigint],
+): number {
   let rank = 1;
-  if (mCents > boundaries[0]!) rank = 2;
-  if (mCents > boundaries[1]!) rank = 3;
-  if (mCents > boundaries[2]!) rank = 4;
-  if (mCents > boundaries[3]!) rank = 5;
+  if (mCents > boundaries[0]) rank = 2;
+  if (mCents > boundaries[1]) rank = 3;
+  if (mCents > boundaries[2]) rank = 4;
+  if (mCents > boundaries[3]) rank = 5;
   return rank;
 }
 
@@ -312,35 +332,49 @@ function ascendingBigInt(a: bigint, b: bigint): number {
 
 /**
  * Returns the values at the 20 / 40 / 60 / 80 percentile positions of a
- * sorted-ascending array.  Uses 1-indexed-rank semantics:
+ * sorted-ascending array as a 4-tuple.  Uses 1-indexed-rank semantics:
  * `Math.ceil(N * p) - 1` is the array index of the value at the `p`th
  * percentile.  Both ends are clamped to valid array indices for tiny
  * cohorts (handles edge cases at the threshold of 5 — e.g. a 5-element
  * cohort gets boundaries at indices 0, 1, 2, 3).
+ *
+ * Returns a `readonly [T, T, T, T]` tuple — hand-constructed element-by-
+ * element from a literal 4-position percentile sequence so the 4-ness
+ * propagates through the type system to every downstream access site
+ * (assignMQuintile / rankByAscendingBoundaries). A `.map()` over the
+ * literal 4-array would compile-erase to `T[]` and force `!` at every
+ * index access; the explicit 4-tuple construction makes the invariant
+ * statically provable.
  */
-function pickPercentilePositions<T>(sortedAscending: readonly T[]): T[] {
+function pickPercentilePositions<T>(
+  sortedAscending: readonly T[],
+): readonly [T, T, T, T] {
   const N = sortedAscending.length;
   // Caller guarantees N >= INSUFFICIENT_COHORT_THRESHOLD (= 5), so each
-  // clamped index is in-range and the value is defined.  `as T[]` asserts
+  // clamped index is in-range and the value is defined.  `as T` asserts
   // that against noUncheckedIndexedAccess.
-  return [0.2, 0.4, 0.6, 0.8].map((p) => {
+  const at = (p: number): T => {
     const idx = Math.max(0, Math.min(N - 1, Math.ceil(N * p) - 1));
     return sortedAscending[idx] as T;
-  });
+  };
+  return [at(0.2), at(0.4), at(0.6), at(0.8)] as const;
 }
 
 /**
  * Linear scan against 4 ascending boundaries.
  * `value <= boundaries[0]` → rank 1; `value > boundaries[3]` → rank 5.
  * Ties at a boundary fall INTO the lower quintile (defensive default).
- * Caller guarantees exactly 4 boundary values.
+ * 4-tuple parameter type enforces the 4-element invariant at compile time.
  */
-function rankByAscendingBoundaries(value: number, boundaries: readonly number[]): number {
+function rankByAscendingBoundaries(
+  value: number,
+  boundaries: readonly [number, number, number, number],
+): number {
   let rank = 1;
-  if (value > boundaries[0]!) rank = 2;
-  if (value > boundaries[1]!) rank = 3;
-  if (value > boundaries[2]!) rank = 4;
-  if (value > boundaries[3]!) rank = 5;
+  if (value > boundaries[0]) rank = 2;
+  if (value > boundaries[1]) rank = 3;
+  if (value > boundaries[2]) rank = 4;
+  if (value > boundaries[3]) rank = 5;
   return rank;
 }
 
