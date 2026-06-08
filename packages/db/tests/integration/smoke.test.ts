@@ -231,7 +231,11 @@ describe('M3-Smoke', () => {
       }),
     );
     expect(events).toHaveLength(2);
-    expect((events[1]?.payload as { reinstall?: boolean })?.reinstall).toBe(true);
+    // `events[1]?.payload as {...}` cast eliminates nullability, so the
+    // trailing `?.` was a no-op. `toHaveLength(2)` above guarantees
+    // `events[1]` is defined at runtime; the cast's non-nullable result
+    // is honest.
+    expect((events[1]?.payload as { reinstall?: boolean }).reinstall).toBe(true);
     });
   });
 });

@@ -231,7 +231,10 @@ describe('readyz (integration, real Postgres + Redis)', () => {
     expect(body.checks.outboxDlq).toBe(0);
     expect(body.checks.stallAgeSeconds).toBe(0);
     // warnings is either absent or empty on a clean run.
-    if ('warnings' in body && body.warnings !== undefined) {
+    // `'warnings' in body` narrows the union to the 'ok' branch where
+    // warnings?: string[] — TS sees the post-narrow type as string[],
+    // so the previous `body.warnings !== undefined` check was a no-op.
+    if ('warnings' in body) {
       expect(body.warnings).toHaveLength(0);
     }
   });

@@ -154,7 +154,8 @@ describe('assignRQuintile', () => {
   // Boundaries ascending in rDays: [5, 20, 60, 200]
   // Customer c1 (rDays=5) is MOST recent → quintile 5
   // Customer c5 (rDays=400) is LEAST recent → quintile 1
-  const boundaries = [5, 20, 60, 200];
+  // `as const` matches assignRQuintile's `readonly [number, number, number, number]` tuple parameter.
+  const boundaries = [5, 20, 60, 200] as const;
 
   it.each([
     [4, 5], // less than all boundaries → ascending rank 1, inverted to 5 (best)
@@ -177,7 +178,7 @@ describe('assignRQuintile', () => {
 // ---------------------------------------------------------------------------
 
 describe('assignFQuintile', () => {
-  const boundaries = [1, 2, 4, 7];
+  const boundaries = [1, 2, 4, 7] as const;
 
   it.each([
     [0, 1],
@@ -199,7 +200,7 @@ describe('assignFQuintile', () => {
 // ---------------------------------------------------------------------------
 
 describe('assignMQuintile', () => {
-  const boundaries = [1_000n, 5_000n, 20_000n, 50_000n];
+  const boundaries = [1_000n, 5_000n, 20_000n, 50_000n] as const;
 
   it.each<[bigint, number]>([
     [0n, 1],

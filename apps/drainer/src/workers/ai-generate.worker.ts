@@ -457,8 +457,11 @@ export function createAiGenerateWorker(
     log.error(
       {
         jobId: job?.id,
-        aiGenerationId: job?.data?.aiGenerationId,
-        merchantId: job?.data?.merchantId,
+        // BullMQ `Job<DataType>` types `data` as non-optional when `job`
+        // exists; only the outer `?.` (job-may-be-undefined on the
+        // `failed` event) is needed.
+        aiGenerationId: job?.data.aiGenerationId,
+        merchantId: job?.data.merchantId,
         attemptsMade: job?.attemptsMade,
         err: err.message,
       },
