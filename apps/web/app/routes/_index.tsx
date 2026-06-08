@@ -121,7 +121,7 @@ export default function Index() {
                       {BAND_COPY[band].heading}
                     </Text>
                     <Text as="p" variant="heading2xl">
-                      {(data.stateBandCounts?.[band] ?? 0).toLocaleString()}
+                      {data.stateBandCounts[band].toLocaleString()}
                     </Text>
                     <Text as="p" variant="bodyMd" tone="subdued">
                       {BAND_COPY[band].description}
