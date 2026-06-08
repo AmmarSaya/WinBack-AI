@@ -4,7 +4,11 @@ import {
   type OutboxEventType,
 } from '@winback/contracts';
 import {
+  AuditLogRepository,
+  CustomerScoreRepository,
+  CustomerScoreService,
   withSystemScope,
+  withTenantScope,
   type WinbackPrisma,
 } from '@winback/db';
 import {
@@ -1523,6 +1527,148 @@ describe('drainer integration (real Postgres)', () => {
         }),
       );
       expect(audit).toHaveLength(1);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // A1b — bulkRescore first-pass engine (real DB)
+  //
+  // The operator first-pass: scores a merchant's whole base WITHOUT emitting
+  // customer.state_changed (Design B — bulkRescore never emits), then sets
+  // scoringInitializedAt. The end-to-end "scores the base, no storm, then
+  // steady-state emits" proof. --force re-baseline is still emission-free.
+  // ---------------------------------------------------------------------
+
+  describe('A1b — bulkRescore first-pass (real DB)', () => {
+    function makeService(): CustomerScoreService {
+      const client = getTestClient();
+      return new CustomerScoreService(
+        new CustomerScoreRepository(client),
+        new AuditLogRepository(client),
+      );
+    }
+
+    it('scores a mixed base with ZERO state_changed events, sets flag, ONE merchant.scoring_initialized audit; then steady-state emits', async () => {
+      const merchantId = await createTestMerchant(SHOP, { scoringInitializedAt: null });
+      const now = new Date();
+
+      // 5 scorable customers (cohort ≥ threshold → quintiles compute) + 1 lurker.
+      for (let i = 0; i < 5; i++) {
+        await seedScorableCustomer({
+          merchantId,
+          shopifyCustomerId: `gid://shopify/Customer/${String(400001 + i)}`,
+          shopifyOrderId: `gid://shopify/Order/${String((400001 + i) * 10)}`,
+          placedAt: new Date(now.getTime() - (10 + i * 40) * 86_400_000),
+          totalCents: BigInt(1000 * (i + 1)),
+        });
+      }
+      await createTestCustomer({ merchantId, shopifyCustomerId: 'gid://shopify/Customer/400100' });
+
+      // Run the first pass.
+      const summary = await withTenantScope(merchantId, async () =>
+        makeService().bulkRescore(getTestClient(), { merchantId, now, actorId: 'test-operator' }),
+      );
+
+      // Every customer scored (5 scorable + 1 lurker).
+      const scores = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scores).toHaveLength(6);
+      expect(summary.customersScored).toBe(6);
+
+      // ZERO state_changed OutboxEvents + ZERO state_changed AuditLogs (no storm).
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(0);
+      const stateAudits = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(stateAudits).toHaveLength(0);
+
+      // EXACTLY ONE merchant.scoring_initialized audit.
+      const initAudits = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'merchant.scoring_initialized' },
+        }),
+      );
+      expect(initAudits).toHaveLength(1);
+      expect(initAudits[0]?.targetType).toBe('merchant');
+      expect(initAudits[0]?.actorId).toBe('test-operator');
+
+      // Flag now set — the gate is open.
+      const merchant = await assertRead(() =>
+        getTestClient().merchant.findUnique({ where: { id: merchantId } }),
+      );
+      expect(merchant?.scoringInitializedAt).toBeInstanceOf(Date);
+
+      // STEADY-STATE PROOF: post-flag, a NEW customer's order transition emits
+      // exactly one event (gate open).
+      await createTestCustomer({ merchantId, shopifyCustomerId: 'gid://shopify/Customer/400200' });
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-a1b-steady',
+          shopifyOrderId: 400200,
+          bodyOverrides: {
+            customer: { id: 400200 },
+            created_at: new Date(now.getTime() - 200 * 86_400_000).toISOString(),
+          },
+        }),
+      );
+      await runDrainTick(makeCtx());
+
+      const eventsAfter = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(eventsAfter).toHaveLength(1);
+    });
+
+    it('--force re-baseline on an initialized merchant still emits ZERO events (Design B)', async () => {
+      const merchantId = await createTestMerchant(SHOP, { scoringInitializedAt: null });
+      const now = new Date();
+      for (let i = 0; i < 5; i++) {
+        await seedScorableCustomer({
+          merchantId,
+          shopifyCustomerId: `gid://shopify/Customer/${String(410001 + i)}`,
+          shopifyOrderId: `gid://shopify/Order/${String((410001 + i) * 10)}`,
+          placedAt: new Date(now.getTime() - (10 + i * 40) * 86_400_000),
+          totalCents: BigInt(1000 * (i + 1)),
+        });
+      }
+
+      // First pass, then a re-baseline (the CLI gates this behind --force; the
+      // service ALWAYS suppresses regardless).
+      await withTenantScope(merchantId, async () =>
+        makeService().bulkRescore(getTestClient(), { merchantId, now, actorId: 'op' }),
+      );
+      await withTenantScope(merchantId, async () =>
+        makeService().bulkRescore(getTestClient(), { merchantId, now: new Date(), actorId: 'op' }),
+      );
+
+      // Re-run NEVER emits.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(0);
+
+      // One scoring-initialized audit per pass (forensic record of each run).
+      const initAudits = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'merchant.scoring_initialized' },
+        }),
+      );
+      expect(initAudits).toHaveLength(2);
     });
   });
 });

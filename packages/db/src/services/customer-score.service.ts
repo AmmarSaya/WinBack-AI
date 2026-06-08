@@ -2,18 +2,36 @@ import { type Prisma } from '@prisma/client';
 import { AUDIT_ACTIONS, OUTBOX_EVENTS } from '@winback/contracts';
 import { getLogger } from '@winback/logger';
 
+import type { WinbackPrisma } from '../client.js';
 import { buildCustomerStateChangedPayload } from '../events/customer-state-changed.js';
 import type { AuditLogRepository } from '../repositories/audit-log.repository.js';
 import type { CustomerScoreRepository } from '../repositories/customer-score.repository.js';
 import { assertScopeMatchesMerchant } from '../tenant-scope.js';
+import { UnitOfWork } from '../unit-of-work.js';
 
 import {
   INSUFFICIENT_COHORT_THRESHOLD,
+  computeQuintileBoundaries,
   resolveLurker,
   resolveScorableCustomer,
+  resolveScorableCustomerWithBoundaries,
   type CustomerStateValue,
+  type QuintileBoundaries,
   type ResolvedCustomerScore,
 } from './scoring-math.js';
+
+/**
+ * Batch size for `bulkRescore` — customers scored per transaction (one
+ * `UnitOfWork.run` tx per chunk). 500 balances round-trips against tx
+ * duration / lock-hold time. Tunable; see the §Scale notes in `bulkRescore`.
+ */
+const BULK_RESCORE_BATCH_SIZE = 500;
+
+/**
+ * Per-batch tx timeout for `bulkRescore`. 60s per the UnitOfWork "bulk state
+ * transition (chunked)" guidance — a 500-customer chunk does ~1.5k queries.
+ */
+const BULK_RESCORE_TX_TIMEOUT_MS = 60_000;
 
 const log = getLogger('db.customer-score.service');
 
@@ -339,6 +357,227 @@ export class CustomerScoreService {
       durationMs: Date.now() - startMs,
     };
   }
+
+  /**
+   * Bulk first-pass scoring for a whole merchant (A1b / POST-EPIC-F §1,
+   * Lock V10). The operator runs this ONCE after a merchant's customer
+   * backfill, via `pnpm cli:scoring:bulk-rescore --merchant <id>`. It opens
+   * the suppression gate per-merchant: writes `CustomerScore` + `Customer.state`
+   * for every customer, then sets `Merchant.scoringInitializedAt`.
+   *
+   * NEVER EMITS (Design B / lock #22 amendment). `bulkRescore` is a batch
+   * (re)assigner, not a transition detector — a batch pass has no "before" to
+   * transition from, so emitting `customer.state_changed` would claim phantom
+   * transitions. It writes NO AuditLog-per-customer and NO OutboxEvent, full
+   * stop, regardless of flag state. The install-day winback storm is therefore
+   * structurally impossible: no code path makes this method emit. (Catching up
+   * genuinely-missed lapses with sends is the job of a separate, rate-limited
+   * periodic decay-rescore sweep — never this method.)
+   *
+   * ALGORITHM (O(1) cohort read, D4):
+   *   1. Read merchant once (currency snapshot + shop for the audit).
+   *   2. Read the scorable cohort ONCE (`readCohort`) and compute quintile
+   *      boundaries ONCE (pure fn of the cohort). Held for the whole pass.
+   *   3. Paginate ALL Customer rows (cursor by id, soft-delete-filtered),
+   *      `BULK_RESCORE_BATCH_SIZE` per tx. Per customer: in-cohort →
+   *      `resolveScorableCustomerWithBoundaries` (reuses the once-computed
+   *      boundaries); absent → `resolveLurker` (account-age). Same branch
+   *      `recompute` uses — no parallel reimplementation. Write `CustomerScore`
+   *      (upsert) + `Customer.state` (only when it changes). No emission.
+   *   4. FINAL tx (separate, D-b): EXACTLY two writes — `scoringInitializedAt`
+   *      + the single `merchant.scoring_initialized` AuditLog. No customer
+   *      writes here, so it can never leave customers unscored with the flag
+   *      set.
+   *
+   * CRASH-SAFETY (satisfies D5's intent via the BackfillRunner pattern):
+   * `scoringInitializedAt` is set ONLY when the final tx commits, AFTER every
+   * customer write. A process death mid-pass leaves the flag null, so a rerun
+   * redoes the whole pass under suppression (`upsertScore` is idempotent on
+   * `customerId`; `Customer.state` writes are idempotent; emission is never
+   * produced). The flag is never set on a partial pass.
+   *
+   * SNAPSHOT BOUNDARY: the cohort + boundaries are a point-in-time snapshot
+   * captured at pass start (single `now`). This is exact for the intended use
+   * — the install-day first pass runs on a STATIC freshly-backfilled base, no
+   * live traffic shifting the cohort mid-pass. A `--force` re-baseline on a
+   * LIVE merchant has slightly-stale boundaries for any customer who orders
+   * mid-pass; that is self-correcting (the next steady-state `recompute` for
+   * that customer reads a fresh cohort) and still never a storm (no emission)
+   * — a bounded, known effect, not a surprise.
+   *
+   * Caller MUST already be in `withTenantScope(merchantId)` (same contract as
+   * `recompute` — both methods are caller-scoped; `UnitOfWork.run` requires an
+   * active tenant scope). Differs from `BackfillRunner.run` (which opens its
+   * own scope) because this is a CustomerScoreService method and the service's
+   * contract is caller-scoped.
+   */
+  async bulkRescore(
+    prisma: WinbackPrisma,
+    args: {
+      readonly merchantId: string;
+      readonly actorId: string;
+      readonly now?: Date;
+      readonly batchSize?: number;
+    },
+  ): Promise<BulkRescoreResult> {
+    const startMs = Date.now();
+    const { merchantId, actorId } = args;
+    const now = args.now ?? new Date();
+    const batchSize = args.batchSize ?? BULK_RESCORE_BATCH_SIZE;
+
+    assertScopeMatchesMerchant(merchantId);
+
+    const uow = new UnitOfWork(prisma);
+
+    // (1) Merchant read — currency snapshot (§S-11) + shop for the audit row.
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { currency: true, shop: true },
+    });
+    if (merchant === null) {
+      throw new Error(`bulkRescore: merchant ${merchantId} not found`);
+    }
+    const currency = (merchant.currency ?? 'USD').toUpperCase();
+
+    // (2) Cohort read ONCE + boundaries ONCE. The cohort is the scorable set
+    // (customers with paid orders in 365d); lurkers are absent and resolved
+    // via account-age below.
+    const cohort = await uow.run(
+      async (ctx) => this.customerScoreRepo.readCohort({ merchantId, now, tx: ctx.db }),
+      { timeout: BULK_RESCORE_TX_TIMEOUT_MS },
+    );
+    const isInsufficientCohort = cohort.length < INSUFFICIENT_COHORT_THRESHOLD;
+    const boundaries: QuintileBoundaries | null = isInsufficientCohort
+      ? null
+      : computeQuintileBoundaries(cohort);
+    const cohortMap = new Map(cohort.map((row) => [row.customerId, row]));
+
+    // (3) Paginate every Customer row; score in batches. NO emission.
+    let cursor: string | null = null;
+    let customersScored = 0;
+    let batches = 0;
+    let done = false;
+    while (!done) {
+      const processed = await uow.run(
+        async (ctx) => {
+          const tx = ctx.db;
+          const customers = await tx.customer.findMany({
+            where: { merchantId },
+            select: { id: true, state: true, shopifyCreatedAt: true, createdAt: true },
+            orderBy: { id: 'asc' },
+            take: batchSize,
+            // Conditional cursor spread — first page has no cursor; `skip: 1`
+            // advances past the cursor row itself.
+            ...(cursor !== null && { cursor: { id: cursor }, skip: 1 }),
+          });
+
+          for (const c of customers) {
+            const cohortRow = cohortMap.get(c.id);
+            const resolved: ResolvedCustomerScore =
+              cohortRow !== undefined
+                ? resolveScorableCustomerWithBoundaries({
+                    row: cohortRow,
+                    boundaries,
+                    isInsufficientCohort,
+                  })
+                : resolveLurker({
+                    referenceCreatedAt: c.shopifyCreatedAt ?? c.createdAt,
+                    now,
+                    isInsufficientCohort,
+                  });
+
+            await this.customerScoreRepo.upsertScore({
+              merchantId,
+              customerId: c.id,
+              rDays: resolved.rDays,
+              fCount: resolved.fCount,
+              mCents: resolved.mCents,
+              currency,
+              rQuintile: resolved.rQuintile,
+              fQuintile: resolved.fQuintile,
+              mQuintile: resolved.mQuintile,
+              churnRiskScore: resolved.churnRiskScore,
+              computedAt: now,
+              tx,
+            });
+
+            // DATA write only when the band actually changes — keeps the
+            // write count down on a re-baseline. NO AuditLog, NO OutboxEvent:
+            // bulkRescore never emits (Design B).
+            if (c.state !== resolved.newState) {
+              await tx.customer.update({
+                where: { id: c.id },
+                data: { state: resolved.newState },
+              });
+            }
+          }
+
+          return { count: customers.length, lastId: customers.at(-1)?.id ?? null };
+        },
+        { timeout: BULK_RESCORE_TX_TIMEOUT_MS },
+      );
+
+      customersScored += processed.count;
+      batches += 1;
+      log.debug(
+        { merchantId, batch: batches, customersInBatch: processed.count, customersScored },
+        'bulkRescore: batch committed',
+      );
+
+      if (processed.count < batchSize || processed.lastId === null) {
+        done = true;
+      } else {
+        cursor = processed.lastId;
+      }
+    }
+
+    // (4) FINAL tx — EXACTLY two writes: flag-flip + the single audit. This is
+    // the only place scoringInitializedAt is set, and it commits last (D-b /
+    // D5 crash-safety intent). No customer writes here.
+    await uow.run(
+      async (ctx) => {
+        await ctx.db.merchant.update({
+          where: { id: merchantId },
+          data: { scoringInitializedAt: now },
+        });
+        await this.auditLogRepo.append(
+          {
+            merchantId,
+            shop: merchant.shop,
+            actorType: 'system',
+            actorId,
+            action: AUDIT_ACTIONS.merchant.scoring_initialized,
+            targetType: 'merchant',
+            targetId: merchantId,
+            context: {
+              customersScored,
+              batches,
+              cohortSize: cohort.length,
+              insufficientCohort: isInsufficientCohort,
+            },
+          },
+          ctx.db,
+        );
+      },
+      { timeout: BULK_RESCORE_TX_TIMEOUT_MS },
+    );
+
+    const durationMs = Date.now() - startMs;
+    log.info(
+      { merchantId, customersScored, batches, cohortSize: cohort.length, durationMs },
+      'bulkRescore: first scoring pass complete; scoringInitializedAt set (no events emitted)',
+    );
+
+    return { customersScored, batches, cohortSize: cohort.length, durationMs };
+  }
+}
+
+/** Result metadata from a `CustomerScoreService.bulkRescore` pass. */
+export interface BulkRescoreResult {
+  readonly customersScored: number;
+  readonly batches: number;
+  readonly cohortSize: number;
+  readonly durationMs: number;
 }
 
 // ---------------------------------------------------------------------------

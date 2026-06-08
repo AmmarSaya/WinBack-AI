@@ -8,6 +8,7 @@
     "clean": "tsc -b --clean",
     "outbox:replay": "node dist/outbox.js replay",
     "outbox:dead-letter": "node dist/outbox.js dead-letter",
+    "scoring:bulk-rescore": "node dist/scoring.js bulk-rescore",
     "test": "vitest run",
     "test:watch": "vitest"
   },

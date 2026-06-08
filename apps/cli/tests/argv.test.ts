@@ -5,6 +5,7 @@ import {
   getPositional,
   getRequiredFlag,
   getRequiredPositional,
+  hasFlag,
 } from '../src/argv.js';
 
 describe('getPositional', () => {
@@ -41,6 +42,33 @@ describe('getFlag', () => {
 
   it('returns null when the next token is another flag', () => {
     expect(getFlag(['--reason', '--other-flag'], 'reason')).toBeNull();
+  });
+});
+
+describe('hasFlag (A1b — first boolean flag)', () => {
+  it('returns true when the flag is present', () => {
+    expect(hasFlag(['--force'], 'force')).toBe(true);
+  });
+
+  it('returns true when the flag is present among other tokens', () => {
+    expect(hasFlag(['--merchant', 'm1', '--force'], 'force')).toBe(true);
+  });
+
+  it('returns false when the flag is absent', () => {
+    expect(hasFlag(['--merchant', 'm1'], 'force')).toBe(false);
+  });
+
+  it('does NOT consume a following value (presence-only)', () => {
+    // `--force` here is a boolean; the next token 'm1' is unrelated.
+    const args = ['--force', 'm1'];
+    expect(hasFlag(args, 'force')).toBe(true);
+    // A separate getFlag read of 'force' returns the next token (value-mode),
+    // which is exactly why force MUST use hasFlag, not getFlag.
+    expect(getFlag(args, 'force')).toBe('m1');
+  });
+
+  it('returns false on an empty arg list', () => {
+    expect(hasFlag([], 'force')).toBe(false);
   });
 });
 

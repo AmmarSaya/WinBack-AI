@@ -12,6 +12,7 @@ import {
   lurkerRDays,
   resolveLurker,
   resolveScorableCustomer,
+  resolveScorableCustomerWithBoundaries,
   stateFromRecency,
 } from '../src/services/scoring-math.js';
 
@@ -369,5 +370,60 @@ describe('resolveLurker', () => {
     });
     expect(result.newState).toBe('lost');
     expect(result.rDays).toBe(500);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// resolveScorableCustomerWithBoundaries — the boundaries-accepting seam (A1b)
+//
+// Proves the D-a extraction: given boundaries computed from the cohort, the
+// variant produces output IDENTICAL to resolveScorableCustomer (which computes
+// the boundaries internally). bulkRescore uses this with once-computed
+// boundaries; recompute uses resolveScorableCustomer. One resolution truth.
+// ---------------------------------------------------------------------------
+
+describe('resolveScorableCustomerWithBoundaries (A1b)', () => {
+  it('with cohort boundaries → output IDENTICAL to resolveScorableCustomer for every cohort member', () => {
+    const boundaries = computeQuintileBoundaries(COHORT_5);
+    for (const target of COHORT_5) {
+      const viaVariant = resolveScorableCustomerWithBoundaries({
+        row: target,
+        boundaries,
+        isInsufficientCohort: false,
+      });
+      const viaOriginal = resolveScorableCustomer({
+        row: target,
+        cohort: COHORT_5,
+        isInsufficientCohort: false,
+      });
+      expect(viaVariant).toEqual(viaOriginal);
+    }
+  });
+
+  it('boundaries=null → insufficient_data path (raw R/F/M, null quintiles)', () => {
+    const result = resolveScorableCustomerWithBoundaries({
+      row: COHORT_5[0]!,
+      boundaries: null,
+      isInsufficientCohort: true,
+    });
+    expect(result.newState).toBe('insufficient_data');
+    expect(result.rDays).toBe(5);
+    expect(result.fCount).toBe(10);
+    expect(result.mCents).toBe(100_000n);
+    expect(result.rQuintile).toBeNull();
+    expect(result.fQuintile).toBeNull();
+    expect(result.mQuintile).toBeNull();
+    expect(result.churnRiskScore).toBeNull();
+  });
+
+  it('isInsufficientCohort=true even with boundaries present routes to insufficient (defensive)', () => {
+    const boundaries = computeQuintileBoundaries(COHORT_5);
+    const result = resolveScorableCustomerWithBoundaries({
+      row: COHORT_5[0]!,
+      boundaries,
+      isInsufficientCohort: true,
+    });
+    expect(result.newState).toBe('insufficient_data');
+    expect(result.rQuintile).toBeNull();
   });
 });
