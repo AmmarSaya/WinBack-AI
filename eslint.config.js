@@ -2,10 +2,15 @@
 // Per-app/per-file overrides (e.g., Remix route default exports) will be added
 // in their respective epics; this root config is intentionally strict.
 
+import { defineConfig } from 'eslint/config';
 import importPlugin from 'eslint-plugin-import';
 import tseslint from 'typescript-eslint';
 
-export default tseslint.config(
+// `tseslint.config(...)` was deprecated in favour of ESLint core's
+// `defineConfig(...)` per typescript-eslint's migration note; same
+// argument shape, same expansion of `tseslint.configs.*` arrays, just
+// the recommended host helper now lives in `eslint/config`.
+export default defineConfig(
   {
     ignores: [
       '**/dist/**',
@@ -14,6 +19,14 @@ export default tseslint.config(
       '**/.turbo/**',
       '**/coverage/**',
       '**/*.tsbuildinfo',
+      // packages/db/scripts/db-reset.mjs is operator-only tooling
+      // (manual local-dev DB reset). It is intentionally outside every
+      // package tsconfig's `include` so it does not affect tsc emit;
+      // typescript-eslint's projectService consequently can't parse it.
+      // Ignoring it here is the honest path — adding it to
+      // tsconfig.eslint.json's include would pull operator tooling into
+      // type-checking for zero benefit on a non-lint-critical surface.
+      'packages/db/scripts/**/*.mjs',
     ],
   },
   ...tseslint.configs.strictTypeChecked,
@@ -80,14 +93,31 @@ export default tseslint.config(
   {
     // Vite + Vitest config files MUST default-export per the vite/vitest
     // public API contract (the loader looks up `default` from the loaded
-    // module). The blanket import/no-default-export rule above is wrong
-    // for these files; precisely-named exceptions keep the rule strict
-    // for everything else.
+    // module). ESLint flat-config files MUST default-export per the
+    // ESLint flat-config contract (eslint reads `default` from the
+    // loaded module). The blanket import/no-default-export rule above
+    // is wrong for these files; precisely-named exceptions keep the
+    // rule strict for everything else.
     files: [
       '**/vitest.config.ts',
       '**/vitest.integration.config.ts',
       '**/vite.config.ts',
+      'eslint.config.js',
     ],
+    rules: {
+      'import/no-default-export': 'off',
+    },
+  },
+  {
+    // Ambient module declarations (`*.d.ts`) genuinely require default
+    // exports when the declared module's runtime contract uses one. The
+    // only repo `.d.ts` site firing the rule is `apps/web/app/vite-env.d.ts`
+    // (`declare module '*.css?url' { ...; export default url; }`) — the
+    // Vite CSS-URL import contract. The rule doesn't apply to ambient
+    // module declarations; relax it for the file type. (`app-bridge.d.ts`
+    // uses `declare module 'react'` with no default export — innocent of
+    // the rule, unaffected by the relaxation.)
+    files: ['**/*.d.ts'],
     rules: {
       'import/no-default-export': 'off',
     },
@@ -134,6 +164,73 @@ export default tseslint.config(
     ],
     rules: {
       'import/no-default-export': 'off',
+    },
+  },
+  {
+    // Test files: relax the no-unsafe-* family + consistent-type-imports
+    // + import/order. The justification is rule-vs-framework, NOT "tests
+    // don't need to be type-safe":
+    //
+    //  - no-unsafe-{assignment,member-access,argument,call,return}:
+    //    vi.fn / vi.spyOn types their callback args as `any` (by design
+    //    — mocks can substitute any signature); the rule fires
+    //    uniformly on every mocked-call body in the suite. The 12 SRC
+    //    no-unsafe-* findings were extracted as real type fixes in 5b
+    //    (975be82 — settings.tsx loader typing + 3 AI-provider error-
+    //    mapper narrowings). After 5b, every remaining no-unsafe-* hit
+    //    lives in tests/mocks/scripts cascade, not SRC. 5d Phase 1
+    //    classified all 179 no-unsafe-* hits at this point in the
+    //    arc and confirmed ZERO live in `apps/*/{app,src}` or
+    //    `packages/*/src` — so this relaxation can mask no real SRC
+    //    finding because no real SRC finding exists. Verified zero
+    //    `import.*from.*tests/` across `apps/*/{app,src}` and
+    //    `packages/*/src` → no src module pulls a test helper into
+    //    the production path, so the relaxed surface is genuinely
+    //    test-only.
+    //
+    //  - consistent-type-imports: the vitest `importOriginal<typeof
+    //    import('@winback/X')>()` idiom is the documented vitest
+    //    generic; the rule forbids `import()` type annotations. The
+    //    two viable refactors both fail (`import * as` runtime-loads
+    //    the module, defeating the lazy mock; `type Original = typeof
+    //    import(...)` relocates the same expression). Rule-vs-framework.
+    //
+    //  - import/order: `vi.mock` factories MUST appear before the
+    //    imports they mock (vitest hoisting semantic). The rule wants
+    //    all imports grouped at the top. Framework constraint.
+    files: ['**/*.test.ts', '**/tests/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/consistent-type-imports': 'off',
+      'import/order': 'off',
+    },
+  },
+  {
+    // Scripts (build/test/CI orchestrators and the M11.x override-
+    // alignment guardrail) JSON.parse package.json values from disk.
+    // The parsed structure is untyped `any` and cascades through every
+    // access site — firing the no-unsafe-* family + restrict-template-
+    // expressions on the propagation paths and restrict-plus-operands
+    // on the path-join arithmetic in the orchestrators. Runtime safety
+    // is preserved at the source: check-override-alignment.mjs guards
+    // every JSON-parsed branch with `typeof X !== 'object'` checks +
+    // strict `!==` comparisons (a typo or shape drift surfaces as drift
+    // rather than silently aligning — the CI gate's own protection).
+    // Same any-source as the no-unsafe-* relaxation; restrict-template-
+    // expressions falls out of the same cascade, hence symmetric off.
+    files: ['scripts/**/*.mjs'],
+    rules: {
+      '@typescript-eslint/no-unsafe-assignment': 'off',
+      '@typescript-eslint/no-unsafe-member-access': 'off',
+      '@typescript-eslint/no-unsafe-argument': 'off',
+      '@typescript-eslint/no-unsafe-call': 'off',
+      '@typescript-eslint/no-unsafe-return': 'off',
+      '@typescript-eslint/restrict-plus-operands': 'off',
+      '@typescript-eslint/restrict-template-expressions': 'off',
     },
   },
 );
