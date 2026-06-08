@@ -251,7 +251,39 @@ export function resolveScorableCustomer(args: {
 }): ResolvedCustomerScore {
   const { row, cohort, isInsufficientCohort } = args;
 
-  if (isInsufficientCohort) {
+  // PURE EXTRACTION (A1b / D-a): the boundary computation is the only thing
+  // this branch adds over `resolveScorableCustomerWithBoundaries`. Compute
+  // the boundaries once (sufficient cohort) or pass null (insufficient), then
+  // delegate. `recompute` calls THIS function and is byte-identical in
+  // behavior; `bulkRescore` calls the with-boundaries variant directly with a
+  // single set of boundaries computed ONCE for the whole pass (D4). One
+  // source of resolution truth — no parallel reimplementation.
+  const boundaries = isInsufficientCohort ? null : computeQuintileBoundaries(cohort);
+  return resolveScorableCustomerWithBoundaries({ row, boundaries, isInsufficientCohort });
+}
+
+/**
+ * Resolve a scorable customer against PRE-COMPUTED quintile boundaries.
+ *
+ * Identical resolution to `resolveScorableCustomer`, minus the internal
+ * `computeQuintileBoundaries` call — the caller supplies the boundaries (or
+ * `null` for an insufficient cohort). This is the seam A1b's `bulkRescore`
+ * uses to compute boundaries ONCE for a whole merchant and reuse them across
+ * every customer in the pass, instead of recomputing per customer.
+ *
+ * `boundaries === null` is equivalent to `isInsufficientCohort === true`:
+ * both route to the `insufficient_data` path (raw R/F/M, null quintiles).
+ * The two are passed together by every caller; the explicit `|| null` guard
+ * is belt-and-suspenders against a caller that sets one but not the other.
+ */
+export function resolveScorableCustomerWithBoundaries(args: {
+  row: CustomerScoreCohortRow;
+  boundaries: QuintileBoundaries | null;
+  isInsufficientCohort: boolean;
+}): ResolvedCustomerScore {
+  const { row, boundaries, isInsufficientCohort } = args;
+
+  if (isInsufficientCohort || boundaries === null) {
     return {
       rDays: row.rDays,
       fCount: row.fCount,
@@ -264,7 +296,6 @@ export function resolveScorableCustomer(args: {
     };
   }
 
-  const boundaries = computeQuintileBoundaries(cohort);
   const rQuintile = assignRQuintile(row.rDays, boundaries.r);
   const fQuintile = assignFQuintile(row.fCount, boundaries.f);
   const mQuintile = assignMQuintile(row.mCents, boundaries.m);

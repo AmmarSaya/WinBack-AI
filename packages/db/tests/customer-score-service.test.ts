@@ -47,8 +47,9 @@ const NOW = new Date('2026-05-20T12:00:00.000Z');
 
 interface MockTx {
   $queryRaw: Mock;
-  customer: { findUnique: Mock; update: Mock };
-  merchant: { findUnique: Mock };
+  // `findMany` + `merchant.update` added for the A1b bulkRescore path.
+  customer: { findUnique: Mock; update: Mock; findMany: Mock };
+  merchant: { findUnique: Mock; update: Mock };
   outboxEvent: { create: Mock };
   customerScore: { findUnique: Mock; upsert: Mock };
   auditLog: { create: Mock };
@@ -57,8 +58,15 @@ interface MockTx {
 function makeTx(): MockTx {
   return {
     $queryRaw: vi.fn().mockResolvedValue([]),
-    customer: { findUnique: vi.fn(), update: vi.fn().mockResolvedValue({ id: CUSTOMER_ID }) },
-    merchant: { findUnique: vi.fn() },
+    customer: {
+      findUnique: vi.fn(),
+      update: vi.fn().mockResolvedValue({ id: CUSTOMER_ID }),
+      findMany: vi.fn().mockResolvedValue([]),
+    },
+    merchant: {
+      findUnique: vi.fn(),
+      update: vi.fn().mockResolvedValue({ id: MERCHANT_ID }),
+    },
     outboxEvent: { create: vi.fn().mockResolvedValue({ id: 'oe_1' }) },
     customerScore: {
       findUnique: vi.fn(),
@@ -777,5 +785,155 @@ describe('CustomerScoreService.recompute — first-pass suppression gate (A1a)',
     expect(tx.outboxEvent.create).not.toHaveBeenCalled();
     // Score still upserted (computedAt refresh) even with the gate closed.
     expect(tx.customerScore.upsert).toHaveBeenCalledTimes(1);
+  });
+});
+
+// ===========================================================================
+// bulkRescore — A1b first-pass engine (mocked prisma)
+//
+// A1b's bulkRescore reads the cohort ONCE, computes boundaries ONCE, scores
+// every customer in batches, and NEVER emits (Design B). The flag-flip + the
+// single merchant.scoring_initialized audit land in a final tx. These mocked
+// tests lock the invariants; the real-DB no-storm proof is in the drainer
+// integration suite.
+// ===========================================================================
+
+/**
+ * Mock prisma for bulkRescore: `$transaction` runs the UnitOfWork callback
+ * with the shared mock tx; `merchant.findUnique` serves the initial
+ * currency/shop read (NOT inside a tx).
+ */
+function makeBulkPrisma(
+  tx: MockTx,
+  merchantRow: { currency: string | null; shop: string } | null,
+): WinbackPrisma {
+  return {
+    $transaction: vi.fn(async (cb: (t: unknown) => Promise<unknown>) => cb(tx)),
+    merchant: { findUnique: vi.fn().mockResolvedValue(merchantRow) },
+  } as unknown as WinbackPrisma;
+}
+
+describe('CustomerScoreService.bulkRescore — A1b first-pass (mocked prisma)', () => {
+  let tx: MockTx;
+  beforeEach(() => {
+    tx = makeTx();
+  });
+
+  it('scores scorable + lurker, NEVER emits, single merchant.scoring_initialized audit, flag set; cohort read ONCE', async () => {
+    const { service } = makeService();
+    const prisma = makeBulkPrisma(tx, { currency: 'USD', shop: SHOP });
+
+    // Sufficient cohort (5) so quintiles compute. 'cust_scorable' is a member.
+    tx.$queryRaw.mockResolvedValue([
+      { customerId: 'cust_scorable', rDays: 60, fCount: 4, mCents: 20_000n },
+      { customerId: 'co2', rDays: 5, fCount: 10, mCents: 100_000n },
+      { customerId: 'co3', rDays: 20, fCount: 7, mCents: 50_000n },
+      { customerId: 'co4', rDays: 200, fCount: 2, mCents: 5_000n },
+      { customerId: 'co5', rDays: 400, fCount: 1, mCents: 1_000n },
+    ]);
+
+    // One batch: a scorable (in cohort, → warm) + a lurker (absent, 200d → dormant).
+    const lurkerCreated = new Date(NOW.getTime() - 200 * 86_400_000);
+    tx.customer.findMany
+      .mockResolvedValueOnce([
+        { id: 'cust_scorable', state: 'active', shopifyCreatedAt: null, createdAt: NOW },
+        {
+          id: 'cust_lurker',
+          state: 'active',
+          shopifyCreatedAt: lurkerCreated,
+          createdAt: lurkerCreated,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      service.bulkRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'op-1', now: NOW }),
+    );
+
+    expect(result.customersScored).toBe(2);
+    expect(result.batches).toBe(1);
+    expect(result.cohortSize).toBe(5);
+
+    // Both customers scored; both transitioned from 'active' → one state write each.
+    expect(tx.customerScore.upsert).toHaveBeenCalledTimes(2);
+    expect(tx.customer.update).toHaveBeenCalledTimes(2);
+
+    // NEVER emits.
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+
+    // Exactly ONE audit — merchant.scoring_initialized (NOT customer.state_changed).
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    const auditCall = tx.auditLog.create.mock.calls[0]![0];
+    expect(auditCall.data.action).toBe('merchant.scoring_initialized');
+    expect(auditCall.data.targetType).toBe('merchant');
+    expect(auditCall.data.targetId).toBe(MERCHANT_ID);
+    expect(auditCall.data.actorId).toBe('op-1');
+
+    // Flag set in the final tx — exactly once.
+    expect(tx.merchant.update).toHaveBeenCalledTimes(1);
+    expect(tx.merchant.update.mock.calls[0]![0]).toEqual({
+      where: { id: MERCHANT_ID },
+      data: { scoringInitializedAt: NOW },
+    });
+
+    // Cohort read EXACTLY ONCE — the O(1)-cohort-read guarantee (D4).
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('insufficient cohort (<5) → every customer insufficient_data, still no emission, flag set', async () => {
+    const { service } = makeService();
+    const prisma = makeBulkPrisma(tx, { currency: 'USD', shop: SHOP });
+
+    tx.$queryRaw.mockResolvedValue([
+      { customerId: 'cust_scorable', rDays: 60, fCount: 4, mCents: 20_000n },
+      { customerId: 'co2', rDays: 5, fCount: 10, mCents: 100_000n },
+      { customerId: 'co3', rDays: 20, fCount: 7, mCents: 50_000n },
+    ]); // 3 < threshold (5)
+
+    tx.customer.findMany
+      .mockResolvedValueOnce([
+        { id: 'cust_scorable', state: 'active', shopifyCreatedAt: null, createdAt: NOW },
+      ])
+      .mockResolvedValue([]);
+
+    await withTenantScope(MERCHANT_ID, async () =>
+      service.bulkRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'op-1', now: NOW }),
+    );
+
+    // Even the in-cohort customer goes insufficient_data (cohort too small).
+    expect(tx.customer.update).toHaveBeenCalledWith({
+      where: { id: 'cust_scorable' },
+      data: { state: 'insufficient_data' },
+    });
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+    expect(tx.merchant.update).toHaveBeenCalledTimes(1);
+  });
+
+  it('customer already at the resolved state → no redundant customer.update (still scored, still no emit)', async () => {
+    const { service } = makeService();
+    const prisma = makeBulkPrisma(tx, { currency: 'USD', shop: SHOP });
+
+    tx.$queryRaw.mockResolvedValue([
+      { customerId: 'c_top', rDays: 5, fCount: 10, mCents: 100_000n },
+      { customerId: 'co2', rDays: 20, fCount: 7, mCents: 50_000n },
+      { customerId: 'co3', rDays: 60, fCount: 4, mCents: 20_000n },
+      { customerId: 'co4', rDays: 200, fCount: 2, mCents: 5_000n },
+      { customerId: 'co5', rDays: 400, fCount: 1, mCents: 1_000n },
+    ]);
+
+    // c_top (rDays=5) resolves to 'active' and is ALREADY 'active' → no state write.
+    tx.customer.findMany
+      .mockResolvedValueOnce([
+        { id: 'c_top', state: 'active', shopifyCreatedAt: null, createdAt: NOW },
+      ])
+      .mockResolvedValue([]);
+
+    await withTenantScope(MERCHANT_ID, async () =>
+      service.bulkRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'op-1', now: NOW }),
+    );
+
+    expect(tx.customerScore.upsert).toHaveBeenCalledTimes(1); // scored
+    expect(tx.customer.update).not.toHaveBeenCalled(); // no band change
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
   });
 });

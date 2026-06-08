@@ -60,6 +60,21 @@ export function getFlag(args: readonly string[], flagName: string): string | nul
 }
 
 /**
+ * Boolean-flag presence check. Returns `true` iff `--<flagName>` appears as a
+ * token. Unlike `getFlag`, it does NOT consume a following value — boolean
+ * flags carry none. First boolean flag in the CLI (A1b `--force`).
+ *
+ * `hasFlag(['--force'], 'force')`            → true
+ * `hasFlag(['--merchant', 'm1'], 'force')`   → false
+ * `hasFlag(['--merchant', '--force'], 'merchant')` → true (presence only; the
+ *   `getFlag('merchant')` value-read is a separate concern that returns null
+ *   here because the next token is a flag)
+ */
+export function hasFlag(args: readonly string[], flagName: string): boolean {
+  return args.includes(`--${flagName}`);
+}
+
+/**
  * Required-flag helper. Returns a typed error on absence.
  */
 export function getRequiredFlag(
