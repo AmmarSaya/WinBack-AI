@@ -75,6 +75,10 @@ function handleBotRequest(
           pipe(body);
         },
         onShellError(error: unknown) {
+          // React's renderToPipeableStream passes whatever error it received
+          // (typically an Error subclass). The unknown→Error normalisation
+          // adds noise without information; the caller's catch handles both.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- React stream callback contract: rethrow as-received
           reject(error);
         },
         onError(error: unknown) {
@@ -109,6 +113,10 @@ function handleBrowserRequest(
           pipe(body);
         },
         onShellError(error: unknown) {
+          // React's renderToPipeableStream passes whatever error it received
+          // (typically an Error subclass). The unknown→Error normalisation
+          // adds noise without information; the caller's catch handles both.
+          // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors -- React stream callback contract: rethrow as-received
           reject(error);
         },
         onError(error: unknown) {

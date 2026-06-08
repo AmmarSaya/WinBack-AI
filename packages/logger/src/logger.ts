@@ -50,9 +50,7 @@ function buildOptions(): LoggerOptions {
 }
 
 function ensureRoot(): Logger {
-  if (rootLogger === null) {
-    rootLogger = pino(buildOptions());
-  }
+  rootLogger ??= pino(buildOptions());
   return rootLogger;
 }
 

@@ -62,7 +62,7 @@ function fakeMessage(opts: {
   } as Anthropic.Message;
 }
 
-function makeProvider(impl: (args: unknown) => Promise<unknown> | unknown): AnthropicProvider {
+function makeProvider(impl: (args: unknown) => unknown): AnthropicProvider {
   const client = {
     messages: { create: vi.fn(impl) },
   } as unknown as Anthropic;

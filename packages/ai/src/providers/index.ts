@@ -48,7 +48,7 @@ function constructForProvider(config: AiConfig): AiProvider {
       return createDeepSeekProvider({ apiKey: config.DEEPSEEK_API_KEY });
     default: {
       const _exhaustive: never = config;
-      throw new Error(`Unhandled AI_PROVIDER: ${String((_exhaustive as AiConfig).AI_PROVIDER)}`);
+      throw new Error(`Unhandled AI_PROVIDER: ${(_exhaustive as AiConfig).AI_PROVIDER}`);
     }
   }
 }

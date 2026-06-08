@@ -56,7 +56,7 @@ function makeStubRepo(rowsToReturn: OutboxEventRow[]): StubRepo {
   };
 }
 
-function makeStubContext(repo: StubRepo): DrainerContext {
+function makeStubContext(_repo: StubRepo): DrainerContext {
   // The drainer's prisma.$transaction is awaited; the callback receives
   // a tx client. We pass a sentinel — the stub repo doesn't look at it.
   const tx = { __tx: true };

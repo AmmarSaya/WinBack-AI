@@ -61,12 +61,10 @@ export interface GetShopifyConfigOptions {
 
 export function getShopifyConfig(options?: GetShopifyConfigOptions): ShopifyConfig {
   if (options?.reset === true) cached = null;
-  if (cached === null) {
-    cached = defineConfig(
-      shopifyConfigSchema,
-      options?.source !== undefined ? { source: options.source } : {},
-    );
-  }
+  cached ??= defineConfig(
+    shopifyConfigSchema,
+    options?.source !== undefined ? { source: options.source } : {},
+  );
   return cached;
 }
 

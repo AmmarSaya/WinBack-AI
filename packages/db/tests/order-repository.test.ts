@@ -18,7 +18,6 @@ import type { ShopifyOrderWebhookBody } from '../src/webhook-bodies.js';
  */
 
 const MERCHANT_ID = 'm_test';
-const SHOP_ORDER_ID = 'gid://shopify/Order/12345';
 const LOCAL_ORDER_ID = 'order_local_1';
 
 interface MockTx {

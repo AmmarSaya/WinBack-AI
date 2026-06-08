@@ -18,7 +18,7 @@
  * unhandled-rejection warning but don't care about the outcome.
  */
 
-import type { AppLoadContext, EntryContext } from '@remix-run/node';
+import type { EntryContext } from '@remix-run/node';
 import { describe, expect, it } from 'vitest';
 
 describe('handleRequest wiring — security headers arrive on the response Headers (B3 on-the-wire smoke)', () => {

@@ -63,7 +63,7 @@ function fakeChatCompletion(opts: {
   };
 }
 
-function makeProvider(impl: (args: unknown) => Promise<unknown> | unknown): OpenAiProvider {
+function makeProvider(impl: (args: unknown) => unknown): OpenAiProvider {
   const client = {
     chat: { completions: { create: vi.fn(impl) } },
   } as unknown as OpenAI;

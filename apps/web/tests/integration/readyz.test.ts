@@ -1,4 +1,3 @@
-import type { LoaderFunctionArgs } from '@remix-run/node';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { assertRead, createTestMerchant, getTestClient, resetDb } from './setup.js';
@@ -159,7 +158,7 @@ function mockIoredisWithPingBehavior(behavior: 'throw' | 'hang'): void {
   vi.doMock('ioredis', async () => {
     const actual = await vi.importActual<typeof import('ioredis')>('ioredis');
     class FakeRedis {
-       
+      // eslint-disable-next-line @typescript-eslint/no-useless-constructor -- intentional args-discarding stub; real ioredis would open a connection here, we explicitly want NO connection
       constructor(_url?: string, _options?: unknown) {
         // Intentionally accepts and discards the constructor args. Real
         // ioredis would open a connection here; we want NO real connection.

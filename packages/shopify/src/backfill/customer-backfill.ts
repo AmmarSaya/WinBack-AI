@@ -120,6 +120,7 @@ export class CustomerPageFetcher implements PageFetcher<ShopifyCustomerNode> {
 // here so additions require a conscious decision, not a silent one.
 // =============================================================================
 
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- referenced via `typeof SHOPIFY_OWNED_FIELDS` on line 174 for the field-name union type; never read as a value
 const SHOPIFY_OWNED_FIELDS = [
   'email',
   'phone',

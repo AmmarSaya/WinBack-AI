@@ -24,7 +24,6 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { QUEUE_NAMES } from '@winback/contracts';
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {

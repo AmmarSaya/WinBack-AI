@@ -7,7 +7,7 @@ import { loader as customersLoader } from '../../app/routes/customers.js';
 import { loader as settingsLoader } from '../../app/routes/settings.js';
 
 import { makeSessionToken } from './jwt-helper.js';
-import { assertRead, createTestMerchant, getTestClient, resetDb } from './setup.js';
+import { createTestMerchant, getTestClient, resetDb } from './setup.js';
 
 /**
  * Loader tests for the admin routes with loaders.

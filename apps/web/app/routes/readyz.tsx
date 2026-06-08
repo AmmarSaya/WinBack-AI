@@ -159,7 +159,7 @@ async function raceWithTimeout<T>(
       promise,
       new Promise<T>((_, reject) => {
         timeoutId = setTimeout(() => {
-          reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+          reject(new Error(`${label} timed out after ${String(timeoutMs)}ms`));
         }, timeoutMs);
       }),
     ]);
@@ -329,19 +329,19 @@ export async function loader() {
   // to operator-signal query timeouts already pushed above.
   if (outboxDlq > DLQ_CRITICAL_THRESHOLD) {
     warnings.push(
-      `outbox_dlq: critical — ${outboxDlq} rows dead-lettered (threshold ${DLQ_CRITICAL_THRESHOLD})`,
+      `outbox_dlq: critical — ${String(outboxDlq)} rows dead-lettered (threshold ${String(DLQ_CRITICAL_THRESHOLD)})`,
     );
   } else if (outboxDlq > DLQ_WARN_THRESHOLD) {
-    warnings.push(`outbox_dlq: ${outboxDlq} rows dead-lettered`);
+    warnings.push(`outbox_dlq: ${String(outboxDlq)} rows dead-lettered`);
   }
 
   if (stallAgeSeconds > STALL_CRITICAL_SECONDS) {
     warnings.push(
-      `outbox_stall: critical — oldest unprocessed event ${stallAgeSeconds} seconds old (threshold ${STALL_CRITICAL_SECONDS})`,
+      `outbox_stall: critical — oldest unprocessed event ${String(stallAgeSeconds)} seconds old (threshold ${String(STALL_CRITICAL_SECONDS)})`,
     );
   } else if (stallAgeSeconds > STALL_WARN_SECONDS) {
     warnings.push(
-      `outbox_stall: oldest unprocessed event ${stallAgeSeconds} seconds old`,
+      `outbox_stall: oldest unprocessed event ${String(stallAgeSeconds)} seconds old`,
     );
   }
 

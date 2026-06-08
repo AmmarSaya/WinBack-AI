@@ -4,7 +4,6 @@ import {
   type OutboxEventType,
 } from '@winback/contracts';
 import {
-  type OutboxEventRow,
   withSystemScope,
   type WinbackPrisma,
 } from '@winback/db';
@@ -1011,8 +1010,8 @@ describe('drainer integration (real Postgres)', () => {
       for (const def of seedDefs) {
         await seedScorableCustomer({
           merchantId,
-          shopifyCustomerId: `gid://shopify/Customer/${def.shopify}`,
-          shopifyOrderId: `gid://shopify/Order/${def.shopify * 10}`,
+          shopifyCustomerId: `gid://shopify/Customer/${String(def.shopify)}`,
+          shopifyOrderId: `gid://shopify/Order/${String(def.shopify * 10)}`,
           placedAt: new Date(now - def.rDaysAgo * 86_400_000),
           totalCents: def.mCents,
         });
@@ -1106,8 +1105,8 @@ describe('drainer integration (real Postgres)', () => {
       for (let i = 0; i < 5; i++) {
         await seedScorableCustomer({
           merchantId,
-          shopifyCustomerId: `gid://shopify/Customer/${230001 + i}`,
-          shopifyOrderId: `gid://shopify/Order/${(230001 + i) * 10}`,
+          shopifyCustomerId: `gid://shopify/Customer/${String(230001 + i)}`,
+          shopifyOrderId: `gid://shopify/Order/${String((230001 + i) * 10)}`,
           placedAt: new Date(now - (10 + i * 10) * 86_400_000),
           totalCents: BigInt(1000 + i * 1000),
         });
@@ -1164,8 +1163,8 @@ describe('drainer integration (real Postgres)', () => {
       for (let i = 0; i < 3; i++) {
         await seedScorableCustomer({
           merchantId,
-          shopifyCustomerId: `gid://shopify/Customer/${240001 + i}`,
-          shopifyOrderId: `gid://shopify/Order/${(240001 + i) * 10}`,
+          shopifyCustomerId: `gid://shopify/Customer/${String(240001 + i)}`,
+          shopifyOrderId: `gid://shopify/Order/${String((240001 + i) * 10)}`,
           placedAt: new Date(now - (10 + i * 10) * 86_400_000),
           totalCents: BigInt(1000 + i * 1000),
         });

@@ -37,9 +37,7 @@ let _client: WinbackPrisma | null = null;
  * DB work, not connect overhead.
  */
 export function getTestClient(): WinbackPrisma {
-  if (_client === null) {
-    _client = createWinbackPrisma();
-  }
+  _client ??= createWinbackPrisma();
   return _client;
 }
 

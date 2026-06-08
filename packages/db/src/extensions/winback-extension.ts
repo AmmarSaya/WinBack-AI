@@ -1,6 +1,6 @@
 import { Prisma } from '@prisma/client';
 
-import { applyReadHooks, applyWriteHooks, type ReadArgs, type WriteArgs } from './hooks.js';
+import { applyReadHooks, applyWriteHooks } from './hooks.js';
 
 /**
  * The single Prisma Client Extension for the @winback platform.

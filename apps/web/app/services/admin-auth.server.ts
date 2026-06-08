@@ -90,7 +90,7 @@ export async function requireAdminAuth(
   let sessionToken: string | null = null;
   let source: 'header' | 'query' | null = null;
 
-  if (authHeader !== null && authHeader.startsWith('Bearer ')) {
+  if (authHeader?.startsWith('Bearer ')) {
     const bearer = authHeader.slice('Bearer '.length).trim();
     if (bearer.length > 0) {
       sessionToken = bearer;
