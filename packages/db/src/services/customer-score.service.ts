@@ -41,8 +41,13 @@ const log = getLogger('db.customer-score.service');
  *      bug; keeping it physically separate makes it obvious in code review.
  *   5. Upsert the CustomerScore row (always — refreshes `computedAt` even
  *      when state didn't change).
- *   6. On state change ONLY: update `Customer.state`, write the AuditLog
- *      row, write the `customer.state_changed` OutboxEvent row.
+ *   6. On state change ONLY: update `Customer.state` (always — the band must
+ *      be correct), then — GATED on `Merchant.scoringInitializedAt` being
+ *      non-null (first-pass suppression, Lock V10 / lock #22 C9) — write the
+ *      AuditLog row + the `customer.state_changed` OutboxEvent row. While the
+ *      flag is null the band write persists but emission is suppressed (no
+ *      install-day winback storm). See ARCHITECTURE.md "Customer State
+ *      Single-Owner Policy".
  *
  * All reads and writes share the caller's `tx` argument (TX invariant from
  * session 1).  The service does NOT open its own tenant scope — it
@@ -123,6 +128,8 @@ export class CustomerScoreService {
         shop: true,
         installedAt: true,
         shopDetailsFetchedAt: true,
+        // First-pass suppression gate (step 6). null → suppress emission.
+        scoringInitializedAt: true,
       },
     });
 
@@ -229,63 +236,88 @@ export class CustomerScoreService {
     //     AuditLog row + OutboxEvent row, all in the same tx.
     // -----------------------------------------------------------------------
     if (stateChanged) {
+      // DATA WRITE — UNCONDITIONAL. Customer.state must always reflect the
+      // freshly computed band (lock #22 / C9), regardless of first-pass
+      // suppression. The CustomerScore upsert in step (5) is likewise
+      // unconditional. Only the transition-REACTION side-effects below are
+      // gated.
       await tx.customer.update({
         where: { id: customerId },
         data: { state: newState },
       });
 
-      await this.auditLogRepo.append(
-        {
+      // FIRST-PASS SUPPRESSION GATE (Lock V10 / POST-EPIC-F §1; lock #22 C9).
+      //
+      // While `Merchant.scoringInitializedAt` is null the merchant's initial
+      // scoring pass has NOT completed, so a band assignment here is an
+      // initial baseline, NOT a real transition. Suppress BOTH
+      // transition-reaction side-effects — the forensic `state_changed`
+      // AuditLog and the `customer.state_changed` OutboxEvent that drives a
+      // winback send — to prevent the install-day storm. The data above
+      // (Customer.state) + the CustomerScore row ARE the record. The
+      // bulk-rescore pass (A1b) sets `scoringInitializedAt` in the same tx as
+      // its final batch; from scoring pass 2 onward (steady-state,
+      // event-driven), `emit` is true and transitions emit normally.
+      const emit = merchant.scoringInitializedAt !== null;
+      if (emit) {
+        await this.auditLogRepo.append(
+          {
+            merchantId,
+            shop: merchant.shop,
+            actorType: 'system',
+            actorId: 'drainer',
+            action: AUDIT_ACTIONS.customer.state_changed,
+            targetType: 'customer',
+            targetId: customerId,
+            context: {
+              oldState: previousState,
+              newState,
+              rDays: resolved.rDays,
+              fCount: resolved.fCount,
+              // BigInt serialisation per rule #19 — string in JSON.
+              mCents: resolved.mCents.toString(),
+              rQuintile: resolved.rQuintile,
+              fQuintile: resolved.fQuintile,
+              mQuintile: resolved.mQuintile,
+              churnRiskScore: resolved.churnRiskScore,
+              currency,
+              cohortSize,
+              branch: branchTaken,
+            },
+          },
+          tx,
+        );
+
+        const payload = buildCustomerStateChangedPayload({
           merchantId,
-          shop: merchant.shop,
-          actorType: 'system',
-          actorId: 'drainer',
-          action: AUDIT_ACTIONS.customer.state_changed,
-          targetType: 'customer',
-          targetId: customerId,
-          context: {
-            oldState: previousState,
-            newState,
+          customerId,
+          shopifyCustomerId: customer.shopifyCustomerId,
+          oldState: previousState,
+          newState,
+          computedAt: now,
+          rfmScore: {
             rDays: resolved.rDays,
             fCount: resolved.fCount,
-            // BigInt serialisation per rule #19 — string in JSON.
-            mCents: resolved.mCents.toString(),
+            mCents: resolved.mCents,
             rQuintile: resolved.rQuintile,
             fQuintile: resolved.fQuintile,
             mQuintile: resolved.mQuintile,
-            churnRiskScore: resolved.churnRiskScore,
-            currency,
-            cohortSize,
-            branch: branchTaken,
           },
-        },
-        tx,
-      );
+        });
 
-      const payload = buildCustomerStateChangedPayload({
-        merchantId,
-        customerId,
-        shopifyCustomerId: customer.shopifyCustomerId,
-        oldState: previousState,
-        newState,
-        computedAt: now,
-        rfmScore: {
-          rDays: resolved.rDays,
-          fCount: resolved.fCount,
-          mCents: resolved.mCents,
-          rQuintile: resolved.rQuintile,
-          fQuintile: resolved.fQuintile,
-          mQuintile: resolved.mQuintile,
-        },
-      });
-
-      await tx.outboxEvent.create({
-        data: {
-          merchantId,
-          type: OUTBOX_EVENTS.customer.state_changed,
-          payload: payload,
-        },
-      });
+        await tx.outboxEvent.create({
+          data: {
+            merchantId,
+            type: OUTBOX_EVENTS.customer.state_changed,
+            payload: payload,
+          },
+        });
+      } else {
+        log.debug(
+          { merchantId, customerId, previousState, newState },
+          'recompute: state change suppressed (first pass — scoringInitializedAt null)',
+        );
+      }
     }
 
     return {

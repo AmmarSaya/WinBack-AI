@@ -63,6 +63,21 @@ export const AUDIT_ACTIONS = {
     state_changed: 'customer.state_changed',
   },
   /**
+   * Merchant lifecycle actions (A1a / POST-EPIC-F §1 / Lock V10). Written by
+   * the bulk-rescore pass (A1b) in the SAME tx as the
+   * `Merchant.scoringInitializedAt` flag-flip that completes the first
+   * scoring pass. `actorType` is `system`; `actorId` is the operator/CLI
+   * identity. See ARCHITECTURE.md "Customer State Single-Owner Policy".
+   */
+  merchant: {
+    /**
+     * First scoring pass complete — `scoringInitializedAt` set. From this
+     * point on, `CustomerScoreService.recompute` emits state transitions
+     * normally (the install-day suppression gate opens).
+     */
+    scoring_initialized: 'merchant.scoring_initialized',
+  },
+  /**
    * AI generation pipeline actions (Epic F batch 4). Written by the AI
    * Worker (`apps/drainer/src/workers/ai-generate.worker.ts`) and the
    * `handleCustomerStateChanged` drainer handler in the same tx as the
@@ -115,6 +130,7 @@ export type AuditAction =
   | (typeof AUDIT_ACTIONS.gdpr)[keyof typeof AUDIT_ACTIONS.gdpr]
   | (typeof AUDIT_ACTIONS.outbox)[keyof typeof AUDIT_ACTIONS.outbox]
   | (typeof AUDIT_ACTIONS.customer)[keyof typeof AUDIT_ACTIONS.customer]
+  | (typeof AUDIT_ACTIONS.merchant)[keyof typeof AUDIT_ACTIONS.merchant]
   | (typeof AUDIT_ACTIONS.ai)[keyof typeof AUDIT_ACTIONS.ai];
 
 /** Runtime Set of every registered action, for shape tests + iteration. */
@@ -122,6 +138,7 @@ export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   ...Object.values(AUDIT_ACTIONS.gdpr),
   ...Object.values(AUDIT_ACTIONS.outbox),
   ...Object.values(AUDIT_ACTIONS.customer),
+  ...Object.values(AUDIT_ACTIONS.merchant),
   ...Object.values(AUDIT_ACTIONS.ai),
 ] as AuditAction[]);
 

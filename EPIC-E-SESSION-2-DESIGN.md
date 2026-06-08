@@ -151,6 +151,18 @@ withTenantScope({ merchantId }, async () => {
 - `customer.state_changed` (our own outbox event) — would be a loop. The drainer's existing routing for this event continues to `handleNoop` post-session-2; it's emitted for downstream Epic G consumers only.
 - `merchant.installed` / `gdpr.shop_redacted` — no per-customer scoring relevance.
 
+**A1a amendment (POST-EPIC-F §1 / Lock V10 / lock #22 C9).** The four writes in
+the sketch above are refined. The `Customer.state` update + `CustomerScore`
+upsert stay UNCONDITIONAL (the band must always be correct). The `AuditLog` +
+`customer.state_changed` OutboxEvent (the two transition-REACTION side-effects)
+are now GATED on `Merchant.scoringInitializedAt`: while it is null the
+merchant's initial scoring pass has not completed, so these band assignments
+are an initial baseline, not real transitions — both are suppressed (no
+install-day winback storm). The bulk-rescore pass (A1b) sets the flag in the
+same tx as its final batch and NEVER emits; from steady state on, `recompute`
+emits transitions normally. See ARCHITECTURE.md "Customer State Single-Owner
+Policy".
+
 ### S-8 — `customer.state_changed` is emitted ONLY when state actually changes
 
 Recompute writes a `CustomerScore` row every time (to keep `computedAt` fresh). State change is detected by `oldState !== newState` before writing the outbox event. If the customer was `active` and stays `active`, no event. If they transition `active → warm`, one event. Idempotent on replay because the outbox event's payload includes `computedAt` — consumers (Epic G winback flows) key off the transition, not the recompute timestamp.

@@ -1432,4 +1432,97 @@ describe('drainer integration (real Postgres)', () => {
       expect(auditAfter).toHaveLength(1);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // A1a — first-pass state-transition suppression (real DB)
+  //
+  // Lock V10 / POST-EPIC-F §1 + lock #22/C9. While
+  // Merchant.scoringInitializedAt is null, recompute writes CustomerScore +
+  // Customer.state but SUPPRESSES the customer.state_changed AuditLog +
+  // OutboxEvent — no winback storm on install day (zero state_changed events
+  // ⇒ zero downstream AiGenerations). Once the flag is set (bulk-rescore A1b,
+  // or steady state) transitions emit normally.
+  //
+  // createTestMerchant defaults to INITIALIZED; the suppression case passes
+  // `{ scoringInitializedAt: null }` explicitly.
+  // ---------------------------------------------------------------------
+
+  describe('A1a — first-pass state-transition suppression (real DB)', () => {
+    it('un-initialized merchant (scoringInitializedAt null) → score + state written, ZERO state_changed OutboxEvent + AuditLog', async () => {
+      const merchantId = await createTestMerchant(SHOP, { scoringInitializedAt: null });
+      const customerGid = 'gid://shopify/Customer/300001';
+      await createTestCustomer({ merchantId, shopifyCustomerId: customerGid });
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-a1a-1',
+          shopifyOrderId: 300010,
+          bodyOverrides: { customer: { id: 300001 } },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      // (a) DATA IS written — the band must be correct (active → insufficient_data).
+      const scores = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scores).toHaveLength(1);
+      const customer = await assertRead(() =>
+        getTestClient().customer.findUnique({
+          where: { merchantId_shopifyCustomerId: { merchantId, shopifyCustomerId: customerGid } },
+        }),
+      );
+      expect(customer?.state).toBe('insufficient_data'); // changed from default 'active'
+
+      // (b) SUPPRESSED — no winback send-driver event, no forensic transition row.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(0);
+      const audit = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audit).toHaveLength(0);
+    });
+
+    it('initialized merchant (scoringInitializedAt set) → exactly one state_changed OutboxEvent + AuditLog (emit-when-set)', async () => {
+      const merchantId = await createTestMerchant(SHOP); // default = initialized
+      const customerGid = 'gid://shopify/Customer/310001';
+      await createTestCustomer({ merchantId, shopifyCustomerId: customerGid });
+
+      await seedOutboxEvent(
+        merchantId,
+        OUTBOX_EVENTS.order.placed,
+        orderPayload({
+          topic: 'orders/create',
+          webhookId: 'wh-a1a-2',
+          shopifyOrderId: 310010,
+          bodyOverrides: { customer: { id: 310001 } },
+        }),
+      );
+
+      await runDrainTick(makeCtx());
+
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(1);
+      const audit = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audit).toHaveLength(1);
+    });
+  });
 });

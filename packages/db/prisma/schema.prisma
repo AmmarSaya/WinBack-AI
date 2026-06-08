@@ -241,6 +241,17 @@ model Merchant {
   // workers for this merchant until re-auth.
   tokenRevokedAt DateTime?
 
+  // First-pass state-transition suppression (Lock V10 / POST-EPIC-F §1).
+  //   null → the merchant's INITIAL scoring pass has not completed. The
+  //          scoring service still writes CustomerScore + Customer.state,
+  //          but SUPPRESSES customer.state_changed emission (initial band
+  //          assignments are not real transitions — prevents the install-day
+  //          winback storm). Set by the bulk-rescore pass (A1b) in the same
+  //          tx as its final batch.
+  //   set  → steady state; recompute emits transitions normally.
+  // See ARCHITECTURE.md "Customer State Single-Owner Policy" (lock #22 / C9).
+  scoringInitializedAt DateTime?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 

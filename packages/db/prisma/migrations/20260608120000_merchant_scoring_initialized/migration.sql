@@ -1,0 +1,21 @@
+-- A1a (POST-EPIC-F §1 / Lock V10) — first-pass state-transition suppression.
+--
+-- Adds the nullable timestamp that gates `customer.state_changed` emission in
+-- CustomerScoreService.recompute:
+--   null → the merchant's initial scoring pass has NOT completed; recompute
+--          writes CustomerScore + Customer.state but suppresses the
+--          state_changed AuditLog + OutboxEvent (no install-day winback storm).
+--   set  → steady state; transitions emit normally. The bulk-rescore pass
+--          (A1b) sets it in the same tx as its final batch.
+--
+-- Additive, nullable, NO default, NO backfill UPDATE. Prod has zero scored
+-- merchants (no CustomerScore rows), so every existing row correctly reads
+-- null = "not yet initialized". Metadata-only ALTER — no table rewrite, no row
+-- scan, brief ACCESS EXCLUSIVE lock per the ADD COLUMN. See
+-- ARCHITECTURE.md "Customer State Single-Owner Policy" + packages/db/MIGRATIONS.md.
+--
+-- Sequence B: applied to production via `pnpm db:migrate:deploy` AFTER this
+-- PR merges to main — never before, never via the Neon MCP.
+
+-- AlterTable
+ALTER TABLE "Merchant" ADD COLUMN "scoringInitializedAt" TIMESTAMP(3);

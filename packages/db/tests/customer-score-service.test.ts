@@ -101,12 +101,17 @@ function mockMerchantFound(
   currency: string | null = 'USD',
   installedAt: Date = new Date('2026-05-19T12:00:00.000Z'),
   shopDetailsFetchedAt: Date | null = new Date('2026-05-19T12:01:00.000Z'),
+  // A1a: default to an INITIALIZED merchant so the existing emission-asserting
+  // tests below keep firing the AuditLog + OutboxEvent. The suppression suite
+  // passes `null` explicitly to exercise the first-pass gate.
+  scoringInitializedAt: Date | null = new Date('2026-05-19T12:05:00.000Z'),
 ): void {
   tx.merchant.findUnique.mockResolvedValue({
     currency,
     shop: SHOP,
     installedAt,
     shopDetailsFetchedAt,
+    scoringInitializedAt,
   });
 }
 
@@ -681,5 +686,96 @@ describe('CustomerScoreService.recompute — side-effect details on state change
     if (result.skipped !== null) throw new Error('expected applied result');
     expect(result.cohortSize).toBe(5);
     expect(result.durationMs).toBeGreaterThanOrEqual(0);
+  });
+});
+
+// ===========================================================================
+// First-pass suppression gate — A1a (Lock V10 / POST-EPIC-F §1 / lock #22 C9)
+//
+// While Merchant.scoringInitializedAt is null, a band change is an initial
+// assignment, NOT a real transition: the Customer.state write + CustomerScore
+// upsert still happen (data correct), but the AuditLog + OutboxEvent
+// (transition reactions) are suppressed. Once the flag is set, both emit.
+// ===========================================================================
+
+describe('CustomerScoreService.recompute — first-pass suppression gate (A1a)', () => {
+  let tx: MockTx;
+  beforeEach(() => {
+    tx = makeTx();
+  });
+
+  it('scoringInitializedAt null + state change → state written + score upserted, but NO audit + NO outbox', async () => {
+    const { service } = makeService();
+    mockCustomerFound(tx, { state: 'active' });
+    // Un-initialized merchant — pass null for the 5th positional arg.
+    mockMerchantFound(tx, 'USD', undefined, undefined, null);
+    tx.$queryRaw.mockResolvedValue(fullCohort({ rDays: 60, fCount: 4, mCents: 20_000n }));
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      service.recompute({
+        merchantId: MERCHANT_ID,
+        customerId: CUSTOMER_ID,
+        tx: tx as unknown as Prisma.TransactionClient,
+        now: NOW,
+      }),
+    );
+
+    if (result.skipped !== null) throw new Error('expected applied result');
+    // Data writes ARE performed — the band must be correct regardless.
+    expect(result.stateChanged).toBe(true);
+    expect(result.newState).toBe('warm');
+    expect(tx.customer.update).toHaveBeenCalledWith({
+      where: { id: CUSTOMER_ID },
+      data: { state: 'warm' },
+    });
+    expect(tx.customerScore.upsert).toHaveBeenCalledTimes(1);
+    // Transition-reaction side-effects SUPPRESSED.
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('scoringInitializedAt set + state change → audit + outbox both emitted (steady-state regression guard)', async () => {
+    const { service } = makeService();
+    mockCustomerFound(tx, { state: 'active' });
+    mockMerchantFound(tx, 'USD', undefined, undefined, new Date('2026-05-19T12:05:00.000Z'));
+    tx.$queryRaw.mockResolvedValue(fullCohort({ rDays: 60, fCount: 4, mCents: 20_000n }));
+
+    await withTenantScope(MERCHANT_ID, async () =>
+      service.recompute({
+        merchantId: MERCHANT_ID,
+        customerId: CUSTOMER_ID,
+        tx: tx as unknown as Prisma.TransactionClient,
+        now: NOW,
+      }),
+    );
+
+    expect(tx.customer.update).toHaveBeenCalledTimes(1);
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    expect(tx.outboxEvent.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('scoringInitializedAt null + NO state change → score upserted, nothing else (gate is moot without a transition)', async () => {
+    const { service } = makeService();
+    // Top-of-cohort customer (rDays=5) already 'active' → stays active.
+    mockCustomerFound(tx, { state: 'active' });
+    mockMerchantFound(tx, 'USD', undefined, undefined, null);
+    tx.$queryRaw.mockResolvedValue(fullCohort());
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      service.recompute({
+        merchantId: MERCHANT_ID,
+        customerId: CUSTOMER_ID,
+        tx: tx as unknown as Prisma.TransactionClient,
+        now: NOW,
+      }),
+    );
+
+    if (result.skipped !== null) throw new Error('expected applied result');
+    expect(result.stateChanged).toBe(false);
+    expect(tx.customer.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+    // Score still upserted (computedAt refresh) even with the gate closed.
+    expect(tx.customerScore.upsert).toHaveBeenCalledTimes(1);
   });
 });

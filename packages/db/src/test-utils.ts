@@ -108,14 +108,27 @@ export async function assertRead<T>(fn: () => Promise<T>): Promise<T> {
  * Create a Merchant + MerchantSettings + BillingSubscription for a test,
  * returning its id. Bypasses the install flow — for tests that need a
  * pre-existing merchant without going through OAuth.
+ *
+ * `scoringInitializedAt` DEFAULTS to `new Date()` (an INITIALIZED merchant),
+ * so the steady-state integration suite — which asserts
+ * `customer.state_changed` emission — keeps passing under the A1a first-pass
+ * suppression gate. Tests that exercise the gate (fresh install / first pass)
+ * pass `{ scoringInitializedAt: null }` explicitly to get an un-initialized
+ * merchant whose transitions are suppressed.
  */
-export async function createTestMerchant(shop: string): Promise<string> {
+export async function createTestMerchant(
+  shop: string,
+  options: { scoringInitializedAt?: Date | null } = {},
+): Promise<string> {
   const client = getTestClient();
+  const scoringInitializedAt =
+    options.scoringInitializedAt === undefined ? new Date() : options.scoringInitializedAt;
   return withSystemScope('test.setup_merchant', async () => {
     const m = await client.merchant.create({
       data: {
         shop,
         installedAt: new Date(),
+        scoringInitializedAt,
         settings: { create: {} },
         billingSubscription: { create: { status: 'trialing' } },
       },
