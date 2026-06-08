@@ -9,6 +9,16 @@
 // Test cases T1–T8 mirror the §8 plan surfaced in STEP F Phase 1.
 // =============================================================================
 
+/* eslint-disable @typescript-eslint/no-floating-promises -- node:test
+ * framework pattern: `describe()` and `test()` return promises that are
+ * consumed by the node:test runner's internal lifecycle, NOT awaited at
+ * the call site. All 16 hits in this file are top-level framework
+ * invocations (verified line-by-line in 5c-1 Phase 1; zero in-body
+ * floating awaits hidden in the pattern). A file-level disable is the
+ * deliberate choice over a config-level rule so the silence is scoped
+ * to this one node:test file rather than affecting future vitest tests
+ * the workspace adds. */
+
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
 

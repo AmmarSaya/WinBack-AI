@@ -73,6 +73,7 @@ beforeEach(() => {
   // Silence the documented double-close warning that fires inside
   // afterEach when no queues were opened in this test. Test #3 explicitly
   // asserts shutdown behavior; it doesn't rely on console output.
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op to silence the documented double-close warning per the comment above; empty body IS the silenced output.
   warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
   // Reset call history (not implementations) so each test's call counts
   // are independent. mockClear keeps the Queue / createRedisClient

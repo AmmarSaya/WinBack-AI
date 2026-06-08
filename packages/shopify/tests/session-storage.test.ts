@@ -105,7 +105,9 @@ describe('EncryptedSessionStorage — round-trip', () => {
     expect(loaded!.accessToken).toBe('shopify_offline_access_token_plaintext_xyz');
     // And the loaded value is still a Session class instance (methods
     // preserved — the SDK's Authentication flow needs `isActive` etc.).
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest assertion pattern; passing method-reference is intentional (`toBeInstanceOf(Function)` requires the unbound method to verify the property type).
     expect(loaded!.isActive).toBeInstanceOf(Function);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest assertion pattern; passing method-reference is intentional (`toBeInstanceOf(Function)` requires the unbound method to verify the property type).
     expect(loaded!.toObject).toBeInstanceOf(Function);
   });
 

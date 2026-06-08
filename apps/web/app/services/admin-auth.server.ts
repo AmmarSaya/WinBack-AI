@@ -109,6 +109,7 @@ export async function requireAdminAuth(
   // compares the token's `dest` against this. Without `shop` we can't
   // decide what we're verifying against.
   if (shop === null) {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Remix framework pattern: thrown Response routes to the route's ErrorBoundary; wrapping in `new Error()` would break the boundary contract.
     throw new Response('Missing shop', { status: 400 });
   }
 
@@ -118,6 +119,7 @@ export async function requireAdminAuth(
     // crafted ?shop= URLs (L2-H1). Permanently closed: 401, no DB lookup,
     // no shop disclosure beyond what the caller already supplied.
     log.warn({ shop }, 'session_auth: no session token presented');
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Remix framework pattern: thrown json() Response routes to the route's ErrorBoundary; wrapping in `new Error()` would break the boundary contract.
     throw json(
       { error: 'session_token_required', reason: 'no_token' },
       { status: 401 },
@@ -131,6 +133,7 @@ export async function requireAdminAuth(
     const reason =
       err instanceof ShopifySessionTokenError ? err.reason : 'invalid_jwt';
     log.warn({ shop, reason }, 'session_auth: JWT invalid');
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Remix framework pattern: thrown json() Response routes to the route's ErrorBoundary; wrapping in `new Error()` would break the boundary contract.
     throw json(
       { error: 'session_token_invalid', reason },
       { status: 401 },
@@ -161,6 +164,7 @@ async function lookupMerchantOrRedirect(
   });
 
   if (merchant === null) {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- Remix framework pattern: thrown redirect() routes through the framework's redirect path; wrapping in `new Error()` would break the redirect contract.
     throw redirect(redirectIfMissing);
   }
 

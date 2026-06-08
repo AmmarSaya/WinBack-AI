@@ -57,8 +57,12 @@ export class OpenAiProvider implements AiProvider {
       );
     }
 
+    // SDK declares `ChatCompletionMessage.content: string | null` (verified
+    // against node_modules/.pnpm/openai@4.104.0/.../completions.d.ts:653).
+    // The previous `content === undefined` clause was dead per the SDK
+    // type. Removed (5c-2 audit).
     const content = choice.message.content;
-    if (content === null || content === undefined || content.trim() === '') {
+    if (content === null || content.trim() === '') {
       // Empty/null content with no content_filter signal. Treat as transient
       // — typically indicates an intermittent provider issue.
       throw new AiProviderTransientError(

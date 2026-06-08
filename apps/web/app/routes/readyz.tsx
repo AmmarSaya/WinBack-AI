@@ -295,6 +295,7 @@ export async function loader() {
   }
 
   const checks: ReadyzChecks = {
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TS async-closure flow-analysis limitation: `postgresOk` IS set true at runtime inside `withSystemScope`'s async callback above (line 222), but TS cannot propagate the closure mutation back out, so it sees `postgresOk` as still `false`. DO NOT "simplify" this branch by dropping the `? 'ok'` arm — the health probe would stop reporting 'ok' for healthy Postgres and Render's load balancer would route traffic away from a healthy instance.
     postgres: postgresOk ? 'ok' : 'fail',
     redis: redisOk ? 'ok' : 'fail',
     outboxDlq,
@@ -307,6 +308,7 @@ export async function loader() {
   // dependency failures (Postgres SELECT 1 throws/times out OR Redis
   // PING throws/times out). DLQ depth, stall age, and the operator-
   // signal query timeouts never produce 503.
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- TS async-closure flow-analysis limitation (same as line 298): `postgresOk` IS set true at runtime inside the async callback at line 222. DO NOT "simplify" the `!postgresOk` check — without it, this branch always evaluates `redisOk`-only and returns 503 even when postgres is healthy.
   if (!postgresOk || !redisOk) {
     const body: ReadyzBody = {
       status: 'unhealthy',

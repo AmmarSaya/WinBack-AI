@@ -32,6 +32,7 @@ function makeResolver(
         accessToken: ACCESS_TOKEN,
       }),
     ),
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op mock for vi.fn return-typing; empty body documents deliberate-no-op rather than a forgotten stub.
     markTokenRevoked: vi.fn(async () => {}),
     ...overrides,
   };
@@ -54,6 +55,7 @@ function defaultThrottle() {
 }
 
 function mockSleep() {
+  // eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op mock for AdminClient's sleepFn injection; empty body documents deliberate-no-op so tests don't actually sleep.
   return vi.fn(async () => {});
 }
 
@@ -93,6 +95,7 @@ describe('AdminClient — happy path', () => {
     );
 
     expect(result).toEqual({ shop: { name: 'Acme' } });
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest assertion pattern; passing method-reference is intentional (`toHaveBeenCalledWith` requires the spy reference).
     expect(resolver.getOfflineToken).toHaveBeenCalledWith(MERCHANT_ID);
     expect(fetchFn).toHaveBeenCalledTimes(1);
     // The Authorization header carries the decrypted token.
@@ -134,6 +137,7 @@ describe('AdminClient — 401 handling', () => {
     await expect(
       client.graphql(MERCHANT_ID, { query: '{ shop { name } }' }, FAKE_CONFIG),
     ).rejects.toThrow(ShopifyTokenRevokedError);
+    // eslint-disable-next-line @typescript-eslint/unbound-method -- Vitest assertion pattern; passing method-reference is intentional (`toHaveBeenCalledWith` requires the spy reference).
     expect(resolver.markTokenRevoked).toHaveBeenCalledWith(MERCHANT_ID);
     // No retry on 401 — exactly one fetch.
     expect(fetchFn).toHaveBeenCalledTimes(1);
@@ -304,6 +308,7 @@ describe('AdminClient — rate-limit gating', () => {
       currentlyAvailable: 5,
       restoreRate: 50,
     });
+    // eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op mock for AdminClient's sleepFn; tests must not actually sleep.
     const sleepFn = vi.fn(async () => {});
     const fetchFn = mockFetchOk({ ok: true });
     const client = new AdminClient(resolver, tracker, { fetchFn, sleepFn });
@@ -335,4 +340,5 @@ describe('AdminClient — type boundary', () => {
 });
 
 // keep eslint happy about unused beforeEach import in case future tests use it
+// eslint-disable-next-line @typescript-eslint/no-empty-function -- Intentional no-op placeholder hook to keep the `beforeEach` import live until a future test needs it.
 beforeEach(() => {});

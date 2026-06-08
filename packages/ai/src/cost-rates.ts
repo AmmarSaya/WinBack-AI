@@ -105,6 +105,7 @@ export function estimateCostMicrocents(
   outputTokens: number,
 ): bigint {
   const providerRates = PROVIDER_COST_RATES[provider];
+  // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- Boundary guard: TS prevents an out-of-sync `Record<AiProviderName, X>` at the object-literal definition, but a caller can force-cast (`'groq' as any`) and bypass the static check at the call site. cost-rates.test.ts:108 ("throws on unknown provider") exercises exactly that scenario — without this guard, a typo'd `AI_PROVIDER` env var would surface as `Cannot read properties of undefined` instead of `Unknown provider: <name>`. 5c-2 audit confirmed the runtime-vs-type divergence is real.
   if (providerRates === undefined) {
     throw new Error(`Unknown provider: ${provider}`);
   }
