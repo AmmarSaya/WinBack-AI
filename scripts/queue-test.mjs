@@ -96,7 +96,7 @@ async function up() {
   console.log('[queue:test] (3/3) waiting for Redis PING…');
   if (!(await waitHealthy())) {
     console.error(
-      `[queue:test] Redis did not respond to PING within ${HEALTH_ATTEMPTS}s`,
+      `[queue:test] Redis did not respond to PING within ${String(HEALTH_ATTEMPTS)}s`,
     );
     return 1;
   }

@@ -156,7 +156,7 @@ function buildSystemPrompt(args: WinbackPromptArgs): string {
     `Your only job is to write a single short message addressed to a specific lapsed customer to invite them back.`,
     '',
     `State framing: ${STATE_FRAMING[args.customer.triggerState]}`,
-    `Maximum length: ${maxWords} words. Be concise. Do not exceed this limit.`,
+    `Maximum length: ${String(maxWords)} words. Be concise. Do not exceed this limit.`,
     '',
     'Hard constraints:',
     '  - Never invent facts about the customer, the merchant, or any product.',
@@ -234,8 +234,8 @@ function buildUserPrompt(args: WinbackPromptArgs): string {
     `Customer context:`,
     `  - Address them as: ${salutation}`,
     `  - State band: ${args.customer.triggerState} (previously: ${args.customer.previousState})`,
-    `  - Days since last paid order: ${args.customer.rDays}`,
-    `  - Lifetime: ${args.customer.fCount} ${orderWord}, ${args.customer.currency} ${dollars} (trailing 365d).`,
+    `  - Days since last paid order: ${String(args.customer.rDays)}`,
+    `  - Lifetime: ${String(args.customer.fCount)} ${orderWord}, ${args.customer.currency} ${dollars} (trailing 365d).`,
   ];
 
   if (args.recentProducts.length > 0) {

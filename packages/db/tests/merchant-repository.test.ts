@@ -69,7 +69,7 @@ function makeMockPrisma(initial: Partial<MockState> = {}) {
         if (existing !== undefined) {
           return { id: existing.id };
         }
-        const id = `m_${state.merchants.length + 1}`;
+        const id = `m_${String(state.merchants.length + 1)}`;
         state.merchants.push({ id, shop: args.where.shop });
         return { id };
       },

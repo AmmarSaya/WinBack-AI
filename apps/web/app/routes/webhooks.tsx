@@ -65,7 +65,7 @@ export async function action({ request }: ActionFunctionArgs) {
     if (outcome.kind === 'reject') {
       log.warn(
         { topic, shop, webhookId, reason: outcome.reason },
-        `webhook rejected (${outcome.status})`,
+        `webhook rejected (${String(outcome.status)})`,
       );
       return new Response(outcome.reason, { status: outcome.status });
     }
