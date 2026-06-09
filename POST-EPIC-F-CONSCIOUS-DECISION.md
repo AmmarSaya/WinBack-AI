@@ -510,6 +510,52 @@ Batch surface (one batch):
 Surface ACTUAL FILES. Await sign-off.
 ```
 
+### Implementation note (A5, 2026-06-10): two corrections to §5's text
+
+The Phase-1 trace surfaced two items in §5's spec body that don't
+match the actual implementation. Recording the resolutions so the next
+reader doesn't re-litigate them:
+
+- **§5's "non-retryable in the BullMQ error classifier" instruction is
+  superseded.** The implementation returns normally on the stale path
+  (no thrown error). BullMQ's classifier (`isRetryable` in
+  `packages/errors/src/classify.ts`) is invoked only on thrown errors.
+  Since no error fires, the classifier is never reached, retries
+  cannot happen. There is also no "non-retryable list" to add to —
+  `isRetryable` simply reads `error.retryable` on `AppError`-subclass
+  instances. A typed `StaleGenerationError` would be dead defensive
+  code for an error that never throws. The text and prompt's
+  "add `'generation_stale'` to the non-retryable list" are out of
+  sync with the actual classifier shape.
+- **`$transaction` wrapping for `markFailed` is NOT used.** The
+  staleness path is a single atomic `updateMany WHERE id AND
+  status='pending'` — atomic on its own without a tx wrapper. The
+  `$transaction` ceremony in `handleProviderError` exists because that
+  path pairs `markFailed` with an `AuditLog.append` (rule #14 / lock
+  #14 atomicity). A5 has no audit (the `AiGeneration` row itself, with
+  `status=failed` and `lastError='generation_stale'`, IS the forensic
+  record — same pattern as `'content_filter'`), so the wrapping would
+  be misleading ceremony implying a paired write that doesn't exist.
+
+Other locked details (Phase-1 sign-off):
+
+- **Gate point**: `processAiGenerateJob` STEP 1.5 — AFTER the existence +
+  status guards (only `pending` rows reach the check), BEFORE the
+  provider call. Cheap defensive check before the expensive external
+  call, structurally analogous to A2's STEP 4.5 in the handler.
+- **Staleness source**: `AiGeneration.createdAt`. Handler's STEP 8
+  (createPending → createDraft in one tx) and STEP 9 (immediate
+  enqueue) run sequentially with sub-millisecond gap, so
+  `createdAt ≈ enqueue time ≈ trigger time`. There is no
+  create-then-delayed-enqueue path and no row reuse — every transition
+  creates a fresh row.
+- **Boundary**: strict `>`. At exactly 24h, the row still proceeds.
+  Sub-second precision is operationally meaningless at a 24-hour
+  window (unlike A2's cap off-by-one which had product semantics).
+- **No registry, no schema, no migration, no module**. Pure code: a
+  module constant + a select-field extension + a 10-line gate block.
+  The simplest sub-batch in §1-§5.
+
 ---
 
 ## Section 6 — Path 3: M10 one-liner scope assertions

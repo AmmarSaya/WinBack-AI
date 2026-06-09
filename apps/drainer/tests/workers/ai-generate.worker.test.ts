@@ -134,6 +134,13 @@ interface AiGenRowMock {
   modelId: string;
   systemPrompt: string;
   userPrompt: string;
+  // A5 / §5 — selected by the worker for the staleness check at
+  // STEP 1.5. The check itself only runs after the status guard
+  // (pending rows only), but the field is still selected, so the mock
+  // must always provide it. Default in `makeCtx` is `new Date()`
+  // (a fresh row); A5 tests override with a >24h-old Date to exercise
+  // the stale path.
+  createdAt: Date;
   merchant: { shop: string };
 }
 
@@ -177,6 +184,7 @@ function makeCtx(initial: Partial<MockState> = {}): {
             modelId: 'deepseek-v4-flash',
             systemPrompt: 'You are a winback specialist.',
             userPrompt: 'Customer Alice has not ordered in 45 days.',
+            createdAt: new Date(),
             merchant: { shop: 'foo.myshopify.com' },
           },
     markCompletedUpdatedCount: initial.markCompletedUpdatedCount ?? 1,
@@ -345,6 +353,7 @@ describe('processAiGenerateJob — user-mandated regression locks', () => {
         modelId: 'deepseek-v4-flash',
         systemPrompt: 'sys',
         userPrompt: 'usr',
+        createdAt: new Date(),
         merchant: { shop: 'foo.myshopify.com' },
       },
     });
@@ -369,6 +378,7 @@ describe('processAiGenerateJob — user-mandated regression locks', () => {
         modelId: 'deepseek-v4-flash',
         systemPrompt: 'sys',
         userPrompt: 'usr',
+        createdAt: new Date(),
         merchant: { shop: 'foo.myshopify.com' },
       },
     });
@@ -764,6 +774,7 @@ describe('processAiGenerateJob — ordering invariants', () => {
         modelId: 'deepseek-v4-flash',
         systemPrompt: 'STORED_SYSTEM_PROMPT',
         userPrompt: 'STORED_USER_PROMPT',
+        createdAt: new Date(),
         merchant: { shop: 'foo.myshopify.com' },
       };
     });
@@ -816,5 +827,152 @@ describe('createAiGenerateWorker — factory config', () => {
     expect(workerInstances[0]!.on).toHaveBeenCalledWith('error', expect.any(Function));
 
     expect(worker).toBe(workerInstances[0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A5 / POST-EPIC-F §5 — stale-generation skip
+//
+// STEP 1.5 in `processAiGenerateJob`: after the existence + status
+// guards (pending rows only), gate on
+// `Date.now() - row.createdAt > 24h`. Stale → single atomic
+// `markFailed(lastError='generation_stale')` UPDATE, return normally.
+// No `$transaction` wrapper (no related audit). No LLM call. No
+// AiSpendBucket. No Message update. BullMQ sees no error → no retry.
+//
+// The boundary is strict `>`: a row at exactly 24h still proceeds.
+// ---------------------------------------------------------------------------
+
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
+
+describe('processAiGenerateJob — A5 stale-generation skip', () => {
+  it('fresh row (createdAt 1h ago) → proceeds to provider call; markFailed NOT called for staleness', async () => {
+    const { ctx, state, prismaMocks } = makeCtx({
+      aiGenRow: {
+        status: 'pending',
+        provider: 'deepseek',
+        modelId: 'deepseek-v4-flash',
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        // 1 hour ago — well under the 24h threshold.
+        createdAt: new Date(Date.now() - 60 * 60 * 1000),
+        merchant: { shop: 'foo.myshopify.com' },
+      },
+    });
+    const generate = setProviderGenerate(async () => happyResult());
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    // Provider WAS called; the row took the happy path through STEP 2.
+    expect(generate).toHaveBeenCalledTimes(1);
+    // Completion tx ran (3-write atomic). markFailed for staleness did
+    // NOT fire (no 'generation_stale' UPDATE landed).
+    expect(state.markCompletedRows).toHaveLength(1);
+    const staleFails = state.markFailedRows.filter(
+      (r) => r.data.lastError === 'generation_stale',
+    );
+    expect(staleFails).toHaveLength(0);
+    // Sanity: the markFailed mock recorded zero rows total.
+    expect(state.markFailedRows).toHaveLength(0);
+    // No audit row (staleness path doesn't write one anyway; provider
+    // happy path also doesn't).
+    expect(state.auditLogRows).toHaveLength(0);
+    // The completion tx was opened (only the 3-write completion tx
+    // runs `$transaction` in this flow; staleness skip does NOT).
+    expect(prismaMocks.transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('stale row (createdAt 25h ago) → markFailed(lastError="generation_stale"), provider NOT called, no $transaction, no audit, no spend', async () => {
+    const { ctx, state, prismaMocks } = makeCtx({
+      aiGenRow: {
+        status: 'pending',
+        provider: 'deepseek',
+        modelId: 'deepseek-v4-flash',
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        // 25 hours ago — over the 24h threshold.
+        createdAt: new Date(Date.now() - 25 * 60 * 60 * 1000),
+        merchant: { shop: 'foo.myshopify.com' },
+      },
+    });
+    const generate = setProviderGenerate(async () => happyResult());
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    // Provider was NOT called — staleness short-circuited before STEP 2.
+    expect(generate).not.toHaveBeenCalled();
+
+    // Exactly one markFailed UPDATE landed, gated on status='pending',
+    // with the canonical lastError string.
+    expect(state.markFailedRows).toHaveLength(1);
+    const failed = state.markFailedRows[0]!;
+    expect(failed.data.status).toBe('failed');
+    expect(failed.data.lastError).toBe('generation_stale');
+    expect(failed.data.failedAt).toBeInstanceOf(Date);
+    // The WHERE clause must include status='pending' for the repo's
+    // idempotent-replay guard.
+    expect(failed.where.status).toBe('pending');
+    expect(failed.where.id).toBe('gen_1');
+
+    // No $transaction was opened — staleness skip is a single atomic
+    // UPDATE, NOT a multi-write tx (the user-mandated call: unlike
+    // handleProviderError which pairs markFailed with an audit).
+    expect(prismaMocks.transaction).not.toHaveBeenCalled();
+
+    // No audit row (`'generation_stale'` is a lastError string, not a
+    // registered AUDIT_ACTIONS constant — same pattern as 'content_filter').
+    expect(state.auditLogRows).toHaveLength(0);
+
+    // No spend bucket increment, no message update — STEP 4 never ran.
+    expect(state.spendBucketUpserts).toHaveLength(0);
+    expect(state.messageUpdates).toHaveLength(0);
+    expect(state.markCompletedRows).toHaveLength(0);
+  });
+
+  it('boundary: createdAt exactly 24h ago → PROCEEDS (strict `>` — sub-second precision not load-bearing)', async () => {
+    const { ctx, state } = makeCtx({
+      aiGenRow: {
+        status: 'pending',
+        provider: 'deepseek',
+        modelId: 'deepseek-v4-flash',
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        // Exactly 24h ago — `Date.now() - createdAt === TWENTY_FOUR_HOURS_MS`,
+        // which is NOT `> TWENTY_FOUR_HOURS_MS`. The boundary documents
+        // intent: a 1-ms-younger row should still proceed.
+        createdAt: new Date(Date.now() - TWENTY_FOUR_HOURS_MS),
+        merchant: { shop: 'foo.myshopify.com' },
+      },
+    });
+    const generate = setProviderGenerate(async () => happyResult());
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    // Boundary row proceeded — provider called, completion tx fired,
+    // no staleness markFailed.
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(state.markCompletedRows).toHaveLength(1);
+    expect(state.markFailedRows).toHaveLength(0);
+  });
+
+  it('stale-skip return is normal completion (no throw) → BullMQ does NOT retry', async () => {
+    const { ctx } = makeCtx({
+      aiGenRow: {
+        status: 'pending',
+        provider: 'deepseek',
+        modelId: 'deepseek-v4-flash',
+        systemPrompt: 'sys',
+        userPrompt: 'usr',
+        createdAt: new Date(Date.now() - 48 * 60 * 60 * 1000), // 2 days
+        merchant: { shop: 'foo.myshopify.com' },
+      },
+    });
+    // Spy a provider stub — we assert it is NEVER called, AND we
+    // assert the worker's outer promise resolves cleanly (no thrown
+    // error → BullMQ marks the job complete, classifier never runs,
+    // no retry).
+    setProviderGenerate(async () => happyResult());
+
+    await expect(processAiGenerateJob(ctx, makeJob())).resolves.toBeUndefined();
   });
 });
