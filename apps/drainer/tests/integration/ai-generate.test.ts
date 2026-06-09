@@ -1077,3 +1077,159 @@ describe('A2 — per-merchant hourly generation cap (real Redis + real Postgres)
     expect(bAudits).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A5 / POST-EPIC-F §5 — stale-generation skip (real Postgres, mocked
+// LLM provider)
+//
+// End-to-end proof of the worker's STEP 1.5 staleness gate against
+// real Postgres. The handler creates an `AiGeneration` row with a
+// fresh `createdAt`; the test back-dates that column to 25h ago to
+// simulate a row that lived through a multi-hour provider outage.
+// Worker pickup → markFailed(lastError='generation_stale'), no
+// provider call, no spend bucket increment, no Message update.
+// ---------------------------------------------------------------------------
+
+describe('A5 — stale-generation skip (real Postgres)', () => {
+  beforeEach(async () => {
+    await resetDb();
+    resetProviderMock();
+  });
+
+  it('25h-old AiGeneration row → worker markFails with lastError=generation_stale; provider NEVER called; no Message update; no AiSpendBucket', async () => {
+    const merchantId = await createTestMerchant(SHOP);
+    const customerShopifyId = 'gid://shopify/Customer/620001';
+    const customerId = await seedCustomer(merchantId, customerShopifyId, 'Alice');
+
+    const { ctx, queueAdd } = makeAiCtx();
+
+    // ── Step 1: handler creates AiGeneration row with fresh createdAt
+    //    + enqueues. We capture the enqueued payload for the worker
+    //    invocation in step 3. ──
+    await handleCustomerStateChanged(
+      ctx,
+      makeStateChangedRow({
+        merchantId,
+        customerId,
+        shopifyCustomerId: customerShopifyId,
+        eventId: 'evt-a5-1',
+      }),
+    );
+
+    expect(queueAdd).toHaveBeenCalledTimes(1);
+    const captured = captureQueuePayload(queueAdd);
+    const aiGenerationId = captured.payload.aiGenerationId;
+
+    // ── Step 2: back-date the AiGeneration row's createdAt to 25h
+    //    ago. Simulates a row that sat in BullMQ retry/backoff
+    //    through a multi-hour provider outage. UPDATE direct via the
+    //    test client (test-only seam — production code never mutates
+    //    createdAt). ──
+    const twentyFiveHoursAgo = new Date(Date.now() - 25 * 60 * 60 * 1000);
+    await withSystemScope('test.backdate_creation', async () => {
+      await getTestClient().aiGeneration.update({
+        where: { id: aiGenerationId },
+        data: { createdAt: twentyFiveHoursAgo },
+      });
+    });
+
+    // ── Step 3: invoke worker with a provider stub that would FAIL
+    //    the test if reached. Staleness skip must short-circuit before
+    //    any provider.generate call. ──
+    const generate = setProviderGenerate(async () => {
+      throw new Error(
+        'provider.generate must NOT be called on the stale path — A5 STEP 1.5 should have markFailed and returned',
+      );
+    });
+
+    await runWorkerForPayload(ctx, captured.payload);
+
+    // ── Provider was NEVER called — the stale gate short-circuited. ──
+    expect(generate).not.toHaveBeenCalled();
+
+    // ── AiGeneration row: status=failed, lastError='generation_stale',
+    //    failedAt set, generatedText still null (no LLM call). ──
+    const aiGen = await assertRead(() =>
+      getTestClient().aiGeneration.findUnique({
+        where: { id: aiGenerationId },
+      }),
+    );
+    expect(aiGen).not.toBeNull();
+    expect(aiGen!.status).toBe('failed');
+    expect(aiGen!.lastError).toBe('generation_stale');
+    expect(aiGen!.failedAt).toBeInstanceOf(Date);
+    expect(aiGen!.generatedText).toBeNull();
+    expect(aiGen!.completedAt).toBeNull();
+    expect(aiGen!.costMicrocents).toBeNull();
+    expect(aiGen!.inputTokens).toBeNull();
+    expect(aiGen!.outputTokens).toBeNull();
+
+    // ── Message draft created by the handler stays empty (Message
+    //    isn't touched by the worker on the stale path). ──
+    const message = await assertRead(() =>
+      getTestClient().message.findUnique({ where: { aiGenerationId } }),
+    );
+    expect(message).not.toBeNull();
+    expect(message!.generatedText).toBe('');
+
+    // ── No AiSpendBucket — the staleness path skips
+    //    `incrementSpend`. ──
+    const buckets = await assertRead(() =>
+      getTestClient().aiSpendBucket.findMany({ where: { merchantId } }),
+    );
+    expect(buckets).toHaveLength(0);
+
+    // ── No `ai.*` audit row — `'generation_stale'` is a lastError
+    //    string, not a registered AUDIT_ACTIONS constant. The
+    //    AiGeneration row IS the forensic record. ──
+    const aiAudits = await assertRead(() =>
+      getTestClient().auditLog.findMany({
+        where: { merchantId, action: { startsWith: 'ai.' } },
+      }),
+    );
+    expect(aiAudits).toHaveLength(0);
+  });
+
+  it('fresh AiGeneration row (1h old) → worker proceeds normally; no markFailed for staleness', async () => {
+    const merchantId = await createTestMerchant(SHOP);
+    const customerShopifyId = 'gid://shopify/Customer/620002';
+    const customerId = await seedCustomer(merchantId, customerShopifyId, 'Bob');
+
+    const { ctx, queueAdd } = makeAiCtx();
+
+    await handleCustomerStateChanged(
+      ctx,
+      makeStateChangedRow({
+        merchantId,
+        customerId,
+        shopifyCustomerId: customerShopifyId,
+        eventId: 'evt-a5-2',
+      }),
+    );
+    const captured = captureQueuePayload(queueAdd);
+    const aiGenerationId = captured.payload.aiGenerationId;
+
+    // Back-date to 1h ago (well within the 24h threshold).
+    await withSystemScope('test.backdate_creation', async () => {
+      await getTestClient().aiGeneration.update({
+        where: { id: aiGenerationId },
+        data: { createdAt: new Date(Date.now() - 60 * 60 * 1000) },
+      });
+    });
+
+    const generate = setProviderGenerate(async () => happyResult());
+
+    await runWorkerForPayload(ctx, captured.payload);
+
+    // Provider WAS called → happy path went through.
+    expect(generate).toHaveBeenCalledTimes(1);
+
+    const aiGen = await assertRead(() =>
+      getTestClient().aiGeneration.findUnique({
+        where: { id: aiGenerationId },
+      }),
+    );
+    expect(aiGen!.status).toBe('completed');
+    expect(aiGen!.lastError).toBeNull(); // crucially NOT 'generation_stale'
+  });
+});

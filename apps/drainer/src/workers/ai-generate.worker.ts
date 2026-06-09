@@ -55,6 +55,14 @@
  *                                re-pickup, manual replay). NO provider
  *                                call, NO tx, NO audit.
  *
+ *   2.5 STALE SKIP (A5 / §5) — gate on
+ *      `Date.now() - row.createdAt > 24h`. If stale, single atomic
+ *      `markFailed(lastError='generation_stale')` UPDATE (no
+ *      `$transaction` wrapper — no related audit, unlike
+ *      `handleProviderError`'s two-write pattern). Return normally;
+ *      BullMQ doesn't retry. See in-line docstring for the §5
+ *      classifier-instruction supersession.
+ *
  *   3. PROVIDER CALL — OUTSIDE any `prisma.$transaction` (locked rule:
  *      no external HTTP inside a Postgres tx — provider timeouts would
  *      hold the tx open). `selectActiveProvider` is lazy + memoised on
@@ -125,6 +133,24 @@ const WORKER_LOCK_DURATION_MS = 30 * 60 * 1000;
 const AUDIT_ERROR_MESSAGE_MAX_CHARS = 500;
 
 /**
+ * A5 / POST-EPIC-F §5 — stale-generation skip threshold.
+ *
+ * `Date.now() - row.createdAt.getTime() > GENERATION_STALENESS_MS`
+ * triggers a markFailed-without-LLM-call skip. 24h is hardcoded for v1;
+ * merchant-configurable later if real-world usage warrants. The boundary
+ * is strict `>` — a row at exactly 24h still proceeds (sub-second
+ * precision is operationally meaningless at a 24-hour window).
+ *
+ * Rationale: Epic F's Q9 retry policy is same-provider exponential
+ * backoff up to 3 attempts. During a multi-hour provider outage the
+ * retry tail can drift into the next day; sending "we miss you, it's
+ * been a while" 24+ hours after the actual transition anchors the
+ * message to an event the customer experienced YESTERDAY — semantically
+ * broken even on technical-success delivery.
+ */
+const GENERATION_STALENESS_MS = 24 * 60 * 60 * 1000;
+
+/**
  * Job payload — set by `handleCustomerStateChanged` (Step 2b) at enqueue
  * time. BullMQ jobId = `aiGenerationId` per §F-8 idempotent-replay
  * contract.
@@ -166,6 +192,7 @@ export async function processAiGenerateJob(
         modelId: true,
         systemPrompt: true,
         userPrompt: true,
+        createdAt: true,
         merchant: { select: { shop: true } },
       },
     });
@@ -193,6 +220,59 @@ export async function processAiGenerateJob(
       );
       return;
     }
+
+    // STEP 1.5 — A5 / POST-EPIC-F §5: stale-generation skip.
+    //
+    // After the existence + status guards above (we know the row is
+    // pending), gate on staleness BEFORE the provider call. The
+    // staleness clock measures from `AiGeneration.createdAt`, set by
+    // `handleCustomerStateChanged` immediately before enqueue (handler
+    // STEP 8 createPending → STEP 9 enqueue, sub-millisecond gap).
+    // The whole semantic rests on createdAt ≈ trigger time, which the
+    // handler's tight create→enqueue path guarantees.
+    //
+    // GATE-POINT RATIONALE: only `pending` rows reach here (the status
+    // guard above bails on completed/failed). A stale, already-handled
+    // row is impossible — terminal rows short-circuit at the idempotent
+    // replay check, never reaching staleness.
+    //
+    // SKIP SEMANTICS: single atomic `markFailed` UPDATE (status=failed
+    // WHERE id AND status='pending'). NO `$transaction` wrapper —
+    // unlike `handleProviderError` which pairs `markFailed` with an
+    // `AuditLog.append` (rule #14 atomicity), this is one row write
+    // with no related audit. No LLM call, no `AiSpendBucket`
+    // increment, no `Message.generatedText` update. The
+    // `AiGeneration` row itself (status=failed, lastError='generation_stale',
+    // failedAt set) IS the forensic record — no `AUDIT_ACTIONS.ai.*`
+    // entry registered (`'generation_stale'` is a `lastError` string,
+    // not a registry constant; mirrors `'content_filter'`).
+    //
+    // RETURN PATH: the worker returns normally (no throw). BullMQ
+    // marks the job complete and does NOT retry. §5's text mentions
+    // "non-retryable in the BullMQ error classifier" — superseded
+    // here: no error fires, so the classifier is never invoked. See
+    // POST-EPIC-F-CONSCIOUS-DECISION.md §5 implementation note +
+    // EPIC-F-DESIGN.md edge-cases row.
+    if (Date.now() - row.createdAt.getTime() > GENERATION_STALENESS_MS) {
+      const aiGenRepo = new AiGenerationRepository(ctx.prisma);
+      await aiGenRepo.markFailed({
+        aiGenerationId: payload.aiGenerationId,
+        lastError: 'generation_stale',
+      });
+      log.warn(
+        {
+          jobId: job.id,
+          aiGenerationId: payload.aiGenerationId,
+          merchantId: payload.merchantId,
+          customerId: payload.customerId,
+          createdAt: row.createdAt.toISOString(),
+          ageMs: Date.now() - row.createdAt.getTime(),
+        },
+        'ai-generate: row stale (>24h since createdAt); markFailed lastError=generation_stale, no LLM call, return',
+      );
+      return;
+    }
+
     const shop = row.merchant.shop;
 
     // STEP 2 — PROVIDER CALL. OUTSIDE any prisma.$transaction (locked
