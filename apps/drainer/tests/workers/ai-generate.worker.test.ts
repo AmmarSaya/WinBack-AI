@@ -930,29 +930,43 @@ describe('processAiGenerateJob — A5 stale-generation skip', () => {
   });
 
   it('boundary: createdAt exactly 24h ago → PROCEEDS (strict `>` — sub-second precision not load-bearing)', async () => {
-    const { ctx, state } = makeCtx({
-      aiGenRow: {
-        status: 'pending',
-        provider: 'deepseek',
-        modelId: 'deepseek-v4-flash',
-        systemPrompt: 'sys',
-        userPrompt: 'usr',
-        // Exactly 24h ago — `Date.now() - createdAt === TWENTY_FOUR_HOURS_MS`,
-        // which is NOT `> TWENTY_FOUR_HOURS_MS`. The boundary documents
-        // intent: a 1-ms-younger row should still proceed.
-        createdAt: new Date(Date.now() - TWENTY_FOUR_HOURS_MS),
-        merchant: { shop: 'foo.myshopify.com' },
-      },
-    });
-    const generate = setProviderGenerate(async () => happyResult());
+    // Pin Date.now() with fake timers. Without this, the sub-ms gap
+    // between `new Date(Date.now() - 24h)` at fixture setup and the
+    // worker's `Date.now() - row.createdAt` check makes the difference
+    // strictly > 24h (by 1+ ms of test runtime), wrongly firing the
+    // stale path. Slow CI surfaced this; fast local machines were
+    // hitting the sub-ms-gap lottery. Locking Date.now() makes the
+    // boundary-at-exactly-24h test deterministic.
+    const pinnedNow = new Date('2026-06-10T12:00:00.000Z').getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(pinnedNow);
+    try {
+      const { ctx, state } = makeCtx({
+        aiGenRow: {
+          status: 'pending',
+          provider: 'deepseek',
+          modelId: 'deepseek-v4-flash',
+          systemPrompt: 'sys',
+          userPrompt: 'usr',
+          // Exactly 24h ago — `Date.now() - createdAt === TWENTY_FOUR_HOURS_MS`,
+          // which is NOT `> TWENTY_FOUR_HOURS_MS`. The boundary documents
+          // intent: a 1-ms-younger row should still proceed.
+          createdAt: new Date(pinnedNow - TWENTY_FOUR_HOURS_MS),
+          merchant: { shop: 'foo.myshopify.com' },
+        },
+      });
+      const generate = setProviderGenerate(async () => happyResult());
 
-    await processAiGenerateJob(ctx, makeJob());
+      await processAiGenerateJob(ctx, makeJob());
 
-    // Boundary row proceeded — provider called, completion tx fired,
-    // no staleness markFailed.
-    expect(generate).toHaveBeenCalledTimes(1);
-    expect(state.markCompletedRows).toHaveLength(1);
-    expect(state.markFailedRows).toHaveLength(0);
+      // Boundary row proceeded — provider called, completion tx fired,
+      // no staleness markFailed.
+      expect(generate).toHaveBeenCalledTimes(1);
+      expect(state.markCompletedRows).toHaveLength(1);
+      expect(state.markFailedRows).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('stale-skip return is normal completion (no throw) → BullMQ does NOT retry', async () => {
