@@ -1,0 +1,23 @@
+-- A2 (POST-EPIC-F §2) — per-merchant hourly AI generation cap.
+--
+-- Adds the integer column that bounds the per-hour generation rate per
+-- merchant. Gated in `handleCustomerStateChanged` BEFORE the spend-cap
+-- check (cheap Redis-INCR rejection before any DB write). Cap-hit emits
+-- an `ai.rate_limited` AuditLog row and returns; NO `AiGeneration` row
+-- is created on denial (mirrors the existing `ai.spend_cap_exceeded`
+-- pattern in §F-9 step 5).
+--
+-- Default 100 = the §2 lock value. Operator-adjustable later (no v1 UI;
+-- direct DB or operator CLI).
+--
+-- Additive, NOT NULL with DEFAULT 100. Postgres ADD COLUMN ... DEFAULT
+-- on a small table (MerchantSettings is 1 row per merchant — single-digit
+-- live rows in prod) is metadata-only on PG11+; no table rewrite, no
+-- row scan, brief ACCESS EXCLUSIVE lock per the ALTER. See
+-- POST-EPIC-F-CONSCIOUS-DECISION.md §2 + packages/db/MIGRATIONS.md.
+--
+-- Sequence B: applied to production via `pnpm db:migrate:deploy` AFTER
+-- this PR merges to main — never before, never via the Neon MCP.
+
+-- AlterTable
+ALTER TABLE "MerchantSettings" ADD COLUMN "hourlyGenerationCap" INTEGER NOT NULL DEFAULT 100;

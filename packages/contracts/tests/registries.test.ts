@@ -115,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the thirteen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 3 Epic F batch 4 ai)', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(13);
+  it('contains the fourteen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 4 ai: 3 Epic F batch 4 + 1 A2)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(14);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -136,6 +136,10 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(AUDIT_ACTIONS.ai.generation_failed).toBe('ai.generation_failed');
     expect(AUDIT_ACTIONS.ai.spend_cap_exceeded).toBe('ai.spend_cap_exceeded');
     expect(AUDIT_ACTIONS.ai.content_blocked).toBe('ai.content_blocked');
+    // A2 (POST-EPIC-F §2) — per-merchant hourly generation cap denial.
+    // Written by handleCustomerStateChanged STEP 4.5 BEFORE the spend-cap
+    // check (cheap Redis-INCR rejection before any DB write).
+    expect(AUDIT_ACTIONS.ai.rate_limited).toBe('ai.rate_limited');
   });
 });
 

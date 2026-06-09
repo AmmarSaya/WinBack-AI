@@ -889,3 +889,191 @@ describe('Epic F end-to-end integration (real Postgres, mocked LLM provider)', (
     expect(audits).toHaveLength(0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// A2 / POST-EPIC-F §2 — per-merchant hourly generation cap (real Redis +
+// real Postgres, mocked LLM provider)
+//
+// Burst-starvation defense: a flooding merchant must not monopolize the
+// AI Worker. The gate fires in `handleCustomerStateChanged` BEFORE the
+// spend-cap check — denial is a single Redis INCR + 1 audit row, NO
+// AiGeneration row. Tests lock:
+//   - cap fires at the configured value (not a hard-coded 100)
+//   - over-cap → ai.rate_limited audit + NO AiGeneration / Message /
+//     queue enqueue (mirrors spend_cap_exceeded pattern)
+//   - per-merchant independence (cap keys isolate by merchantId × bucket)
+// ---------------------------------------------------------------------------
+
+import { closeQueues } from '@winback/queue';
+
+describe('A2 — per-merchant hourly generation cap (real Redis + real Postgres)', () => {
+  beforeEach(async () => {
+    await resetDb();
+    resetProviderMock();
+    // Default provider stub so handleCustomerStateChanged's transitive
+    // enqueue path can succeed for the within-cap calls. The provider
+    // would only fire from the worker, which we don't invoke here — but
+    // selectActiveProvider's memoisation must still resolve cleanly if
+    // any earlier test left it in an unexpected state.
+    setProviderGenerate(async () => happyResult());
+  });
+
+  afterAll(async () => {
+    // The rate-limiter uses the shared queue-layer ioredis client (via
+    // `getQueueLayerClient`). Without `closeQueues()` the connection
+    // leaks at process-end and vitest hangs.
+    await closeQueues();
+  });
+
+  it('cap=3: first 3 calls create AiGeneration rows, 4th emits ai.rate_limited audit + NO AiGeneration', async () => {
+    const merchantId = await createTestMerchant(SHOP);
+
+    // Lower the cap so the test exercises the gate without 101 calls.
+    // Schema default is 100; this test verifies the gate fires at the
+    // configured value, not a hard-coded 100.
+    await withSystemScope('test.lower_cap', async () => {
+      await getTestClient().merchantSettings.update({
+        where: { merchantId },
+        data: { hourlyGenerationCap: 3 },
+      });
+    });
+
+    const customerShopifyId = 'gid://shopify/Customer/520001';
+    const customerId = await seedCustomer(merchantId, customerShopifyId, 'Alice');
+
+    const { ctx, queueAdd } = makeAiCtx();
+
+    // Fire 4 state_changed handler invocations. The handler is invoked
+    // directly (per the suite's Q-I1 decision — no real BullMQ flow);
+    // each invocation hits the rate-limit gate before any DB write.
+    for (let i = 0; i < 4; i += 1) {
+      const row = makeStateChangedRow({
+        merchantId,
+        customerId,
+        shopifyCustomerId: customerShopifyId,
+        eventId: `evt-a2-${i.toString()}`,
+      });
+      await handleCustomerStateChanged(ctx, row);
+    }
+
+    // First 3 → AiGeneration + Message + queue enqueue land normally.
+    const aiGens = await assertRead(() =>
+      getTestClient().aiGeneration.findMany({ where: { merchantId } }),
+    );
+    expect(aiGens).toHaveLength(3);
+
+    const messages = await assertRead(() =>
+      getTestClient().message.findMany({ where: { merchantId } }),
+    );
+    expect(messages).toHaveLength(3);
+
+    expect(queueAdd).toHaveBeenCalledTimes(3);
+
+    // 4th → ai.rate_limited audit + NO AiGeneration / Message / queue.
+    const rateLimitAudits = await assertRead(() =>
+      getTestClient().auditLog.findMany({
+        where: { merchantId, action: AUDIT_ACTIONS.ai.rate_limited },
+      }),
+    );
+    expect(rateLimitAudits).toHaveLength(1);
+
+    const audit = rateLimitAudits[0]!;
+    expect(audit.merchantId).toBe(merchantId); // load-bearing top-level field
+    expect(audit.targetType).toBe('customer');
+    expect(audit.targetId).toBe(customerId);
+    expect(audit.actorType).toBe('system');
+    expect(audit.actorId).toBe('drainer');
+
+    const context = audit.context as {
+      currentCount: number;
+      hourlyGenerationCap: number;
+      hourBucket: number;
+      eventId: string;
+    };
+    // 4th call's post-increment count = 4 > cap = 3.
+    expect(context.currentCount).toBe(4);
+    expect(context.hourlyGenerationCap).toBe(3);
+    expect(context.eventId).toBe('evt-a2-3');
+
+    // No spend_cap_exceeded audit (the rate-limit gate short-circuits
+    // before the spend-cap check — independent failure modes).
+    const spendAudits = await assertRead(() =>
+      getTestClient().auditLog.findMany({
+        where: { merchantId, action: AUDIT_ACTIONS.ai.spend_cap_exceeded },
+      }),
+    );
+    expect(spendAudits).toHaveLength(0);
+  });
+
+  it('per-merchant independence: merchant A hits cap, merchant B is unaffected', async () => {
+    const merchantAId = await createTestMerchant(SHOP);
+    const merchantBId = await createTestMerchant('peer.myshopify.com');
+
+    // Both merchants get the same low cap.
+    await withSystemScope('test.lower_caps', async () => {
+      await getTestClient().merchantSettings.updateMany({
+        where: { merchantId: { in: [merchantAId, merchantBId] } },
+        data: { hourlyGenerationCap: 2 },
+      });
+    });
+
+    const customerAShopifyId = 'gid://shopify/Customer/530001';
+    const customerBShopifyId = 'gid://shopify/Customer/530002';
+    const customerAId = await seedCustomer(merchantAId, customerAShopifyId, 'Anne');
+    const customerBId = await seedCustomer(merchantBId, customerBShopifyId, 'Bob');
+
+    const { ctx } = makeAiCtx();
+
+    // Merchant A: fire 3 events (cap=2 → first 2 pass, 3rd rate-limited).
+    for (let i = 0; i < 3; i += 1) {
+      await handleCustomerStateChanged(
+        ctx,
+        makeStateChangedRow({
+          merchantId: merchantAId,
+          customerId: customerAId,
+          shopifyCustomerId: customerAShopifyId,
+          eventId: `evt-a2-a-${i.toString()}`,
+        }),
+      );
+    }
+
+    // Merchant B: fire 2 events (cap=2 → both pass; bucket key is
+    // distinct from A's, so A's history doesn't contaminate B's counter).
+    for (let i = 0; i < 2; i += 1) {
+      await handleCustomerStateChanged(
+        ctx,
+        makeStateChangedRow({
+          merchantId: merchantBId,
+          customerId: customerBId,
+          shopifyCustomerId: customerBShopifyId,
+          eventId: `evt-a2-b-${i.toString()}`,
+        }),
+      );
+    }
+
+    // A: 2 AiGeneration rows + 1 rate-limit audit.
+    const aGens = await assertRead(() =>
+      getTestClient().aiGeneration.findMany({ where: { merchantId: merchantAId } }),
+    );
+    expect(aGens).toHaveLength(2);
+    const aAudits = await assertRead(() =>
+      getTestClient().auditLog.findMany({
+        where: { merchantId: merchantAId, action: AUDIT_ACTIONS.ai.rate_limited },
+      }),
+    );
+    expect(aAudits).toHaveLength(1);
+
+    // B: 2 AiGeneration rows + 0 rate-limit audits (B's counter is
+    // independent of A's).
+    const bGens = await assertRead(() =>
+      getTestClient().aiGeneration.findMany({ where: { merchantId: merchantBId } }),
+    );
+    expect(bGens).toHaveLength(2);
+    const bAudits = await assertRead(() =>
+      getTestClient().auditLog.findMany({
+        where: { merchantId: merchantBId, action: AUDIT_ACTIONS.ai.rate_limited },
+      }),
+    );
+    expect(bAudits).toHaveLength(0);
+  });
+});

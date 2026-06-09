@@ -18,5 +18,9 @@
 // =============================================================================
 
 export { createRedisClient } from './redis-client.js';
-export { getQueues, closeQueues } from './queues.js';
+export { getQueues, getQueueLayerClient, closeQueues } from './queues.js';
+export {
+  incrementAndCheck,
+  type IncrementAndCheckResult,
+} from './rate-limiter.js';
 export type { Queues } from './types.js';

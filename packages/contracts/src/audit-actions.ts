@@ -103,6 +103,20 @@ export const AUDIT_ACTIONS = {
      */
     spend_cap_exceeded: 'ai.spend_cap_exceeded',
     /**
+     * A2 / POST-EPIC-F §2 — per-merchant hourly generation cap exceeded.
+     * Gated in `handleCustomerStateChanged` BEFORE the spend-cap check
+     * (cheap Redis-INCR rejection before any DB write — mirrors the
+     * `spend_cap_exceeded` pattern: NO `AiGeneration` row created on
+     * denial; this audit row IS the forensic record).
+     *
+     * LOAD-BEARING observability: this audit is the only signal that a
+     * merchant is losing winbacks to the hourly cap. Must remain
+     * queryable by `merchantId` (top-level column, not just context).
+     * Context payload carries `{ currentCount, hourlyGenerationCap,
+     * hourBucket, eventId }` for forensic dedupe across drainer re-runs.
+     */
+    rate_limited: 'ai.rate_limited',
+    /**
      * Provider returned a content-policy block (`AiProviderContentBlockedError`
      * — `finish_reason === 'content_filter'` for OpenAI, `stop_reason ===
      * 'refusal'` for Anthropic, empty content for DeepSeek). Non-retryable;

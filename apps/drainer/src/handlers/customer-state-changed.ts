@@ -10,6 +10,12 @@
  *    3.  Defensive: bail if oldState === newState (producer also gates).
  *    4.  Read Merchant + MerchantSettings + BillingSubscription
  *        (INSIDE `withTenantScope`, OUTSIDE any prisma.$transaction).
+ *    4.5 A2 / §2 — per-merchant hourly rate-limit check (Redis-INCR).
+ *        If over `hourlyGenerationCap` → `ai.rate_limited` audit + log
+ *        + return (NO AiGeneration row created; audit IS the record).
+ *        BEFORE the spend-cap check: cheaper denial, independent failure
+ *        mode (burst-starvation vs budget overrun). See in-line STEP
+ *        4.5 docstring for the §2 gate-point resolution.
  *    5.  Pre-flight spend-ceiling check. If exceeded → audit row +
  *        log + return (NO AiGeneration row created — audit IS the
  *        forensic record).
@@ -50,6 +56,7 @@ import {
   withTenantScope,
 } from '@winback/db';
 import { getLogger } from '@winback/logger';
+import { incrementAndCheck } from '@winback/queue';
 import {
   type RecentOrderProduct,
   buildAdminClient,
@@ -175,12 +182,86 @@ export async function handleCustomerStateChanged(
 
     const settings = await ctx.prisma.merchantSettings.findUnique({
       where: { merchantId: payload.merchantId },
-      select: { monthlyAiSpendCapCents: true, aiTone: true },
+      select: {
+        monthlyAiSpendCapCents: true,
+        hourlyGenerationCap: true,
+        aiTone: true,
+      },
     });
     if (settings === null) {
       log.warn(
         { eventId: row.id, merchantId: payload.merchantId },
         'state_changed: merchant settings missing (defensive — defaults are created at install); skipping',
+      );
+      return;
+    }
+
+    // STEP 4.5 — A2 / POST-EPIC-F §2: per-merchant hourly rate-limit
+    // check. Runs BEFORE the spend-cap check at STEP 5 because rate-
+    // limiting protects against BURST-STARVATION (a flooding merchant
+    // monopolizing the AI Worker), while spend-cap protects against
+    // BUDGET overrun — those are independent failure modes and the
+    // cheaper Redis-INCR check goes first.
+    //
+    // GATE-POINT RATIONALE (resolves POST-EPIC-F §2's apparent
+    // self-contradiction — implementation note recorded in §2):
+    //   §2's literal text says "AI Worker checks rate limit"; its
+    //   pattern reference says "model the rate limiter on the spend-
+    //   ceiling pattern"; its explicit constraint says "Cheap
+    //   rejection before any DB write." The spend-ceiling check lives
+    //   HERE (handler, not worker — see §F-9 step 5 + EPIC-F-DESIGN
+    //   line 393 "WITHOUT creating an AiGeneration row"), so mirror-
+    //   ing the pattern + honoring the "cheap rejection before any
+    //   DB write" constraint pins the gate-point to THIS handler,
+    //   pre-spend-cap. Putting it in the worker would write 4 rows
+    //   per cap-hit (AiGeneration + Message + OutboxEvent + later
+    //   failed-status update), defeating the burst-starvation
+    //   defence's reason for existing.
+    //
+    // Cap-hit semantics: NO `AiGeneration` row is created; the
+    // `ai.rate_limited` AuditLog IS the forensic record (mirrors
+    // `ai.spend_cap_exceeded`). The `lastError` clause in §2's text
+    // is moot — there's no row to set it on.
+    //
+    // FORENSIC NOISE FAILURE MODE: same as spend-cap (a drainer crash
+    // between audit append and outbox-mark-processed → next cycle re-
+    // runs handler, audit fires again, duplicate `ai.rate_limited`
+    // row). Operator dedupes by `context.eventId`.
+    //
+    // OBSERVABILITY: this audit is LOAD-BEARING. It's the ONLY signal
+    // that a merchant is losing winbacks to the cap. `merchantId` is
+    // top-level on AuditLog (not just in context), so "which merchants
+    // hit their cap this hour" is a clean indexed query.
+    const rateLimit = await incrementAndCheck(
+      payload.merchantId,
+      settings.hourlyGenerationCap,
+    );
+    if (!rateLimit.allowed) {
+      const auditLogRepo = new AuditLogRepository(ctx.prisma);
+      await auditLogRepo.append({
+        merchantId: payload.merchantId,
+        shop: merchant.shop,
+        actorType: 'system',
+        actorId: 'drainer',
+        action: AUDIT_ACTIONS.ai.rate_limited,
+        targetType: 'customer',
+        targetId: payload.customerId,
+        context: {
+          currentCount: rateLimit.currentCount,
+          hourlyGenerationCap: settings.hourlyGenerationCap,
+          hourBucket: Math.floor(Date.now() / 3_600_000),
+          eventId: row.id,
+        },
+      });
+      log.info(
+        {
+          eventId: row.id,
+          merchantId: payload.merchantId,
+          customerId: payload.customerId,
+          currentCount: rateLimit.currentCount,
+          hourlyGenerationCap: settings.hourlyGenerationCap,
+        },
+        'state_changed: hourly generation cap exceeded; generation denied (audit row written)',
       );
       return;
     }

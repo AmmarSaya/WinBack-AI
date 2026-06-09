@@ -304,6 +304,16 @@ model MerchantSettings {
   monthlyAiSpendCapCents BigInt @default(50000) // $500/mo
   monthlySendsCap        Int    @default(1000)
 
+  // A2 / POST-EPIC-F §2 — per-merchant hourly AI generation cap.
+  // Burst-starvation defence: a single merchant with daily Black-Friday-
+  // scale state-change volume would monopolize the AI Worker under Epic
+  // F's per-merchant concurrency=1 without this. Enforced in
+  // `handleCustomerStateChanged` BEFORE the spend-cap check (cheap
+  // Redis-INCR rejection before any DB write). Cap-hit → ai.rate_limited
+  // AuditLog row, NO AiGeneration created. Implementation note in
+  // POST-EPIC-F-CONSCIOUS-DECISION.md §2.
+  hourlyGenerationCap    Int    @default(100)
+
   // Structured tone configuration merged into AI prompts (Epic F).
   // Shape (matches the enforced `aiToneSchema` Zod in
   // `@winback/contracts/src/ai-tone.ts` — see that file for the source of

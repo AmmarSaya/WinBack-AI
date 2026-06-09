@@ -25,7 +25,7 @@
  *   - BullMQ enqueue jobId = aiGenerationId (idempotent-replay contract).
  */
 
-import { describe, expect, it, vi, type Mock } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 // Selective mock of @winback/shopify — replace buildAdminClient +
 // fetchRecentOrders with controllable stubs; pass everything else
@@ -56,6 +56,22 @@ vi.mock('@winback/logger', () => ({
   }),
 }));
 
+// A2 / §2 — mock @winback/queue's `incrementAndCheck`. Production calls
+// hit Redis via the shared queue-layer client; here we replace the whole
+// module with a stub that defaults to "allowed". Rate-limit-denied tests
+// override per-call via `incrementAndCheckMock.mockResolvedValueOnce`.
+// vi.mock fully replaces the module; the test does not import any other
+// runtime export from `@winback/queue` (Queues is type-only).
+const { incrementAndCheckMock } = vi.hoisted(() => ({
+  incrementAndCheckMock: vi.fn(async () => ({
+    allowed: true,
+    currentCount: 1,
+  })),
+}));
+vi.mock('@winback/queue', () => ({
+  incrementAndCheck: incrementAndCheckMock,
+}));
+
 import { AUDIT_ACTIONS } from '@winback/contracts';
 import type { OutboxEventRow, WinbackPrisma } from '@winback/db';
 import type { Queues } from '@winback/queue';
@@ -78,7 +94,11 @@ interface MockState {
     installedAt: Date;
     shopDetailsFetchedAt: Date | null;
   } | null;
-  settings: { monthlyAiSpendCapCents: bigint; aiTone: unknown } | null;
+  settings: {
+    monthlyAiSpendCapCents: bigint;
+    hourlyGenerationCap: number;
+    aiTone: unknown;
+  } | null;
   customer: { firstName: string | null; lastName: string | null } | null;
   spendBucketSumMicrocents: bigint;
   aiGenerationRows: { id: string; data: Record<string, unknown> }[];
@@ -126,7 +146,11 @@ function makeCtx(initial: Partial<MockState> = {}): {
     settings:
       'settings' in initial
         ? initial.settings
-        : { monthlyAiSpendCapCents: 50_000n, aiTone: null }, // $500/mo schema default
+        : {
+            monthlyAiSpendCapCents: 50_000n,
+            hourlyGenerationCap: 100,
+            aiTone: null,
+          }, // $500/mo + 100/hr schema defaults
     customer:
       'customer' in initial
         ? initial.customer
@@ -248,6 +272,20 @@ function makeRow(overrides: {
     // Other OutboxEventRow fields are not used by the handler.
   } as unknown as OutboxEventRow;
 }
+
+// ---------------------------------------------------------------------------
+// Per-test mock hygiene
+//
+// `incrementAndCheckMock` is module-level (vi.hoisted). Without clearing
+// call history per-test, suites that assert `toHaveBeenCalledTimes(N)`
+// would see accumulated counts from prior tests. `mockClear` clears call
+// history but NOT the default implementation, so the hoisted "allowed:
+// true" default re-asserts itself after any per-test `mockResolvedValueOnce`
+// override is consumed.
+// ---------------------------------------------------------------------------
+beforeEach(() => {
+  incrementAndCheckMock.mockClear();
+});
 
 // ---------------------------------------------------------------------------
 // Happy path
@@ -453,7 +491,11 @@ describe('handleCustomerStateChanged — spend ceiling check (Step 5)', () => {
 
   it('monthlyAiSpendCapCents=0n → every call denied with audit', async () => {
     const { ctx, state, queueAdd } = makeCtx({
-      settings: { monthlyAiSpendCapCents: 0n, aiTone: null },
+      settings: {
+        monthlyAiSpendCapCents: 0n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+      },
       spendBucketSumMicrocents: 0n, // no prior spend
     });
     const row = makeRow({});
@@ -496,7 +538,11 @@ describe('handleCustomerStateChanged — spend ceiling check (Step 5)', () => {
     // Choose capCents = 10_000n → capMicrocents = 1_000_000_000n →
     // currentSpend = 1_000_000_000n - 15_400n = 999_984_600n.
     const { ctx, state, queueAdd } = makeCtx({
-      settings: { monthlyAiSpendCapCents: 10_000n, aiTone: null },
+      settings: {
+        monthlyAiSpendCapCents: 10_000n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+      },
       spendBucketSumMicrocents: 999_984_600n,
     });
     const row = makeRow({});
@@ -644,5 +690,134 @@ describe('handleCustomerStateChanged — un-enriched-currency WARN log (Q-H1)', 
     expect(state.aiGenerationRows).toHaveLength(1);
     const userPrompt = state.aiGenerationRows[0]!.data.userPrompt as string;
     expect(userPrompt).toContain('EUR');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A2 / POST-EPIC-F §2 — per-merchant hourly generation cap
+//
+// The rate-limit check fires BEFORE the spend-cap check (STEP 4.5 in
+// the handler). Cap-hit → `ai.rate_limited` audit, NO AiGeneration /
+// Message / queue write. Mirrors the `ai.spend_cap_exceeded` pattern.
+// ---------------------------------------------------------------------------
+
+describe('handleCustomerStateChanged — A2 hourly rate-limit gate', () => {
+  it('rate-limit allowed → flow continues; check fires once with merchant cap', async () => {
+    const { ctx, state } = makeCtx({
+      settings: {
+        monthlyAiSpendCapCents: 50_000n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+      },
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    // The check ran exactly once with (merchantId, capPerHour).
+    expect(incrementAndCheckMock).toHaveBeenCalledTimes(1);
+    expect(incrementAndCheckMock).toHaveBeenCalledWith('m_1', 100);
+
+    // Allowed → AiGeneration + Message + queue add happen normally; no
+    // rate-limit audit row written.
+    expect(state.aiGenerationRows).toHaveLength(1);
+    expect(state.messageRows).toHaveLength(1);
+    const rateLimitedAudits = state.auditLogRows.filter(
+      (r) => r.data.action === 'ai.rate_limited',
+    );
+    expect(rateLimitedAudits).toHaveLength(0);
+  });
+
+  it('rate-limit denied → ai.rate_limited audit; NO AiGeneration, NO Message, NO queue enqueue', async () => {
+    incrementAndCheckMock.mockResolvedValueOnce({
+      allowed: false,
+      currentCount: 101,
+    });
+
+    const { ctx, state, queueAdd } = makeCtx({
+      settings: {
+        monthlyAiSpendCapCents: 50_000n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+      },
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    // No DB writes on the row-creation side, no queue enqueue.
+    expect(state.aiGenerationRows).toHaveLength(0);
+    expect(state.messageRows).toHaveLength(0);
+    expect(queueAdd).not.toHaveBeenCalled();
+
+    // Exactly one audit row, action = ai.rate_limited, top-level
+    // merchantId set (load-bearing observability — operator queries
+    // "which merchants hit their cap" without parsing JSON).
+    expect(state.auditLogRows).toHaveLength(1);
+    const audit = state.auditLogRows[0]!.data;
+    expect(audit.action).toBe('ai.rate_limited');
+    expect(audit.merchantId).toBe('m_1');
+    expect(audit.targetType).toBe('customer');
+    expect(audit.targetId).toBe('c_1');
+    expect(audit.actorType).toBe('system');
+    expect(audit.actorId).toBe('drainer');
+
+    // Context carries the §2 forensic shape.
+    const context = audit.context as {
+      currentCount: number;
+      hourlyGenerationCap: number;
+      hourBucket: number;
+      eventId: string;
+    };
+    expect(context.currentCount).toBe(101);
+    expect(context.hourlyGenerationCap).toBe(100);
+    expect(typeof context.hourBucket).toBe('number');
+    expect(context.hourBucket).toBeGreaterThan(0);
+    expect(context.eventId).toBe('evt_1');
+  });
+
+  it('rate-limit denied → fires BEFORE spend-cap check (no spend-cap audit; no AiSpendBucket aggregate)', async () => {
+    incrementAndCheckMock.mockResolvedValueOnce({
+      allowed: false,
+      currentCount: 101,
+    });
+
+    const { ctx, state, prismaMocks } = makeCtx({
+      settings: {
+        monthlyAiSpendCapCents: 50_000n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+      },
+      // If the spend-cap check fires, it would aggregate the bucket and
+      // (with cap=50000 cents + a synthetic spend at the limit) emit a
+      // spend_cap_exceeded audit. We assert it doesn't.
+      spendBucketSumMicrocents: 49_999_999_999n,
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    // Only the rate-limit audit landed; no spend-cap audit.
+    expect(state.auditLogRows).toHaveLength(1);
+    expect(state.auditLogRows[0]!.data.action).toBe('ai.rate_limited');
+
+    // The handler returned before the spend-cap section — proven by the
+    // AiSpendBucket aggregate never being queried.
+    expect(prismaMocks.aiSpendBucketAggregate).not.toHaveBeenCalled();
+  });
+
+  it('uses merchant-specific cap (non-default value flows through to incrementAndCheck)', async () => {
+    const { ctx } = makeCtx({
+      settings: {
+        monthlyAiSpendCapCents: 50_000n,
+        hourlyGenerationCap: 7, // operator-tuned for a small merchant
+        aiTone: null,
+      },
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    expect(incrementAndCheckMock).toHaveBeenCalledWith('m_1', 7);
   });
 });
