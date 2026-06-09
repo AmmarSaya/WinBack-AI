@@ -84,29 +84,63 @@ const SHARED_QUEUE_OPTIONS: Omit<QueueOptions, 'connection'> = {
 let cachedQueues: Queues | null = null;
 let sharedClient: Redis | null = null;
 
+/**
+ * Lazy-init the shared queue-layer ioredis client. Internal helper used
+ * by both `getQueues()` and `getQueueLayerClient()` so the shared client
+ * has ONE construction path and ONE lifecycle (closed by `closeQueues()`).
+ */
+function ensureSharedClient(): Redis {
+  sharedClient ??= createRedisClient('queues.shared');
+  return sharedClient;
+}
+
 export function getQueues(): Queues {
   if (cachedQueues === null) {
-    sharedClient = createRedisClient('queues.shared');
+    const conn = ensureSharedClient();
     cachedQueues = {
       outboxDrain: new Queue(QUEUE_NAMES.outbox.drain, {
-        connection: sharedClient,
+        connection: conn,
         ...SHARED_QUEUE_OPTIONS,
       }),
       cronRollup: new Queue(QUEUE_NAMES.cron.rollup, {
-        connection: sharedClient,
+        connection: conn,
         ...SHARED_QUEUE_OPTIONS,
       }),
       cronSweep: new Queue(QUEUE_NAMES.cron.sweep, {
-        connection: sharedClient,
+        connection: conn,
         ...SHARED_QUEUE_OPTIONS,
       }),
       aiGenerate: new Queue(QUEUE_NAMES.ai.generate, {
-        connection: sharedClient,
+        connection: conn,
         ...SHARED_QUEUE_OPTIONS,
       }),
     };
   }
   return cachedQueues;
+}
+
+/**
+ * Returns the shared queue-layer ioredis client for NON-BLOCKING command
+ * consumers that logically live in the queue layer (A2 rate-limiter is
+ * the first caller — `INCR` + `EVALSHA` are both non-blocking, safe to
+ * multiplex on `queues.shared`).
+ *
+ * Sharing rule (per `redis-client.ts` header):
+ *   - SAFE to share with this connection: any non-blocking command
+ *     (INCR, GET, SET, EVAL, EVALSHA on non-blocking scripts, etc.).
+ *     BullMQ Queue producers (already sharing) and rate-limiter use
+ *     non-blocking only.
+ *   - DO NOT share with this connection: BullMQ Workers (BLPOP/BRPOPLPUSH
+ *     blocking commands), or anything that holds a connection-pinned
+ *     subscription. Those get their own `createRedisClient(...)`.
+ *
+ * Lifecycle is identical to `getQueues()`: lazy-init on first call,
+ * memoized to the same `sharedClient`, closed by `closeQueues()`. A
+ * caller using ONLY `getQueueLayerClient()` (no `getQueues()`) still
+ * needs `closeQueues()` to tear down at shutdown.
+ */
+export function getQueueLayerClient(): Redis {
+  return ensureSharedClient();
 }
 
 /**

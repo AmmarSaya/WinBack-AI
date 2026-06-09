@@ -258,6 +258,61 @@ Batch surface (one batch):
 Surface ACTUAL FILES. Await sign-off.
 ```
 
+### Implementation note (A2, 2026-06-10): gate-point resolution
+
+The Phase-1 trace surfaced a self-contradiction in this section's prose
+that had to be resolved before implementation. Recording the resolution
+here so the next reader doesn't re-litigate it:
+
+- The literal text says "AI Worker checks rate limit BEFORE the
+  spend-ceiling check," but the spend-ceiling check is NOT in the AI
+  Worker. It lives in the **handler** (`handleCustomerStateChanged`
+  STEP 5; EPIC-F-DESIGN §F-9 line 393 — "Cheap denial before any DB
+  write. WITHOUT creating an `AiGeneration` row").
+- The section's explicit constraint — "Cheap rejection before any DB
+  write" — rules out the worker as the gate point. By the time the
+  worker runs, the `AiGeneration` + `Message` + `OutboxEvent` rows
+  ALREADY exist (the handler created them). Putting the cap in the
+  worker would write 4 rows per cap-hit and defeat the burst-starvation
+  defence's reason for existing.
+- The section's pattern reference — "model the rate limiter on the
+  spend-ceiling pattern" — also pins the gate to the **handler**
+  (`ai.spend_cap_exceeded` audit-as-record, no AiGeneration row on
+  denial).
+
+**Resolution: gate in `handleCustomerStateChanged` BEFORE the
+spend-ceiling check (call it STEP 4.5 inline).** Cap-hit emits
+`AUDIT_ACTIONS.ai.rate_limited` and returns; NO `AiGeneration` row is
+created. The literal-text mention of `AiGeneration.status = failed`
+with `lastError = 'hourly_generation_cap_exceeded'` is moot — there's
+no row to set it on.
+
+Other locked implementation details (Phase-1 sign-off):
+
+- **Lua atomicity**: INCR + conditional EXPIRE (if return == 1) in ONE
+  Lua script, cached via `SCRIPT LOAD` + `EVALSHA`. A client crash
+  between INCR and EXPIRE would leave a TTL-less key — that merchant
+  permanently capped at whatever count the key reached. Correctness,
+  not perf.
+- **Connection sharing**: rate-limiter uses the shared `'queues.shared'`
+  ioredis client via a new sanctioned export `getQueueLayerClient()`.
+  Safe because INCR/EVALSHA are non-blocking commands — same property
+  that lets all BullMQ Queues share the connection. Workers (blocking
+  commands: BLPOP, BRPOPLPUSH) still get their own connections.
+- **Audit context shape**: `{ currentCount, hourlyGenerationCap,
+  hourBucket, eventId }`. `merchantId` is the top-level `AuditLog`
+  column (NOT duplicated into context) so "which merchants hit their
+  cap this hour" is an indexed query, not a JSON-parse scan. This audit
+  is load-bearing observability — the only signal that a merchant is
+  losing winbacks to the cap.
+- **Cap-hit behavior**: §2's DROP (no defer, no backlog) is accepted
+  for v1. **Known limitation**: a merchant routinely exceeding
+  100/hour (large merchant, sale-end re-band burst) silently loses
+  legitimate winbacks. Detection signal is the `ai.rate_limited`
+  audit. Mitigations before onboarding a large merchant: per-merchant
+  cap tuning (the column supports it) or a deferral mechanism
+  (separate future scope). Tracked in handoff carry-forwards.
+
 ---
 
 ## Section 3 — Local-DB recent products (drop Shopify API read)
