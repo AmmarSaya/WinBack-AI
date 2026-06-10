@@ -186,6 +186,10 @@ export async function handleCustomerStateChanged(
         monthlyAiSpendCapCents: true,
         hourlyGenerationCap: true,
         aiTone: true,
+        // A4 §4.2 — winback discount policy. `enabled` gates WHETHER (safe-by-
+        // default false); `percent` is HOW MUCH, snapshotted onto the row.
+        winbackDiscountEnabled: true,
+        winbackDiscountPercent: true,
       },
     });
     if (settings === null) {
@@ -455,6 +459,20 @@ export async function handleCustomerStateChanged(
       );
     }
     const promptCurrency = merchant.currency ?? 'USD';
+
+    // A4 §4.2 — discount INTENT decision (Option B; safe-by-default off).
+    // `winbackDiscountEnabled` (merchant opt-in) gates whether this winback
+    // offers a discount. When on, we snapshot `winbackDiscountPercent` NOW so
+    // a later settings change never rewrites a message that already shipped,
+    // and pass a non-null `discount` to flip the V9 token block on. The real
+    // code does not exist yet — the AI Worker mints it AFTER the LLM call and
+    // substitutes it into the response. The snapshot is persisted on the
+    // AiGeneration row (`discountValuePercent`) and ALSO doubles as the
+    // worker's intent flag to mint.
+    const discountValuePercent = settings.winbackDiscountEnabled
+      ? settings.winbackDiscountPercent
+      : null;
+
     const prompt = buildWinbackPrompt({
       customer: {
         firstName: customer.firstName,
@@ -475,8 +493,9 @@ export async function handleCustomerStateChanged(
         aiTone,
       },
       recentProducts,
-      // V9 + Q-D3: no discount in v1. Section 4 batch 4.2 changes this.
-      discount: null,
+      // V9 — INTENT FLAG only. Non-null ⇒ emit the placeholder tokens; the
+      // real values are substituted by the worker post-generation (A4 §4.2).
+      discount: discountValuePercent === null ? null : { valuePercent: discountValuePercent },
     });
 
     // STEP 8 — Atomic 2-write tx: AiGeneration (status=pending) +
@@ -507,6 +526,9 @@ export async function handleCustomerStateChanged(
           modelId: aiConfig.AI_MODEL,
           systemPrompt: prompt.systemPrompt,
           userPrompt: prompt.userPrompt,
+          // A4 §4.2 — snapshot the discount intent + value onto the row.
+          // Non-null tells the worker to mint; null means no discount.
+          discountValuePercent,
         },
         tx,
       );

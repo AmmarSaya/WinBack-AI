@@ -102,6 +102,7 @@ import {
   estimateCostMicrocents,
   getAiConfig,
   selectActiveProvider,
+  substituteDiscountTokens,
 } from '@winback/ai';
 import { AUDIT_ACTIONS, QUEUE_NAMES } from '@winback/contracts';
 import {
@@ -113,6 +114,11 @@ import {
 } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import { createRedisClient } from '@winback/queue';
+import {
+  buildAdminClient,
+  createWinbackDiscountCode,
+  deriveWinbackDiscountCode,
+} from '@winback/shopify';
 import { Worker, type Job } from 'bullmq';
 
 import type { DrainerContext } from '../context.js';
@@ -149,6 +155,15 @@ const AUDIT_ERROR_MESSAGE_MAX_CHARS = 500;
  * broken even on technical-success delivery.
  */
 const GENERATION_STALENESS_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * A4 §4.2 — fallback direct-attribution window (days) for the discount
+ * `endsAt`, used only if `MerchantSettings` is somehow absent at mint time
+ * (the handler already bails on null settings before enqueue). Matches the
+ * `MerchantSettings.attributionDirectWindowDays` schema default.
+ */
+const DEFAULT_ATTRIBUTION_WINDOW_DAYS = 14;
+const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /**
  * Job payload — set by `handleCustomerStateChanged` (Step 2b) at enqueue
@@ -194,6 +209,15 @@ export async function processAiGenerateJob(
         userPrompt: true,
         createdAt: true,
         merchant: { select: { shop: true } },
+        // A4 §4.2 — discount minting (Option B). `discountValuePercent`
+        // (non-null = intent to mint, snapshotted at enqueue) drives the
+        // post-LLM mint. `customer.shopifyCustomerId` is the customer-scoped
+        // target; `customer.deletedAt` reveals a GDPR redaction since enqueue
+        // (the nested relation read is NOT soft-delete-filtered — that filter
+        // only applies to top-level Customer reads — so a redacted customer's
+        // deletedAt is visible here and gates the mint).
+        discountValuePercent: true,
+        customer: { select: { shopifyCustomerId: true, deletedAt: true } },
       },
     });
     if (row === null) {
@@ -305,6 +329,112 @@ export async function processAiGenerateJob(
       result.outputTokens,
     );
 
+    // STEP 3.5 — A4 §4.2: DISCOUNT MINT (Option B) + V9 token substitution.
+    //
+    // Runs AFTER stale-skip + LLM success, BEFORE the completion tx. Only when
+    // `discountValuePercent` is non-null (the enqueue-time intent flag set by
+    // the handler when the merchant has winbackDiscountEnabled). On the
+    // no-discount path this whole block is skipped and `finalText` is the raw
+    // LLM output (the prompt emitted no tokens, so there is nothing to
+    // substitute — substituteDiscountTokens(text, null) would no-op anyway).
+    //
+    // ORDERING / IDEMPOTENCY:
+    //   - The code is DETERMINISTIC (keyed HMAC of merchantId:aiGenerationId).
+    //     A BullMQ retry re-derives the SAME code; Shopify rejects the dup with
+    //     `TAKEN`, which createWinbackDiscountCode turns into success by
+    //     recovering the existing node id via codeDiscountNodeByCode. So a
+    //     crash between this mint and the completion tx self-heals on retry,
+    //     and a concurrent double-pickup mints the SAME discount once (the
+    //     loser's TAKEN returns the winner's id). No orphans, no double-spend
+    //     of margin.
+    //   - The mint is EXTERNAL HTTP — OUTSIDE the completion tx (locked rule).
+    //     A non-TAKEN failure throws and propagates to BullMQ; the LLM call is
+    //     re-spent on retry (accepted, same characteristic as the race-replay
+    //     wasted-spend guard below).
+    //   - NO-MINT-FOR-NON-SENDING: a redacted customer (soft-deleted between
+    //     enqueue and pickup) can't receive a customer-scoped code and
+    //     shouldn't be messaged — terminal markFailed, no mint, no send.
+    let mintedDiscount:
+      | { code: string; shopifyDiscountId: string; valuePercent: number }
+      | null = null;
+    let finalText = result.content;
+
+    if (row.discountValuePercent !== null) {
+      // NO-MINT-FOR-NON-SENDING: a customer redacted (GDPR soft-delete) after
+      // enqueue must not receive a customer-scoped code or a message. The
+      // relation is required (never null), but its deletedAt reveals a
+      // redaction that landed since enqueue. Terminal markFailed (one write,
+      // no audit — mirrors the stale-skip), no mint, return.
+      if (row.customer.deletedAt !== null) {
+        const aiGenRepo = new AiGenerationRepository(ctx.prisma);
+        await aiGenRepo.markFailed({
+          aiGenerationId: payload.aiGenerationId,
+          lastError: 'discount_customer_redacted',
+        });
+        log.warn(
+          {
+            jobId: job.id,
+            aiGenerationId: payload.aiGenerationId,
+            merchantId: payload.merchantId,
+            customerId: payload.customerId,
+          },
+          'ai-generate: discount intended but customer redacted (soft-deleted) since enqueue; markFailed, no mint, return',
+        );
+        return;
+      }
+      const customerGid = row.customer.shopifyCustomerId;
+
+      const settings = await ctx.prisma.merchantSettings.findUnique({
+        where: { merchantId: payload.merchantId },
+        select: { attributionDirectWindowDays: true },
+      });
+      const windowDays =
+        settings?.attributionDirectWindowDays ?? DEFAULT_ATTRIBUTION_WINDOW_DAYS;
+      const endsAt = new Date(Date.now() + windowDays * MS_PER_DAY);
+
+      const code = deriveWinbackDiscountCode(
+        ctx.shopifyConfig.SHOPIFY_API_SECRET,
+        payload.merchantId,
+        payload.aiGenerationId,
+      );
+      const adminClient = buildAdminClient(ctx.prisma, ctx.shopifyConfig);
+      const created = await createWinbackDiscountCode(adminClient, {
+        merchantId: payload.merchantId,
+        customerGid,
+        code,
+        valuePercent: row.discountValuePercent,
+        endsAt,
+      });
+      mintedDiscount = {
+        code: created.code,
+        shopifyDiscountId: created.shopifyDiscountId,
+        valuePercent: row.discountValuePercent,
+      };
+
+      // V9 substitution — replace the placeholder tokens the LLM emitted with
+      // the real values. `missingTokens` is the V9 fail-safe (the LLM ignored
+      // the token instruction): we log it but still ship whatever substitution
+      // was possible — a missing code token means the message simply has no
+      // code, NEVER a hallucinated one.
+      const substituted = substituteDiscountTokens(result.content, {
+        code: created.code,
+        valuePercent: row.discountValuePercent,
+      });
+      finalText = substituted.text;
+      if (substituted.missingTokens.length > 0) {
+        log.warn(
+          {
+            jobId: job.id,
+            aiGenerationId: payload.aiGenerationId,
+            merchantId: payload.merchantId,
+            missingTokens: substituted.missingTokens,
+            alreadyExisted: created.alreadyExisted,
+          },
+          'ai-generate: V9 fail-safe — LLM omitted discount token(s); shipping with partial substitution',
+        );
+      }
+    }
+
     // STEP 4 — 3-WRITE COMPLETION TX (§F-Q7 atomicity lock).
     await ctx.prisma.$transaction(async (extendedTx) => {
       // Prisma 5 typing gap — same cast pattern as the Step 2b handler
@@ -317,12 +447,20 @@ export async function processAiGenerateJob(
       const completed = await aiGenRepo.markCompleted(
         {
           aiGenerationId: payload.aiGenerationId,
-          generatedText: result.content,
+          // A4 §4.2 — the V9-SUBSTITUTED text (tokens replaced with the real
+          // code), not the raw LLM output. Identical to result.content on the
+          // no-discount path.
+          generatedText: finalText,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
           totalTokens: result.totalTokens,
           latencyMs: result.latencyMs,
           costMicrocents,
+          // A4 §4.2 — minted discount (null on the no-discount path). Written
+          // in THIS tx so the discount record and the completed status commit
+          // atomically.
+          discountCode: mintedDiscount?.code ?? null,
+          shopifyDiscountId: mintedDiscount?.shopifyDiscountId ?? null,
         },
         tx,
       );
@@ -357,7 +495,9 @@ export async function processAiGenerateJob(
       await messageRepo.updateGeneratedText(
         {
           aiGenerationId: payload.aiGenerationId,
-          generatedText: result.content,
+          // A4 §4.2 — the substituted text reaches the customer-facing Message
+          // (Epic G's dispatch worker reads from Message, not AiGeneration).
+          generatedText: finalText,
         },
         tx,
       );
@@ -371,6 +511,31 @@ export async function processAiGenerateJob(
         },
         tx,
       );
+
+      // A4 §4.2 — discount.created audit, in the SAME tx as the completion it
+      // records (rule #14). Only when a discount was actually minted, and only
+      // past the race-replay guard (a race-loser writes nothing). The code
+      // string is deliberately NOT in the context — it ships to the customer,
+      // not the audit log.
+      if (mintedDiscount !== null) {
+        const auditLogRepo = new AuditLogRepository(ctx.prisma);
+        await auditLogRepo.append(
+          {
+            merchantId: payload.merchantId,
+            shop,
+            actorType: 'system',
+            actorId: 'drainer',
+            action: AUDIT_ACTIONS.discount.created,
+            targetType: 'ai_generation',
+            targetId: payload.aiGenerationId,
+            context: {
+              shopifyDiscountId: mintedDiscount.shopifyDiscountId,
+              valuePercent: mintedDiscount.valuePercent,
+            },
+          },
+          tx,
+        );
+      }
     });
 
     log.info(

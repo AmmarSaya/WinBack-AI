@@ -61,21 +61,27 @@ export interface RecentProduct {
 }
 
 /**
- * Discount-context input. Lock V9 — these values become placeholder tokens
- * in the rendered prompt, NOT literal text. The post-processor in Section 4
- * batch 4.1 substitutes the real values into `Message.generatedText` at
- * send time.
+ * Discount-context INTENT for the prompt. Lock V9 — the prompt renders only
+ * placeholder tokens (`{{DISCOUNT_CODE}}` / `{{DISCOUNT_VALUE_PERCENT}}`),
+ * never literal values, so a non-null `discount` here is effectively an
+ * INTENT FLAG: it switches the V9 token block on. The real values are NOT
+ * carried here.
+ *
+ * Deliberately NO `code` field (A4 §4.2 / Option B): the discount code does
+ * not exist when this prompt is built. The drainer handler constructs the
+ * prompt at enqueue time; the AI Worker mints the Shopify discount only AFTER
+ * the LLM call succeeds, then substitutes the real code into the response via
+ * `substituteDiscountTokens`. Putting a `code` here would be a fiction the
+ * prompt never reads. `valuePercent` is retained as documentation of what the
+ * `{{DISCOUNT_VALUE_PERCENT}}` token stands for (it is the enqueue-time
+ * snapshot the worker also uses for substitution), but it too is rendered
+ * only as the token, never as a literal.
  */
 export interface WinbackDiscount {
   /**
-   * The code that will replace `{{DISCOUNT_CODE}}`. Stored on the
-   * `AiGeneration` row (Section 4 batch 4.2 schema addition) but does NOT
-   * appear in the prompt — the LLM only sees the placeholder token.
-   */
-  readonly code: string;
-  /**
-   * The percentage value that will replace `{{DISCOUNT_VALUE_PERCENT}}`.
-   * Same forensic treatment — stored, not exposed to the LLM.
+   * The percentage value the `{{DISCOUNT_VALUE_PERCENT}}` token stands for.
+   * Rendered as the token in the prompt (never the literal number); the
+   * worker substitutes the real value into the LLM output post-generation.
    */
   readonly valuePercent: number;
 }

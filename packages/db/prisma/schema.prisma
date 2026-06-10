@@ -314,6 +314,18 @@ model MerchantSettings {
   // POST-EPIC-F-CONSCIOUS-DECISION.md §2.
   hourlyGenerationCap    Int    @default(100)
 
+  // Winback discount (A4 / POST-EPIC-F §4.2). SAFE-BY-DEFAULT: discounting is
+  // a SEPARATE opt-in from re-engagement messaging — auto-minting a code on
+  // every winback would spend the merchant's margin without their consent. So
+  // `winbackDiscountEnabled` defaults FALSE; the merchant turns it on in
+  // settings. `winbackDiscountPercent` is HOW MUCH — snapshotted onto each
+  // AiGeneration at enqueue so a later settings change never rewrites the
+  // discount a historical message already shipped. The two are DELIBERATELY
+  // distinct fields: `percent` is NOT overloaded as the on/off signal (that
+  // would conflate "feature off" / "no discount" / "a real 0% discount").
+  winbackDiscountEnabled Boolean @default(false)
+  winbackDiscountPercent Int     @default(15)
+
   // Structured tone configuration merged into AI prompts (Epic F).
   // Shape (matches the enforced `aiToneSchema` Zod in
   // `@winback/contracts/src/ai-tone.ts` — see that file for the source of
@@ -1081,6 +1093,19 @@ model AiGeneration {
   // Aggregated into cents only at the AiSpendBucket rollup layer.
   // Null until completed.
   costMicrocents BigInt?
+
+  // Discount (A4 / POST-EPIC-F §4.2). `discountValuePercent` is set at ENQUEUE
+  // by the drainer handler (snapshot of MerchantSettings.winbackDiscountPercent
+  // at decision time) and DOUBLES AS THE INTENT FLAG — non-null means this
+  // winback offers a discount, so the stored prompt emitted the V9 placeholder
+  // tokens. `discountCode` + `shopifyDiscountId` are set by the AI Worker AFTER
+  // minting the Shopify discount (Option B — post-LLM-success), in the SAME tx
+  // as the completion write. All three nullable: a winback with discounting
+  // disabled has all three null and ships no code. Snapshot-at-generation-time
+  // like the trigger context above — never retroactively rewritten.
+  discountValuePercent Int?
+  discountCode         String?
+  shopifyDiscountId    String?
 
   status    AiGenerationStatus @default(pending)
   failedAt  DateTime?

@@ -46,7 +46,7 @@
  *               30min, connection name 'worker.ai-generate'.
  */
 
-import { describe, expect, it, vi, type Mock } from 'vitest';
+import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 // ---------------------------------------------------------------------------
 // Module mocks
@@ -98,6 +98,19 @@ vi.mock('@winback/queue', () => ({
   createRedisClient: vi.fn(() => fakeRedisClient),
 }));
 
+// Mock @winback/shopify's discount-mint surface (A4 §4.2). The Option-B mint
+// path calls buildAdminClient → createWinbackDiscountCode (real Admin HTTP) +
+// deriveWinbackDiscountCode. Stub all three so unit tests drive the mint
+// branch deterministically with no Shopify dependency. Existing non-discount
+// tests never enter the branch (discountValuePercent: null) so the stubs are
+// inert for them. `substituteDiscountTokens` is NOT stubbed — it's pure and
+// comes from @winback/ai (passed through), so the real V9 substitution runs.
+vi.mock('@winback/shopify', () => ({
+  buildAdminClient: vi.fn(() => ({ __adminClient: true })),
+  deriveWinbackDiscountCode: vi.fn(() => 'WB-TESTCODE00000000'),
+  createWinbackDiscountCode: vi.fn(),
+}));
+
 // ---------------------------------------------------------------------------
 // Imports after mocks
 // ---------------------------------------------------------------------------
@@ -114,6 +127,7 @@ import { AUDIT_ACTIONS } from '@winback/contracts';
 import type { WinbackPrisma } from '@winback/db';
 import type { Queues } from '@winback/queue';
 import { createRedisClient } from '@winback/queue';
+import { createWinbackDiscountCode, deriveWinbackDiscountCode } from '@winback/shopify';
 import type { ShopifyConfig } from '@winback/shopify';
 import type { Job } from 'bullmq';
 
@@ -142,6 +156,14 @@ interface AiGenRowMock {
   // the stale path.
   createdAt: Date;
   merchant: { shop: string };
+  // A4 §4.2 — discount minting (Option B). All optional: the `findUnique`
+  // mock defaults `discountValuePercent` to `null` (no discount → worker skips
+  // the mint branch), so existing non-discount rows need not set it. Discount
+  // tests set `discountValuePercent` + `customer` explicitly. `customer` +
+  // `shopifyDiscountId` are read ONLY inside the mint branch.
+  discountValuePercent?: number | null;
+  shopifyDiscountId?: string | null;
+  customer?: { shopifyCustomerId: string; deletedAt: Date | null } | null;
 }
 
 interface MockState {
@@ -156,11 +178,14 @@ interface MockState {
     update: Record<string, unknown>;
   }[];
   auditLogRows: { data: Record<string, unknown> }[];
+  /** A4 §4.2 — attributionDirectWindowDays returned by merchantSettings. */
+  attributionDirectWindowDays: number;
 }
 
 interface PrismaMocks {
   findUnique: Mock;
   aiGenUpdateMany: Mock;
+  merchantSettingsFindUnique: Mock;
   messageUpdateMany: Mock;
   spendBucketUpsert: Mock;
   auditLogCreate: Mock;
@@ -186,6 +211,10 @@ function makeCtx(initial: Partial<MockState> = {}): {
             userPrompt: 'Customer Alice has not ordered in 45 days.',
             createdAt: new Date(),
             merchant: { shop: 'foo.myshopify.com' },
+            // Default row offers NO discount — keeps every existing test on
+            // the original (no-mint) path. Discount-path tests set this
+            // explicitly + provide `customer`.
+            discountValuePercent: null,
           },
     markCompletedUpdatedCount: initial.markCompletedUpdatedCount ?? 1,
     markCompletedRows: [],
@@ -193,9 +222,24 @@ function makeCtx(initial: Partial<MockState> = {}): {
     messageUpdates: [],
     spendBucketUpserts: [],
     auditLogRows: [],
+    attributionDirectWindowDays: initial.attributionDirectWindowDays ?? 14,
   };
 
-  const findUnique = vi.fn(async () => state.aiGenRow);
+  // Default-injects `discountValuePercent: null` so existing non-discount mock
+  // rows (which predate A4 §4.2) take the no-mint path. Rows that set it
+  // explicitly override. Also surfaces `customer`/`shopifyDiscountId` as null
+  // when unset, matching the worker's `?? null` reads. (Tests that override
+  // findUnique directly must include these fields themselves.)
+  const findUnique = vi.fn(async () =>
+    state.aiGenRow === null
+      ? null
+      : {
+          discountValuePercent: null,
+          shopifyDiscountId: null,
+          customer: null,
+          ...state.aiGenRow,
+        },
+  );
 
   // aiGeneration.updateMany routes by data.status — markCompleted writes
   // status='completed'; markFailed writes status='failed'. Returns
@@ -238,6 +282,12 @@ function makeCtx(initial: Partial<MockState> = {}): {
     return { id: 'audit_1' };
   });
 
+  // A4 §4.2 — the worker reads attributionDirectWindowDays in the mint branch
+  // (for the discount endsAt). Only called when discountValuePercent !== null.
+  const merchantSettingsFindUnique = vi.fn(async () => ({
+    attributionDirectWindowDays: state.attributionDirectWindowDays,
+  }));
+
   // $transaction(fn) — the inner fn receives the same prisma stub so
   // the tx-cast pattern in the worker is exercised end-to-end.
   const transaction = vi.fn(async (fn: (tx: unknown) => Promise<unknown>) => {
@@ -246,6 +296,7 @@ function makeCtx(initial: Partial<MockState> = {}): {
 
   const prisma = {
     aiGeneration: { findUnique, updateMany: aiGenUpdateMany },
+    merchantSettings: { findUnique: merchantSettingsFindUnique },
     message: { updateMany: messageUpdateMany },
     aiSpendBucket: { upsert: spendBucketUpsert },
     auditLog: { create: auditLogCreate },
@@ -263,6 +314,7 @@ function makeCtx(initial: Partial<MockState> = {}): {
     prismaMocks: {
       findUnique,
       aiGenUpdateMany,
+      merchantSettingsFindUnique,
       messageUpdateMany,
       spendBucketUpsert,
       auditLogCreate,
@@ -776,6 +828,7 @@ describe('processAiGenerateJob — ordering invariants', () => {
         userPrompt: 'STORED_USER_PROMPT',
         createdAt: new Date(),
         merchant: { shop: 'foo.myshopify.com' },
+        discountValuePercent: null,
       };
     });
     const generate = setProviderGenerate(async () => {
@@ -988,5 +1041,210 @@ describe('processAiGenerateJob — A5 stale-generation skip', () => {
     setProviderGenerate(async () => happyResult());
 
     await expect(processAiGenerateJob(ctx, makeJob())).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A4 / POST-EPIC-F §4.2 — discount mint (Option B) + V9 substitution
+//
+// STEP 3.5 in `processAiGenerateJob`: after stale-skip + LLM success, when
+// `row.discountValuePercent !== null`, derive the deterministic code, mint a
+// customer-scoped Shopify discount, substitute the V9 tokens in the LLM
+// output, and persist code + shopifyDiscountId + discount.created audit in the
+// completion tx. `createWinbackDiscountCode` / `buildAdminClient` /
+// `deriveWinbackDiscountCode` are mocked at the @winback/shopify boundary; the
+// REAL `substituteDiscountTokens` (pure, from @winback/ai) runs.
+// ---------------------------------------------------------------------------
+
+const TOKENED_CONTENT =
+  'Hey Alice, use {{DISCOUNT_CODE}} for {{DISCOUNT_VALUE_PERCENT}}% off!';
+const STUB_CODE = 'WB-TESTCODE00000000';
+const STUB_DISCOUNT_ID = 'gid://shopify/DiscountCodeNode/777';
+
+function discountRow(overrides: Partial<AiGenRowMock> = {}): AiGenRowMock {
+  return {
+    status: 'pending',
+    provider: 'deepseek',
+    modelId: 'deepseek-v4-flash',
+    systemPrompt: 'sys',
+    userPrompt: 'usr {{DISCOUNT_CODE}}',
+    createdAt: new Date(),
+    merchant: { shop: 'foo.myshopify.com' },
+    discountValuePercent: 15,
+    shopifyDiscountId: null,
+    customer: { shopifyCustomerId: 'gid://shopify/Customer/42', deletedAt: null },
+    ...overrides,
+  };
+}
+
+describe('processAiGenerateJob — A4 §4.2 discount mint (Option B)', () => {
+  beforeEach(() => {
+    vi.mocked(createWinbackDiscountCode).mockReset();
+    vi.mocked(deriveWinbackDiscountCode).mockReset();
+    vi.mocked(deriveWinbackDiscountCode).mockReturnValue(STUB_CODE);
+  });
+
+  it('discount intended + customer present → mints (customer-scoped, derived code, window endsAt), substitutes tokens, persists code + shopifyDiscountId, writes discount.created audit', async () => {
+    const { ctx, state, prismaMocks } = makeCtx({ aiGenRow: discountRow() });
+    vi.mocked(createWinbackDiscountCode).mockResolvedValue({
+      code: STUB_CODE,
+      shopifyDiscountId: STUB_DISCOUNT_ID,
+      alreadyExisted: false,
+    });
+    setProviderGenerate(async () => happyResult({ content: TOKENED_CONTENT }));
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    // Mint called once with customer-scoped args + derived code.
+    expect(createWinbackDiscountCode).toHaveBeenCalledTimes(1);
+    const mintArgs = vi.mocked(createWinbackDiscountCode).mock.calls[0]![1];
+    expect(mintArgs).toMatchObject({
+      merchantId: 'm_1',
+      customerGid: 'gid://shopify/Customer/42',
+      code: STUB_CODE,
+      valuePercent: 15,
+    });
+    expect(mintArgs.endsAt).toBeInstanceOf(Date);
+    expect(deriveWinbackDiscountCode).toHaveBeenCalledTimes(1);
+    // merchantSettings read for the attribution window.
+    expect(prismaMocks.merchantSettingsFindUnique).toHaveBeenCalledTimes(1);
+
+    // Substituted text reached BOTH the AiGeneration completion + the Message.
+    const expectedText = 'Hey Alice, use WB-TESTCODE00000000 for 15% off!';
+    expect(state.markCompletedRows[0]!.data.generatedText).toBe(expectedText);
+    expect(state.messageUpdates[0]!.data.generatedText).toBe(expectedText);
+    // Discount columns persisted in the completion tx.
+    expect(state.markCompletedRows[0]!.data.discountCode).toBe(STUB_CODE);
+    expect(state.markCompletedRows[0]!.data.shopifyDiscountId).toBe(STUB_DISCOUNT_ID);
+
+    // discount.created audit, same tx; the CODE is NOT in the context.
+    expect(state.auditLogRows).toHaveLength(1);
+    const audit = state.auditLogRows[0]!.data;
+    expect(audit.action).toBe(AUDIT_ACTIONS.discount.created);
+    expect(audit.targetType).toBe('ai_generation');
+    expect(audit.targetId).toBe('gen_1');
+    expect(audit.context).toEqual({
+      shopifyDiscountId: STUB_DISCOUNT_ID,
+      valuePercent: 15,
+    });
+    expect(JSON.stringify(audit.context)).not.toContain(STUB_CODE);
+  });
+
+  it('discount disabled (discountValuePercent null) → no mint, no merchantSettings read, no discount audit, raw LLM text shipped', async () => {
+    const { ctx, state, prismaMocks } = makeCtx(); // default row: no discount
+    setProviderGenerate(async () => happyResult({ content: 'Plain message, no tokens.' }));
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    expect(createWinbackDiscountCode).not.toHaveBeenCalled();
+    expect(prismaMocks.merchantSettingsFindUnique).not.toHaveBeenCalled();
+    expect(state.auditLogRows).toHaveLength(0);
+    expect(state.markCompletedRows[0]!.data.generatedText).toBe('Plain message, no tokens.');
+    expect(state.markCompletedRows[0]!.data.discountCode).toBeNull();
+    expect(state.markCompletedRows[0]!.data.shopifyDiscountId).toBeNull();
+  });
+
+  it('discount intended but customer redacted (deletedAt set) → markFailed(discount_customer_redacted); NO mint, NO completion tx, NO audit', async () => {
+    const { ctx, state, prismaMocks } = makeCtx({
+      aiGenRow: discountRow({
+        customer: { shopifyCustomerId: 'gid://shopify/Customer/42', deletedAt: new Date() },
+      }),
+    });
+    const generate = setProviderGenerate(async () =>
+      happyResult({ content: TOKENED_CONTENT }),
+    );
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    // Provider WAS called (mint gate is post-LLM-success), but the redacted
+    // customer is terminal: no mint, no completion tx, no audit.
+    expect(generate).toHaveBeenCalledTimes(1);
+    expect(createWinbackDiscountCode).not.toHaveBeenCalled();
+    expect(prismaMocks.transaction).not.toHaveBeenCalled();
+    expect(state.markCompletedRows).toHaveLength(0);
+    expect(state.auditLogRows).toHaveLength(0);
+    expect(state.markFailedRows).toHaveLength(1);
+    expect(state.markFailedRows[0]!.data.lastError).toBe('discount_customer_redacted');
+  });
+
+  it('TAKEN self-heal: createWinbackDiscountCode returns alreadyExisted=true → still completes with the recovered id + audit', async () => {
+    const { ctx, state } = makeCtx({ aiGenRow: discountRow() });
+    vi.mocked(createWinbackDiscountCode).mockResolvedValue({
+      code: STUB_CODE,
+      shopifyDiscountId: STUB_DISCOUNT_ID,
+      alreadyExisted: true,
+    });
+    setProviderGenerate(async () => happyResult({ content: TOKENED_CONTENT }));
+
+    await processAiGenerateJob(ctx, makeJob());
+
+    expect(state.markCompletedRows).toHaveLength(1);
+    expect(state.markCompletedRows[0]!.data.shopifyDiscountId).toBe(STUB_DISCOUNT_ID);
+    expect(state.auditLogRows).toHaveLength(1);
+  });
+
+  it('V9 fail-safe: LLM omitted the tokens → completes without throwing; text ships as-is (no hallucinated code), discount still recorded', async () => {
+    const { ctx, state } = makeCtx({ aiGenRow: discountRow() });
+    vi.mocked(createWinbackDiscountCode).mockResolvedValue({
+      code: STUB_CODE,
+      shopifyDiscountId: STUB_DISCOUNT_ID,
+      alreadyExisted: false,
+    });
+    setProviderGenerate(async () => happyResult({ content: 'We miss you, come back!' }));
+
+    await expect(processAiGenerateJob(ctx, makeJob())).resolves.toBeUndefined();
+
+    const text = state.markCompletedRows[0]!.data.generatedText as string;
+    expect(text).toBe('We miss you, come back!');
+    expect(text).not.toContain(STUB_CODE);
+    // The discount was still minted + tracked (V9 fail-safe logs, doesn't abort).
+    expect(state.markCompletedRows[0]!.data.discountCode).toBe(STUB_CODE);
+  });
+
+  it('endsAt = now + attributionDirectWindowDays (pinned clock)', async () => {
+    const pinnedNow = new Date('2026-06-10T12:00:00.000Z').getTime();
+    vi.useFakeTimers();
+    vi.setSystemTime(pinnedNow);
+    try {
+      const { ctx } = makeCtx({
+        aiGenRow: discountRow(),
+        attributionDirectWindowDays: 30,
+      });
+      vi.mocked(createWinbackDiscountCode).mockResolvedValue({
+        code: STUB_CODE,
+        shopifyDiscountId: STUB_DISCOUNT_ID,
+        alreadyExisted: false,
+      });
+      setProviderGenerate(async () => happyResult({ content: TOKENED_CONTENT }));
+
+      await processAiGenerateJob(ctx, makeJob());
+
+      const mintArgs = vi.mocked(createWinbackDiscountCode).mock.calls[0]![1];
+      const expectedEndsAt = pinnedNow + 30 * 24 * 60 * 60 * 1000;
+      expect(mintArgs.endsAt.getTime()).toBe(expectedEndsAt);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('race-replay with discount intended (markCompleted updatedCount=0) → mint ran (idempotent) but NO message update, NO audit', async () => {
+    const { ctx, state } = makeCtx({
+      aiGenRow: discountRow(),
+      markCompletedUpdatedCount: 0,
+    });
+    vi.mocked(createWinbackDiscountCode).mockResolvedValue({
+      code: STUB_CODE,
+      shopifyDiscountId: STUB_DISCOUNT_ID,
+      alreadyExisted: false,
+    });
+    setProviderGenerate(async () => happyResult({ content: TOKENED_CONTENT }));
+
+    await expect(processAiGenerateJob(ctx, makeJob())).resolves.toBeUndefined();
+
+    // Mint ran (deterministic + idempotent on Shopify's side); the race-loser
+    // persists nothing past the markCompleted updatedCount=0 guard.
+    expect(createWinbackDiscountCode).toHaveBeenCalledTimes(1);
+    expect(state.messageUpdates).toHaveLength(0);
+    expect(state.auditLogRows).toHaveLength(0);
   });
 });

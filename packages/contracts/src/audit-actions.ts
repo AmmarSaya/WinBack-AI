@@ -124,6 +124,28 @@ export const AUDIT_ACTIONS = {
      */
     content_blocked: 'ai.content_blocked',
   },
+  /**
+   * Discount lifecycle actions (A4 / POST-EPIC-F §4 batch 4.2). Written by
+   * the AI Worker (`apps/drainer/src/workers/ai-generate.worker.ts`) in the
+   * SAME tx as the `AiGeneration` completion that records the minted Shopify
+   * discount on a winback message (rule #14 — audit-in-same-tx as the state
+   * transition it records). `actorType` is `system`; `actorId` is `'drainer'`.
+   *
+   * The `4.3` cleanup cron and its `discount.expired` action are DEFERRED —
+   * Shopify-side `endsAt` (set to `attributionDirectWindowDays` at creation)
+   * expires the code server-side, so cleanup is housekeeping, not correctness.
+   */
+  discount: {
+    /**
+     * A customer-scoped, single-use Shopify discount code was minted for a
+     * winback message. The code is a deterministic keyed-HMAC value
+     * (idempotent on retry — Shopify rejects duplicate codes with `TAKEN`,
+     * which the worker treats as success). Context carries
+     * `{ shopifyDiscountId, valuePercent }`; the code string itself is NOT
+     * logged in the audit context (it ships to the customer, not the log).
+     */
+    created: 'discount.created',
+  },
 } as const;
 
 /**
@@ -145,7 +167,8 @@ export type AuditAction =
   | (typeof AUDIT_ACTIONS.outbox)[keyof typeof AUDIT_ACTIONS.outbox]
   | (typeof AUDIT_ACTIONS.customer)[keyof typeof AUDIT_ACTIONS.customer]
   | (typeof AUDIT_ACTIONS.merchant)[keyof typeof AUDIT_ACTIONS.merchant]
-  | (typeof AUDIT_ACTIONS.ai)[keyof typeof AUDIT_ACTIONS.ai];
+  | (typeof AUDIT_ACTIONS.ai)[keyof typeof AUDIT_ACTIONS.ai]
+  | (typeof AUDIT_ACTIONS.discount)[keyof typeof AUDIT_ACTIONS.discount];
 
 /** Runtime Set of every registered action, for shape tests + iteration. */
 export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
@@ -154,6 +177,7 @@ export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   ...Object.values(AUDIT_ACTIONS.customer),
   ...Object.values(AUDIT_ACTIONS.merchant),
   ...Object.values(AUDIT_ACTIONS.ai),
+  ...Object.values(AUDIT_ACTIONS.discount),
 ] as AuditAction[]);
 
 /**
