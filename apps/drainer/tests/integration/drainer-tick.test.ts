@@ -18,6 +18,14 @@ import {
   resetDb,
 } from '@winback/db/test-utils';
 import { ValidationError } from '@winback/errors';
+import {
+  BackfillRunner,
+  ORDER_BACKFILL_RESOURCE,
+  OrderPageProcessor,
+  type PageFetcher,
+  type ResourcePage,
+  type ShopifyOrderNode,
+} from '@winback/shopify';
 import { afterAll, beforeEach, describe, expect, it } from 'vitest';
 
 import type { DrainerContext } from '../../src/context.js';
@@ -1843,6 +1851,149 @@ describe('drainer integration (real Postgres)', () => {
         }),
       );
       expect(audits).toHaveLength(0);
+    });
+  });
+
+  // ---------------------------------------------------------------------
+  // order backfill → then score (real DB)
+  //
+  // The end-to-end "backfill then score" proof + the silent-no-recompute
+  // property. Drives the real BackfillRunner + OrderPageProcessor (which
+  // adapts GraphQL nodes → upsertFromWebhook) against the real DB with a
+  // MOCK fetcher (no Shopify API), then runs bulkRescore to confirm the
+  // now-populated cohort scores correctly.
+  // ---------------------------------------------------------------------
+
+  describe('order backfill → then score (real DB)', () => {
+    function moneyBag(amount: string) {
+      return {
+        shopMoney: { amount, currencyCode: 'USD' },
+        presentmentMoney: { amount, currencyCode: 'USD' },
+      };
+    }
+
+    function orderNode(args: {
+      orderId: number;
+      customerGid: string;
+      placedAt: Date;
+      totalAmount: string;
+    }): ShopifyOrderNode {
+      return {
+        id: `gid://shopify/Order/${String(args.orderId)}`,
+        name: `#${String(args.orderId)}`,
+        test: false,
+        displayFinancialStatus: 'PAID',
+        displayFulfillmentStatus: 'FULFILLED',
+        currencyCode: 'USD',
+        presentmentCurrencyCode: 'USD',
+        createdAt: args.placedAt.toISOString(),
+        updatedAt: args.placedAt.toISOString(),
+        processedAt: args.placedAt.toISOString(),
+        cancelledAt: null,
+        subtotalPriceSet: moneyBag(args.totalAmount),
+        totalPriceSet: moneyBag(args.totalAmount),
+        totalTaxSet: moneyBag('0.00'),
+        totalDiscountsSet: moneyBag('0.00'),
+        customer: { id: args.customerGid },
+        lineItems: { nodes: [] },
+      };
+    }
+
+    /** Single-page mock fetcher returning the given nodes. */
+    function mockFetcher(nodes: readonly ShopifyOrderNode[]): PageFetcher<ShopifyOrderNode> {
+      return {
+        fetch: async (): Promise<ResourcePage<ShopifyOrderNode>> => ({
+          items: nodes,
+          endCursor: null,
+          hasNextPage: false,
+        }),
+      };
+    }
+
+    function makeService(): CustomerScoreService {
+      const client = getTestClient();
+      return new CustomerScoreService(
+        new CustomerScoreRepository(client),
+        new AuditLogRepository(client),
+      );
+    }
+
+    it('backfills orders SILENTLY (no CustomerScore, no events), then bulkRescore reads the populated cohort', async () => {
+      const merchantId = await createTestMerchant(SHOP, { scoringInitializedAt: null });
+      const now = new Date('2026-06-10T00:00:00.000Z');
+      const daysAgo = (n: number): Date => new Date(now.getTime() - n * 86_400_000);
+
+      // 5 customers (GIDs match the order nodes' customer.id) — no orders yet.
+      const nodes: ShopifyOrderNode[] = [];
+      for (let i = 0; i < 5; i++) {
+        const customerGid = `gid://shopify/Customer/${String(900001 + i)}`;
+        await createTestCustomer({ merchantId, shopifyCustomerId: customerGid });
+        nodes.push(
+          orderNode({
+            orderId: 800001 + i,
+            customerGid,
+            placedAt: daysAgo(10 + i * 20), // 10,30,50,70,90 days → varied recency
+            totalAmount: `${String(100 + i * 10)}.00`,
+          }),
+        );
+      }
+
+      // Run the REAL backfill (real runner + processor + adapter +
+      // upsertFromWebhook) with the mock fetcher.
+      const runner = new BackfillRunner<ShopifyOrderNode>(
+        getTestClient(),
+        mockFetcher(nodes),
+        new OrderPageProcessor(),
+      );
+      const result = await runner.run({ merchantId, resource: ORDER_BACKFILL_RESOURCE });
+      expect(result.finalStatus).toBe('completed');
+      expect(result.itemsProcessed).toBe(5);
+
+      // (a) 5 Order rows landed, paid, non-test, customer FK resolved,
+      //     money in cents (100.00 → 10000).
+      const orders = await assertRead(() =>
+        getTestClient().order.findMany({ where: { merchantId }, orderBy: { placedAt: 'asc' } }),
+      );
+      expect(orders).toHaveLength(5);
+      expect(orders.every((o) => o.financialStatus === 'paid')).toBe(true);
+      expect(orders.every((o) => !o.isTest)).toBe(true);
+      expect(orders.every((o) => o.customerId !== null)).toBe(true);
+      // Money: each "1NN.00" decimal → NN000 cents. Assert the full set
+      // (index-independent — orders are placedAt-asc, not seed order).
+      const centsSorted = orders
+        .map((o) => o.totalAmountCents)
+        .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+      expect(centsSorted).toEqual([10000n, 11000n, 12000n, 13000n, 14000n]);
+
+      // (b) SILENT — the backfill did NOT score. No CustomerScore rows, no
+      //     customer.state_changed events (recompute lives in the handler,
+      //     not the repo the processor calls).
+      const scoresBefore = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scoresBefore).toHaveLength(0);
+      const eventsBefore = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(eventsBefore).toHaveLength(0);
+
+      // (c) NOW score — bulkRescore reads the populated cohort. With 5
+      //     paid-in-365d customers the cohort is sufficient → they resolve
+      //     as SCORABLE (real quintiles), NOT account-age lurkers.
+      const summary = await withTenantScope(merchantId, async () =>
+        makeService().bulkRescore(getTestClient(), { merchantId, now, actorId: 'test-op' }),
+      );
+      expect(summary.cohortSize).toBe(5); // the backfilled orders populate the cohort
+      expect(summary.customersScored).toBe(5);
+
+      const scoresAfter = await assertRead(() =>
+        getTestClient().customerScore.findMany({ where: { merchantId } }),
+      );
+      expect(scoresAfter).toHaveLength(5);
+      // Scorable (cohort ≥ threshold) → real quintiles, NOT null/insufficient.
+      expect(scoresAfter.every((s) => s.rQuintile !== null)).toBe(true);
     });
   });
 });

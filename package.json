@@ -48,7 +48,8 @@
     "scheduler:start": "pnpm --filter @winback/scheduler-app start",
     "cli:outbox:replay": "pnpm --filter @winback/cli-app outbox:replay",
     "cli:outbox:dead-letter": "pnpm --filter @winback/cli-app outbox:dead-letter",
-    "cli:scoring:bulk-rescore": "pnpm --filter @winback/cli-app scoring:bulk-rescore"
+    "cli:scoring:bulk-rescore": "pnpm --filter @winback/cli-app scoring:bulk-rescore",
+    "cli:backfill:orders": "pnpm --filter @winback/cli-app backfill:orders"
   },
   "devDependencies": {
     "@types/node": "^25.9.1",

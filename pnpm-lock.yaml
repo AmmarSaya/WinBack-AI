@@ -65,6 +65,9 @@ importers:
       '@winback/logger':
         specifier: workspace:*
         version: link:../../packages/logger
+      '@winback/shopify':
+        specifier: workspace:*
+        version: link:../../packages/shopify
     devDependencies:
       vitest:
         specifier: 2.1.9
