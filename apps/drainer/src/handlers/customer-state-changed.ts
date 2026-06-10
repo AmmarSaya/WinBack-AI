@@ -51,17 +51,13 @@ import {
   AuditLogRepository,
   type CustomerStateValue,
   MessageRepository,
+  OrderRepository,
   type OutboxEventRow,
   customerStateChangedPayloadSchema,
   withTenantScope,
 } from '@winback/db';
 import { getLogger } from '@winback/logger';
 import { incrementAndCheck } from '@winback/queue';
-import {
-  type RecentOrderProduct,
-  buildAdminClient,
-  fetchRecentOrders,
-} from '@winback/shopify';
 
 import type { DrainerContext } from '../context.js';
 
@@ -358,28 +354,28 @@ export async function handleCustomerStateChanged(
       return;
     }
 
-    // STEP 6b — Shopify recent-orders read. EXTERNAL HTTP — MUST run
-    // OUTSIDE prisma.$transaction (locked rule: no external HTTP inside
-    // a Postgres tx). Handler swallows + falls back to [] on failure so
-    // Shopify outage doesn't block winback message generation.
-    let recentProducts: readonly RecentOrderProduct[] = [];
-    try {
-      const adminClient = buildAdminClient(ctx.prisma, ctx.shopifyConfig);
-      recentProducts = await fetchRecentOrders(adminClient, {
-        merchantId: payload.merchantId,
-        customerId: payload.shopifyCustomerId,
-      });
-    } catch (err) {
-      log.warn(
-        {
-          err,
-          eventId: row.id,
-          merchantId: payload.merchantId,
-          customerId: payload.customerId,
-        },
-        'state_changed: fetchRecentOrders failed; proceeding with empty recentProducts',
-      );
-    }
+    // STEP 6b — Recent purchased product titles for prompt context.
+    // A4 / POST-EPIC-F §3: read from local Postgres (Order + OrderLineItem)
+    // instead of the Shopify Admin GraphQL API. The titles are already synced
+    // via orders/create webhook ingest + the operator order-backfill (both
+    // write OrderLineItem.title through OrderRepository.upsertFromWebhook).
+    // Dropping the external call removes latency, a leaky-bucket token, and a
+    // failure surface — and makes prompt construction resilient to Shopify
+    // outages.
+    //
+    // This is a LOCAL read inside the active tenant scope (NOT external HTTP),
+    // so unlike the prior Shopify call it has NO try/catch fallback: an empty
+    // result (customer has no qualifying paid orders) is the normal graceful-
+    // omit path (buildWinbackPrompt omits the section when recentProducts is
+    // empty), while a real DB error propagates to the drainer's per-row
+    // markFailed. See OrderRepository.findRecentPurchasedTitles for the
+    // ordering / isTest / primary-item decisions (A4 §3).
+    const orderRepo = new OrderRepository(ctx.prisma);
+    const recentProductTitles = await orderRepo.findRecentPurchasedTitles({
+      merchantId: payload.merchantId,
+      customerId: payload.customerId,
+    });
+    const recentProducts = recentProductTitles.map((title) => ({ title }));
 
     // STEP 6c — Active price rules: DELIBERATELY OMITTED.
     //
