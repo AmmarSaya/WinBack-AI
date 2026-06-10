@@ -37,10 +37,10 @@
  * `estimateCostMicrocents`, and the typed error classes pass through
  * (real implementations exercised).
  *
- * `@winback/shopify` is mocked the same way for `fetchRecentOrders` so
- * the integration harness never reaches Shopify (the handler swallows
- * fetch failures + falls back to empty list, but mocking eliminates
- * the network attempt entirely).
+ * `@winback/shopify` is mocked only for `buildAdminClient` (the worker's A4
+ * discount-mint path); recent products are now read from local Postgres
+ * (A4 §3 — `OrderRepository.findRecentPurchasedTitles`), so the handler makes
+ * no Shopify call for them and the real query runs against the test DB.
  */
 
 import { describe, it, expect, vi, beforeEach, afterAll, type Mock } from 'vitest';
@@ -59,7 +59,6 @@ vi.mock('@winback/shopify', async (importOriginal) => {
   return {
     ...actual,
     buildAdminClient: vi.fn(() => ({})),
-    fetchRecentOrders: vi.fn(async () => []),
   };
 });
 

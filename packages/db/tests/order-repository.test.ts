@@ -3,7 +3,9 @@ import { ValidationError } from '@winback/errors';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { WinbackPrisma } from '../src/client.js';
+import { TenantScopeError } from '../src/errors.js';
 import { OrderRepository } from '../src/repositories/order.repository.js';
+import { withTenantScope } from '../src/tenant-scope.js';
 import type { ShopifyOrderWebhookBody } from '../src/webhook-bodies.js';
 
 /**
@@ -394,5 +396,68 @@ describe('OrderRepository — Shopify GID validation', () => {
         tx: tx as unknown as Prisma.TransactionClient,
       }),
     ).rejects.toThrow(ValidationError);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// findRecentPurchasedTitles (A4 / POST-EPIC-F §3) — local recent-purchases read
+//
+// Raw SQL via `queryRawScoped` → `this.prisma.$queryRaw` (binds to the
+// constructor client, NOT a tx — the §F-9 handler calls it outside its tx).
+// Unit coverage mirrors `CustomerScoreRepository.readCohort`'s: mock $queryRaw
+// and assert the WRAPPER contract (scope assertion, result mapping, empty
+// passthrough). The SQL itself (COALESCE recency ordering, DISTINCT-ON primary
+// item, isTest filter) is exercised against real Postgres by the drainer
+// integration harness — same split as readCohort.
+// ---------------------------------------------------------------------------
+
+describe('OrderRepository.findRecentPurchasedTitles', () => {
+  const CUSTOMER_ID = 'cust_local_1';
+
+  function makeRepo(queryRaw: Mock): OrderRepository {
+    return new OrderRepository({ $queryRaw: queryRaw } as unknown as WinbackPrisma);
+  }
+
+  it('maps $queryRaw rows to a flat array of title strings', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([
+      { title: 'Sneakers' },
+      { title: 'Hoodie' },
+      { title: 'Cap' },
+    ]);
+    const repo = makeRepo(queryRaw);
+
+    const titles = await withTenantScope(MERCHANT_ID, async () =>
+      repo.findRecentPurchasedTitles({ merchantId: MERCHANT_ID, customerId: CUSTOMER_ID }),
+    );
+
+    expect(titles).toEqual(['Sneakers', 'Hoodie', 'Cap']);
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns [] when the customer has no qualifying orders (empty result → prompt omits the section)', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const repo = makeRepo(queryRaw);
+
+    const titles = await withTenantScope(MERCHANT_ID, async () =>
+      repo.findRecentPurchasedTitles({ merchantId: MERCHANT_ID, customerId: CUSTOMER_ID }),
+    );
+
+    expect(titles).toEqual([]);
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('asserts tenant scope — throws TenantScopeError when the active scope does not match merchantId, BEFORE running the query', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const repo = makeRepo(queryRaw);
+
+    // Active scope is a DIFFERENT merchant than the query's merchantId.
+    await expect(
+      withTenantScope('m_other', async () =>
+        repo.findRecentPurchasedTitles({ merchantId: MERCHANT_ID, customerId: CUSTOMER_ID }),
+      ),
+    ).rejects.toBeInstanceOf(TenantScopeError);
+
+    // queryRawScoped asserts BEFORE executing — the raw query never ran.
+    expect(queryRaw).not.toHaveBeenCalled();
   });
 });

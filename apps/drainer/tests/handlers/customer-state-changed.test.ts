@@ -20,25 +20,18 @@
  *     (rule #19).
  *   - Cap unit conversion: cents × 100_000n → microcents before the
  *     comparison with `sumMonthSpend` output.
- *   - External HTTP (Shopify recent-orders) outside the tx with []
- *     fallback on failure.
+ *   - Recent purchases read from local DB (Order/OrderLineItem) before the
+ *     tx; empty result omits the prompt section, a DB error propagates
+ *     (A4 §3 — no swallow, unlike the old Shopify call).
  *   - BullMQ enqueue jobId = aiGenerationId (idempotent-replay contract).
  */
 
-import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
-// Selective mock of @winback/shopify — replace buildAdminClient +
-// fetchRecentOrders with controllable stubs; pass everything else
-// through. The handler calls these two; mocking the others would
-// risk drift if @winback/shopify's surface evolves.
-vi.mock('@winback/shopify', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('@winback/shopify')>();
-  return {
-    ...actual,
-    buildAdminClient: vi.fn(() => ({})),
-    fetchRecentOrders: vi.fn(async () => []),
-  };
-});
+// A4 §3: recent purchases are read from local Postgres via
+// `OrderRepository.findRecentPurchasedTitles`, spied on the prototype in
+// beforeEach (default: []). The handler no longer calls @winback/shopify, so
+// no module mock for it is needed here.
 
 // Q-H1 closure: capture warn-log emissions for the un-enriched-currency
 // observability assertions. The handler's module-scope
@@ -73,9 +66,8 @@ vi.mock('@winback/queue', () => ({
 }));
 
 import { AUDIT_ACTIONS } from '@winback/contracts';
-import type { OutboxEventRow, WinbackPrisma } from '@winback/db';
+import { OrderRepository, type OutboxEventRow, type WinbackPrisma } from '@winback/db';
 import type { Queues } from '@winback/queue';
-import { fetchRecentOrders } from '@winback/shopify';
 import type { ShopifyConfig } from '@winback/shopify';
 
 import type { DrainerContext } from '../../src/context.js';
@@ -290,9 +282,24 @@ function makeRow(overrides: {
 // history but NOT the default implementation, so the hoisted "allowed:
 // true" default re-asserts itself after any per-test `mockResolvedValueOnce`
 // override is consumed.
+//
+// A4 §3: `findRecentPurchasedTitles` (the local recent-purchases read) is
+// spied on the OrderRepository prototype, default-resolving `[]` (no recent
+// products → prompt omits the section). Tests override per-call with
+// `mockResolvedValueOnce` / `mockRejectedValueOnce`. Restored in afterEach so
+// the spy never leaks across suites.
 // ---------------------------------------------------------------------------
+let findRecentPurchasedTitlesSpy: ReturnType<typeof vi.spyOn>;
+
 beforeEach(() => {
   incrementAndCheckMock.mockClear();
+  findRecentPurchasedTitlesSpy = vi
+    .spyOn(OrderRepository.prototype, 'findRecentPurchasedTitles')
+    .mockResolvedValue([]);
+});
+
+afterEach(() => {
+  findRecentPurchasedTitlesSpy.mockRestore();
 });
 
 // ---------------------------------------------------------------------------
@@ -367,17 +374,19 @@ describe('handleCustomerStateChanged — happy path', () => {
     expect(aiGenData.mCents).toBe(BigInt(big));
   });
 
-  it('passes recentProducts from fetchRecentOrders into the prompt builder', async () => {
-    const mockedFetch = vi.mocked(fetchRecentOrders);
-    mockedFetch.mockResolvedValueOnce([
-      { title: 'Sneakers' },
-      { title: 'Hoodie' },
-    ]);
+  it('passes recent purchased titles (local DB read) into the prompt builder, keyed on the LOCAL customerId', async () => {
+    findRecentPurchasedTitlesSpy.mockResolvedValueOnce(['Sneakers', 'Hoodie']);
 
     const { ctx, state } = makeCtx();
     const row = makeRow({});
 
     await handleCustomerStateChanged(ctx, row);
+
+    // Read with the LOCAL customerId (cuid), NOT the Shopify GID.
+    expect(findRecentPurchasedTitlesSpy).toHaveBeenCalledWith({
+      merchantId: 'm_1',
+      customerId: 'c_1',
+    });
 
     // The prompt builder is a pure function called inside the handler;
     // verify its output (userPrompt) includes the product titles.
@@ -584,28 +593,47 @@ describe('handleCustomerStateChanged — customer cascade race', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Shopify outage resilience (Step 6b)
+// Recent purchases — local DB read (Step 6b, A4 §3)
+//
+// Replaces the old Shopify recent-orders read. Decision E: an empty result is
+// the graceful-omit path; a DB error PROPAGATES (no swallow), unlike the old
+// external call which fell back to [].
 // ---------------------------------------------------------------------------
 
-describe('handleCustomerStateChanged — Shopify recent-orders outage', () => {
-  it('fetchRecentOrders throws → handler continues with empty recentProducts', async () => {
-    const mockedFetch = vi.mocked(fetchRecentOrders);
-    mockedFetch.mockRejectedValueOnce(new Error('shopify timeout'));
+describe('handleCustomerStateChanged — recent purchases (Step 6b, local DB)', () => {
+  it('no qualifying orders (empty result) → prompt omits the section; generation still created', async () => {
+    findRecentPurchasedTitlesSpy.mockResolvedValueOnce([]);
 
     const { ctx, state, queueAdd } = makeCtx();
     const row = makeRow({});
 
     await handleCustomerStateChanged(ctx, row);
 
-    // AiGeneration + Message + enqueue still happen.
     expect(state.aiGenerationRows).toHaveLength(1);
     expect(state.messageRows).toHaveLength(1);
     expect(queueAdd).toHaveBeenCalledTimes(1);
 
-    // userPrompt does NOT include the "Their recent purchases included"
-    // marker since recentProducts is empty.
     const userPrompt = state.aiGenerationRows[0]!.data.userPrompt as string;
     expect(userPrompt).not.toContain('recent purchases included');
+  });
+
+  it('local read throws (DB error) → propagates (no swallow); NO AiGeneration, NO Message, NO enqueue, tx never opened', async () => {
+    findRecentPurchasedTitlesSpy.mockRejectedValueOnce(new Error('db connection lost'));
+
+    const { ctx, state, queueAdd, prismaMocks } = makeCtx();
+    const row = makeRow({});
+
+    // Decision E: the local read failing is a real fault — it propagates to
+    // the drainer's per-row markFailed, NOT swallowed-and-continue.
+    await expect(handleCustomerStateChanged(ctx, row)).rejects.toThrow(
+      'db connection lost',
+    );
+
+    // The throw is at STEP 6b, BEFORE the STEP 8 completion tx — nothing created.
+    expect(state.aiGenerationRows).toHaveLength(0);
+    expect(state.messageRows).toHaveLength(0);
+    expect(queueAdd).not.toHaveBeenCalled();
+    expect(prismaMocks.transaction).not.toHaveBeenCalled();
   });
 });
 

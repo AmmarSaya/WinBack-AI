@@ -1,8 +1,7 @@
-import { type OrderFinancialStatus, type OrderFulfillmentStatus, type Prisma } from '@prisma/client';
+import { type OrderFinancialStatus, type OrderFulfillmentStatus, Prisma } from '@prisma/client';
 import { ValidationError } from '@winback/errors';
 import { getLogger } from '@winback/logger';
 
-import type { WinbackPrisma } from '../client.js';
 import {
   toShopifyCustomerGid,
   toShopifyLineItemGid,
@@ -13,7 +12,17 @@ import {
 import { parseMoneyToCents } from '../money.js';
 import type { ShopifyMoneySet, ShopifyOrderWebhookBody } from '../webhook-bodies.js';
 
+import { BaseRepository } from './base.js';
+
 const log = getLogger('db.repo.order');
+
+/**
+ * Default number of recent purchased product titles surfaced to the winback
+ * prompt (A4 §3 / `findRecentPurchasedTitles`). Matches the prompt builder's
+ * `recentProducts.slice(0, 3)` and the `DEFAULT_TAKE` of the Shopify call this
+ * replaced (Epic F §F-9 step 6b).
+ */
+const DEFAULT_RECENT_PRODUCTS_TAKE = 3;
 
 /**
  * The CP-2 §Q1 qualifying-transition result. Computed by
@@ -67,9 +76,7 @@ export interface UpsertOrderFromWebhookResult {
  * a MAPPED row in the mapping doc. The field-mapping doc is the source
  * of truth; this code implements it.
  */
-export class OrderRepository {
-  constructor(private readonly prisma: WinbackPrisma) {}
-
+export class OrderRepository extends BaseRepository {
   /**
    * Upsert an Order + its OrderLineItem rows from a Shopify webhook body.
    * Atomic — the Order upsert and all line item upserts happen inside the
@@ -274,6 +281,80 @@ export class OrderRepository {
       qualifyingTransition,
       previousFinancialStatus,
     };
+  }
+
+  /**
+   * The customer's recently-purchased product titles for the winback prompt's
+   * context block (A4 / POST-EPIC-F §3).
+   *
+   * Reads local Postgres (`Order` + `OrderLineItem`) instead of the Shopify
+   * Admin GraphQL API the Epic-F handler originally called (§F-9 step 6b). The
+   * titles are denormalised onto `OrderLineItem.title` at ingest time — BOTH
+   * the live `orders/create` webhook AND the operator order-backfill write it
+   * through `upsertFromWebhook` — so the local query returns the same titles
+   * the API would, with no Shopify dependency, latency, or leaky-bucket token.
+   *
+   * Selection (the A4 §3 decisions, recorded here):
+   *   - Qualifying orders: `financialStatus IN ('paid','partially_paid')` AND
+   *     `isTest = false`. The isTest exclusion is an INTENTIONAL divergence
+   *     from the swapped-out Shopify call (which did not filter test orders):
+   *     a customer's dev-store TEST purchases must not seed a real winback.
+   *     Matches the scoring cohort's `isTest = false` posture.
+   *   - Ordering: most-recent first by `COALESCE("shopifyProcessedAt",
+   *     "placedAt") DESC` — the SAME recency expression the scoring engine
+   *     uses (`CustomerScoreRepository.readCohort`), so "recent" means the
+   *     same thing in the prompt as in scoring. SUPERSEDES §3's literal
+   *     `placedAt DESC`. (This COALESCE key is why the method is raw SQL —
+   *     Prisma's `orderBy` sorts NULLs first on DESC and cannot express it.)
+   *   - One "primary" line item per order: the lexicographically-lowest
+   *     `shopifyLineItemId` (`DISTINCT ON`). A deterministic LOCAL
+   *     APPROXIMATION of Shopify's "first line item", not an exact match —
+   *     recent-products is flavor context, not load-bearing.
+   *   - At most `take` (default 3) titles, matching the prompt builder's slice.
+   *
+   * Returns `[]` when the customer has no qualifying orders — the normal
+   * graceful path (the prompt omits the recent-purchases section). A DB error
+   * PROPAGATES (the drainer's per-row try/catch markFails the event); unlike
+   * the old external Shopify call there is no swallow-and-continue, because a
+   * local read failing is a real fault, not a transient external degrade.
+   *
+   * Raw SQL via `queryRawScoped` (BaseRepository) — the sanctioned entry point
+   * that asserts the active tenant scope matches `merchantId` before executing.
+   * Read-only and runs OUTSIDE any tx (the §F-9 handler calls it before its
+   * STEP 8 completion tx), so it binds to `this.prisma`, not a caller tx.
+   */
+  async findRecentPurchasedTitles(args: {
+    merchantId: string;
+    customerId: string;
+    take?: number;
+  }): Promise<readonly string[]> {
+    const { merchantId, customerId } = args;
+    const take = args.take ?? DEFAULT_RECENT_PRODUCTS_TAKE;
+
+    const rows = await this.queryRawScoped<{ title: string }>(
+      merchantId,
+      Prisma.sql`
+        SELECT sub.title
+        FROM (
+          SELECT DISTINCT ON (o."id")
+                 o."id" AS order_id,
+                 COALESCE(o."shopifyProcessedAt", o."placedAt") AS recency,
+                 li."title" AS title
+          FROM "Order" o
+          JOIN "OrderLineItem" li
+            ON li."orderId" = o."id" AND li."merchantId" = o."merchantId"
+          WHERE o."merchantId" = ${merchantId}
+            AND o."customerId" = ${customerId}
+            AND o."isTest" = false
+            AND o."financialStatus"::text IN ('paid', 'partially_paid')
+          ORDER BY o."id", li."shopifyLineItemId" ASC
+        ) sub
+        ORDER BY sub.recency DESC
+        LIMIT ${take}
+      `,
+    );
+
+    return rows.map((r) => r.title);
   }
 }
 

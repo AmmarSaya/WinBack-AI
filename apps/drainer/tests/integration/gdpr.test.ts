@@ -51,7 +51,6 @@ vi.mock('@winback/shopify', async (importOriginal) => {
   return {
     ...actual,
     buildAdminClient: vi.fn(() => ({})),
-    fetchRecentOrders: vi.fn(async () => []),
   };
 });
 
