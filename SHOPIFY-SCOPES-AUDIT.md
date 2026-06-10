@@ -4,6 +4,8 @@
 **Scope:** Every Shopify Admin API scope this app will need across Epics A–H.  Locked here BEFORE the first paying merchant installs.
 **Why this doc exists:** Shopify policy — adding a new OAuth scope AFTER install forces every existing merchant to accept a re-authorization prompt.  Merchants who ignore the prompt see the app silently degrade.  Shipping the full scope union at first install avoids that entire failure mode.
 
+**Amendment 2026-06-10 (A4 §4.2):** `read_discounts` added as the 9th scope — required by `codeDiscountNodeByCode`, the `TAKEN`-recovery lookup in the deterministic winback discount-code minting (`packages/shopify/src/admin/discounts.ts`, merged to `main` at `72bfc5a`). Recorded here per this doc's own "any scope addition updates this file" rule. The 8-scope union below went live 2026-05-22; the `read_discounts` rollout — Partners `shopify app deploy` + Render `SHOPIFY_SCOPES` env on all 3 services + `.github/workflows/ci.yml` + dev-store re-consent — is a **separate coordinated step, PENDING as of 2026-06-10**. No paying merchant has installed yet, so there is no re-auth gauntlet; it folds into the first-merchant install union.
+
 ---
 
 ## Currently in production
@@ -61,6 +63,12 @@ The LLM call site needs richer context than just customer + order data for the p
 
 **No new scopes.**  AttributionEvent ingest works off `read_orders` webhook deliveries (refund transitions, paid transitions — both `orders/updated` topic).  Per-currency rollup math operates on already-ingested Order + Message data.
 
+### Post-Epic-F (Group A) — A4 §4.2 discount creation
+
+| Scope | Why it's needed | Risk if NOT added |
+|---|---|---|
+| `read_discounts` | `codeDiscountNodeByCode` lookup on the `TAKEN` idempotency path of `createWinbackDiscountCode`.  Winback discount codes are deterministic (keyed HMAC of `merchantId:aiGenerationId`); a worker retry re-mints the same code, Shopify rejects the duplicate with `userError TAKEN`, and we recover the existing discount-node id via this read so the crash-window orphan self-heals. | The happy path (mint a fresh unique code) needs only `write_discounts` and is unaffected.  Without `read_discounts` the TAKEN-recovery lookup returns `403` → the retry fails loud (no orphan; the discount already exists in Shopify) instead of self-healing.  Discounting is OFF by default (`MerchantSettings.winbackDiscountEnabled`), so this edge is inert until a merchant both re-grants the scope and opts in. |
+
 ### Mandatory GDPR webhook subscriptions
 
 NOT scope-gated.  Shopify always delivers these regardless of installed scopes:
@@ -75,7 +83,7 @@ Listed here for completeness only.  Already handled by the C6 GDPR processor.
 
 ## Final consolidated scope list at first-merchant install
 
-Eight scopes total:
+Nine scopes total — the 8-scope union went live 2026-05-22; `read_discounts` was added by A4 §4.2 (2026-06-10) and its rollout is **PENDING** (see the 2026-06-10 amendment note near the top):
 
 ```
 read_customers,
@@ -83,18 +91,19 @@ read_orders,
 read_products,
 read_inventory,
 read_price_rules,
+read_discounts,
 write_discounts,
 write_marketing_events,
 read_marketing_events
 ```
 
-Encoded as the `SHOPIFY_SCOPES` env var:
+Encoded as the `SHOPIFY_SCOPES` env var (mirrors `shopify.app.toml` `[access_scopes].scopes` order):
 
 ```
-read_customers,read_orders,read_products,read_inventory,read_price_rules,write_discounts,write_marketing_events,read_marketing_events
+read_customers,read_orders,read_products,read_inventory,read_price_rules,read_discounts,write_discounts,write_marketing_events,read_marketing_events
 ```
 
-Five new scopes added to the current three.  All five are merchant-comfortable (no PII beyond what `read_customers` already exposes; nothing in the "sensitive / approval-required" Shopify tier).
+Six new scopes added to the original three (`read_customers,read_orders,write_discounts`): five in the pre-launch union (`read_products`, `read_inventory`, `read_price_rules`, `write_marketing_events`, `read_marketing_events`) plus `read_discounts` later via A4 §4.2.  All are merchant-comfortable (no PII beyond what `read_customers` already exposes; nothing in the "sensitive / approval-required" Shopify tier).
 
 ---
 
