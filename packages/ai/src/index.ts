@@ -73,3 +73,10 @@ export {
   type WinbackTriggerState,
   buildWinbackPrompt,
 } from './prompt-builder.js';
+export {
+  DISCOUNT_CODE_TOKEN,
+  DISCOUNT_VALUE_PERCENT_TOKEN,
+  substituteDiscountTokens,
+  type DiscountSubstitution,
+  type SubstituteResult,
+} from './discount-substitutor.js';
