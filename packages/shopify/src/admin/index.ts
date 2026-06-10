@@ -15,4 +15,12 @@ export {
   type RecentOrderProduct,
 } from './recent-orders.js';
 export { subscribeAllWebhooks, type SubscribeResult } from './webhook-subscriptions.js';
+export { deriveWinbackDiscountCode } from './discount-code.js';
+export {
+  WINBACK_DISCOUNT_CREATE_MUTATION,
+  WINBACK_DISCOUNT_BY_CODE_QUERY,
+  createWinbackDiscountCode,
+  type CreateWinbackDiscountArgs,
+  type CreateWinbackDiscountResult,
+} from './discounts.js';
 export type { ShopBucketState, ThrottleStatus } from './types.js';

@@ -115,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the fourteen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 4 ai: 3 Epic F batch 4 + 1 A2)', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(14);
+  it('contains the fifteen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 4 ai: 3 Epic F batch 4 + 1 A2 + 1 A4 discount)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(15);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -140,6 +140,9 @@ describe('AUDIT_ACTIONS registry', () => {
     // Written by handleCustomerStateChanged STEP 4.5 BEFORE the spend-cap
     // check (cheap Redis-INCR rejection before any DB write).
     expect(AUDIT_ACTIONS.ai.rate_limited).toBe('ai.rate_limited');
+    // A4 (POST-EPIC-F §4 batch 4.2) — winback discount minted. Written by the
+    // AI Worker in the same tx as the AiGeneration completion.
+    expect(AUDIT_ACTIONS.discount.created).toBe('discount.created');
   });
 });
 

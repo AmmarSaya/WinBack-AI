@@ -5,3 +5,4 @@ export {
   verifyHmacSha256Hex,
   verifyHmacSha256Base64,
 } from './hmac.js';
+export { encodeCrockfordBase32 } from './base32.js';

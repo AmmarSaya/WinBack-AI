@@ -98,6 +98,10 @@ interface MockState {
     monthlyAiSpendCapCents: bigint;
     hourlyGenerationCap: number;
     aiTone: unknown;
+    // A4 §4.2 — optional so existing fixtures need not set them; the handler
+    // reads `winbackDiscountEnabled` (undefined → falsy → no discount).
+    winbackDiscountEnabled?: boolean;
+    winbackDiscountPercent?: number;
   } | null;
   customer: { firstName: string | null; lastName: string | null } | null;
   spendBucketSumMicrocents: bigint;
@@ -150,6 +154,10 @@ function makeCtx(initial: Partial<MockState> = {}): {
             monthlyAiSpendCapCents: 50_000n,
             hourlyGenerationCap: 100,
             aiTone: null,
+            // A4 §4.2 — discounting OFF by default (safe-by-default), so the
+            // default fixture stays on the no-discount path.
+            winbackDiscountEnabled: false,
+            winbackDiscountPercent: 15,
           }, // $500/mo + 100/hr schema defaults
     customer:
       'customer' in initial
@@ -819,5 +827,69 @@ describe('handleCustomerStateChanged — A2 hourly rate-limit gate', () => {
     await handleCustomerStateChanged(ctx, row);
 
     expect(incrementAndCheckMock).toHaveBeenCalledWith('m_1', 7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A4 / POST-EPIC-F §4.2 — discount intent (Option B; safe-by-default off)
+//
+// The handler snapshots MerchantSettings.winbackDiscountPercent onto the
+// AiGeneration row as `discountValuePercent` ONLY when winbackDiscountEnabled,
+// and passes a non-null discount INTENT to buildWinbackPrompt so the stored
+// prompt emits the V9 placeholder tokens (never the literal value). The worker
+// mints the real code later (Step 2c).
+// ---------------------------------------------------------------------------
+
+describe('handleCustomerStateChanged — A4 §4.2 discount intent', () => {
+  it('winbackDiscountEnabled=true → percent snapshotted onto the row + V9 tokens in the prompt (never the literal value)', async () => {
+    const { ctx, state } = makeCtx({
+      settings: {
+        monthlyAiSpendCapCents: 50_000n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+        winbackDiscountEnabled: true,
+        winbackDiscountPercent: 20,
+      },
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    expect(state.aiGenerationRows).toHaveLength(1);
+    const aiGenData = state.aiGenerationRows[0]!.data;
+    // Snapshot: the per-merchant percent is frozen onto the row at enqueue.
+    expect(aiGenData.discountValuePercent).toBe(20);
+    // V9 tokens emitted; the literal value (20) does NOT appear on the
+    // discount-context line (only the token does).
+    const userPrompt = aiGenData.userPrompt as string;
+    const systemPrompt = aiGenData.systemPrompt as string;
+    expect(userPrompt).toContain('{{DISCOUNT_CODE}}');
+    expect(userPrompt).toContain('{{DISCOUNT_VALUE_PERCENT}}');
+    expect(systemPrompt).toContain('Discount instructions');
+    const discountLine = userPrompt.split('\n').find((l) => l.includes('Value:'));
+    expect(discountLine).toBeDefined();
+    expect(discountLine).not.toMatch(/\b20\b/);
+  });
+
+  it('winbackDiscountEnabled=false (percent set but feature off) → discountValuePercent null + NO V9 tokens (off ≠ 0%)', async () => {
+    const { ctx, state } = makeCtx({
+      settings: {
+        monthlyAiSpendCapCents: 50_000n,
+        hourlyGenerationCap: 100,
+        aiTone: null,
+        winbackDiscountEnabled: false,
+        winbackDiscountPercent: 15,
+      },
+    });
+    const row = makeRow({});
+
+    await handleCustomerStateChanged(ctx, row);
+
+    const aiGenData = state.aiGenerationRows[0]!.data;
+    // percent is configured (15) but the feature is OFF → no discount intent.
+    expect(aiGenData.discountValuePercent).toBeNull();
+    const userPrompt = aiGenData.userPrompt as string;
+    expect(userPrompt).not.toContain('{{DISCOUNT_CODE}}');
+    expect(userPrompt).not.toContain('{{DISCOUNT_VALUE_PERCENT}}');
   });
 });

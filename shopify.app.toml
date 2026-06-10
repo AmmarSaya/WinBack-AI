@@ -15,7 +15,7 @@ shop_deletion_url = "https://winback-ai-web.onrender.com/webhooks"
 
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
-scopes = "read_customers,read_orders,read_products,read_inventory,read_price_rules,write_discounts,write_marketing_events,read_marketing_events"
+scopes = "read_customers,read_orders,read_products,read_inventory,read_price_rules,read_discounts,write_discounts,write_marketing_events,read_marketing_events"
 optional_scopes = [ ]
 use_legacy_install_flow = false
 

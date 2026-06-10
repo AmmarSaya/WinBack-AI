@@ -82,10 +82,15 @@ export class AiGenerationRepository {
         modelId: args.modelId,
         systemPrompt: args.systemPrompt,
         userPrompt: args.userPrompt,
+        // A4 §4.2 — discount intent snapshot. Non-null ⇒ the stored prompt
+        // emitted the V9 tokens and the worker will mint a discount. `?? null`
+        // coerces an omitted arg (undefined) to an explicit null.
+        discountValuePercent: args.discountValuePercent ?? null,
         // status defaults to 'pending' per schema.
         // generatedText, inputTokens, outputTokens, totalTokens,
         // latencyMs, costMicrocents, completedAt all null until
-        // markCompleted is called.
+        // markCompleted is called. discountCode + shopifyDiscountId stay
+        // null until the worker mints (Option B — post-LLM-success).
       },
       select: { id: true },
     });
@@ -120,6 +125,12 @@ export class AiGenerationRepository {
         totalTokens: args.totalTokens,
         latencyMs: args.latencyMs,
         costMicrocents: args.costMicrocents,
+        // A4 §4.2 — the minted Shopify discount, written in the SAME tx as
+        // the pending→completed transition (rule #14). `?? null` writes an
+        // explicit null when discounting was disabled (no mint ran) — a no-op
+        // over the null these columns already hold from createPending.
+        discountCode: args.discountCode ?? null,
+        shopifyDiscountId: args.shopifyDiscountId ?? null,
         completedAt: new Date(),
       },
     });
@@ -196,6 +207,14 @@ export interface CreatePendingArgs {
   readonly systemPrompt: string;
   /** User prompt sent to the LLM. Stored for the same reasons. */
   readonly userPrompt: string;
+  /**
+   * A4 §4.2 — winback discount value percent, snapshotted at enqueue from
+   * `MerchantSettings.winbackDiscountPercent`. `null` (or omitted) when the
+   * merchant has `winbackDiscountEnabled = false`: no discount is offered and
+   * the stored prompt did NOT emit the V9 tokens. Non-null DOUBLES AS the
+   * worker's intent flag to mint a Shopify discount post-LLM-success.
+   */
+  readonly discountValuePercent?: number | null;
 }
 
 export interface MarkCompletedArgs {
@@ -211,6 +230,15 @@ export interface MarkCompletedArgs {
    * provider + model + actual token counts from the response.
    */
   readonly costMicrocents: bigint;
+  /**
+   * A4 §4.2 — the minted winback discount, set by the AI Worker in this same
+   * completion tx (Option B). Both `null`/omitted when discounting was
+   * disabled for this generation (`discountValuePercent` was null at enqueue,
+   * so no mint ran). `discountCode` is the deterministic keyed-HMAC code;
+   * `shopifyDiscountId` is the Shopify discount-node GID.
+   */
+  readonly discountCode?: string | null;
+  readonly shopifyDiscountId?: string | null;
 }
 
 export interface MarkFailedArgs {

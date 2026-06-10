@@ -58,7 +58,7 @@ describe('buildWinbackPrompt — discount placeholder tokens (Lock V9)', () => {
   it('discount provided → both placeholder tokens in user prompt', () => {
     const { systemPrompt, userPrompt } = buildWinbackPrompt({
       ...baseArgs(),
-      discount: { code: 'WB-AB12-CD34', valuePercent: 15 },
+      discount: { valuePercent: 15 },
     });
     // System prompt includes the V9 instruction set
     expect(systemPrompt).toContain('Discount instructions');
@@ -74,7 +74,7 @@ describe('buildWinbackPrompt — discount placeholder tokens (Lock V9)', () => {
     const percent = 15;
     const { systemPrompt, userPrompt } = buildWinbackPrompt({
       ...baseArgs(),
-      discount: { code, valuePercent: percent },
+      discount: { valuePercent: percent },
     });
     expect(systemPrompt).not.toContain(code);
     expect(userPrompt).not.toContain(code);
@@ -91,7 +91,7 @@ describe('buildWinbackPrompt — discount placeholder tokens (Lock V9)', () => {
     const { userPrompt } = buildWinbackPrompt({
       ...baseArgs(),
       merchant: { ...baseArgs().merchant, aiTone: formalTone },
-      discount: { code: 'WB-XYZ-9', valuePercent: 20 },
+      discount: { valuePercent: 20 },
     });
     expect(userPrompt).toContain('{{DISCOUNT_CODE}}');
     expect(userPrompt).toContain('{{DISCOUNT_VALUE_PERCENT}}');
@@ -105,7 +105,7 @@ describe('buildWinbackPrompt — discount placeholder tokens (Lock V9)', () => {
     const { systemPrompt } = buildWinbackPrompt({
       ...baseArgs(),
       merchant: { ...baseArgs().merchant, aiTone: formalTone },
-      discount: { code: 'WB-XYZ-9', valuePercent: 20 },
+      discount: { valuePercent: 20 },
     });
     const idxCustom = systemPrompt.indexOf('Additional merchant instructions');
     const idxDiscount = systemPrompt.indexOf('Discount instructions');
@@ -117,7 +117,7 @@ describe('buildWinbackPrompt — discount placeholder tokens (Lock V9)', () => {
   it('user prompt: last line when discount provided is the V9 reinforcement', () => {
     const { userPrompt } = buildWinbackPrompt({
       ...baseArgs(),
-      discount: { code: 'WB-AB12-CD34', valuePercent: 15 },
+      discount: { valuePercent: 15 },
     });
     const lines = userPrompt
       .split('\n')

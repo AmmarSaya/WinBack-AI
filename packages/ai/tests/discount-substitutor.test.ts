@@ -109,8 +109,9 @@ describe('V9 emit/substitute coupling — the prompt builder emits exactly the s
       },
       merchant: { name: 'Coast Co.', shopCurrency: 'USD', aiTone: casualTone },
       recentProducts: [{ title: 'Linen Tee' }],
-      // Real code/value are stored but the prompt emits only the tokens.
-      discount: { code: 'WB-AB12-CD34', valuePercent: 15 },
+      // Discount INTENT only — the prompt emits the tokens, never a code.
+      // The real code is minted by the worker post-generation (A4 §4.2).
+      discount: { valuePercent: 15 },
     };
   }
 
