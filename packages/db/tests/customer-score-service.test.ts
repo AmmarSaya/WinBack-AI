@@ -937,3 +937,250 @@ describe('CustomerScoreService.bulkRescore — A1b first-pass (mocked prisma)', 
     expect(tx.outboxEvent.create).not.toHaveBeenCalled();
   });
 });
+
+// ===========================================================================
+// decayRescore — daily decay sweep (mocked prisma)
+//
+// The steady-state calendar-driven transition detector. Reads the cohort
+// ONCE, re-evaluates the working set, and EMITS customer.state_changed for
+// real band transitions — GATED on scoringInitializedAt (same §1 gate as
+// recompute). Mirrors bulkRescore's mock harness; the real-DB emit proof is
+// in the drainer integration suite.
+// ===========================================================================
+
+/**
+ * Mock prisma for decayRescore: `$transaction` runs the UnitOfWork callback
+ * with the shared mock tx; `merchant.findUnique` serves the currency / shop /
+ * scoringInitializedAt read (NOT inside a tx).
+ */
+function makeDecayPrisma(
+  tx: MockTx,
+  merchantRow:
+    | { currency: string | null; shop: string; scoringInitializedAt: Date | null }
+    | null,
+): WinbackPrisma {
+  return {
+    $transaction: vi.fn(async (cb: (t: unknown) => Promise<unknown>) => cb(tx)),
+    merchant: { findUnique: vi.fn().mockResolvedValue(merchantRow) },
+  } as unknown as WinbackPrisma;
+}
+
+/** A sufficient (≥5) cohort so scorable customers resolve via quintiles. */
+function sufficientCohort(): unknown[] {
+  return [
+    { customerId: 'cd1', rDays: 5, fCount: 10, mCents: 100_000n },
+    { customerId: 'cd2', rDays: 20, fCount: 7, mCents: 50_000n },
+    { customerId: 'cd3', rDays: 60, fCount: 4, mCents: 20_000n },
+    { customerId: 'cd4', rDays: 200, fCount: 2, mCents: 5_000n },
+    { customerId: 'cd5', rDays: 400, fCount: 1, mCents: 1_000n },
+  ];
+}
+
+describe('CustomerScoreService.decayRescore — daily sweep (mocked prisma)', () => {
+  let tx: MockTx;
+  beforeEach(() => {
+    tx = makeTx();
+  });
+
+  it('working-set filter: customer.findMany scopes to active/warm/at_risk/dormant (skips lost + insufficient_data)', async () => {
+    const { service } = makeService();
+    const prisma = makeDecayPrisma(tx, {
+      currency: 'USD',
+      shop: SHOP,
+      scoringInitializedAt: new Date('2026-05-01T00:00:00.000Z'),
+    });
+    tx.$queryRaw.mockResolvedValue(sufficientCohort());
+    tx.customer.findMany.mockResolvedValue([]); // empty working set → one batch
+
+    await withTenantScope(MERCHANT_ID, async () =>
+      service.decayRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'scheduler', now: NOW }),
+    );
+
+    const findManyArgs = tx.customer.findMany.mock.calls[0]![0] as {
+      where: { state: { in: string[] } };
+    };
+    expect(findManyArgs.where.state.in).toEqual(['active', 'warm', 'at_risk', 'dormant']);
+  });
+
+  it('initialized merchant + band CROSSED → state update + customer.state_changed audit + OutboxEvent (emit)', async () => {
+    const { service } = makeService();
+    const prisma = makeDecayPrisma(tx, {
+      currency: 'USD',
+      shop: SHOP,
+      scoringInitializedAt: new Date('2026-05-01T00:00:00.000Z'),
+    });
+    tx.$queryRaw.mockResolvedValue(sufficientCohort());
+
+    // A lurker (absent from cohort) created 200 days before NOW → rDays 200 →
+    // dormant. Currently 'warm' → CROSSES warm→dormant.
+    const created200 = new Date(NOW.getTime() - 200 * 86_400_000);
+    tx.customer.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'cust_decay',
+          state: 'warm',
+          shopifyCustomerId: SHOP_CUSTOMER_GID,
+          shopifyCreatedAt: created200,
+          createdAt: created200,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      service.decayRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'scheduler', now: NOW }),
+    );
+
+    expect(result.transitions).toBe(1);
+    expect(result.emitted).toBe(1);
+
+    // Scored + band updated.
+    expect(tx.customerScore.upsert).toHaveBeenCalledTimes(1);
+    expect(tx.customer.update).toHaveBeenCalledWith({
+      where: { id: 'cust_decay' },
+      data: { state: 'dormant' },
+    });
+
+    // Emitted: exactly one customer.state_changed audit with the decay
+    // discriminator, and one OutboxEvent.
+    expect(tx.auditLog.create).toHaveBeenCalledTimes(1);
+    const audit = tx.auditLog.create.mock.calls[0]![0] as {
+      data: { action: string; targetType: string; targetId: string; actorId: string; context: Record<string, unknown> };
+    };
+    expect(audit.data.action).toBe('customer.state_changed');
+    expect(audit.data.targetType).toBe('customer');
+    expect(audit.data.targetId).toBe('cust_decay');
+    expect(audit.data.actorId).toBe('scheduler');
+    expect(audit.data.context.oldState).toBe('warm');
+    expect(audit.data.context.newState).toBe('dormant');
+    expect(audit.data.context.trigger).toBe('decay_sweep');
+
+    expect(tx.outboxEvent.create).toHaveBeenCalledTimes(1);
+    const oe = tx.outboxEvent.create.mock.calls[0]![0] as {
+      data: { type: string; payload: { oldState: string; newState: string } };
+    };
+    expect(oe.data.type).toBe('customer.state_changed');
+    expect(oe.data.payload.oldState).toBe('warm');
+    expect(oe.data.payload.newState).toBe('dormant');
+
+    // Cohort read EXACTLY ONCE.
+    expect(tx.$queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('band NOT crossed → scored (upsert) but NO state update, NO emit', async () => {
+    const { service } = makeService();
+    const prisma = makeDecayPrisma(tx, {
+      currency: 'USD',
+      shop: SHOP,
+      scoringInitializedAt: new Date('2026-05-01T00:00:00.000Z'),
+    });
+    tx.$queryRaw.mockResolvedValue(sufficientCohort());
+
+    // Lurker created 200d before NOW → dormant. Already 'dormant' → no cross.
+    const created200 = new Date(NOW.getTime() - 200 * 86_400_000);
+    tx.customer.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'cust_stable',
+          state: 'dormant',
+          shopifyCustomerId: SHOP_CUSTOMER_GID,
+          shopifyCreatedAt: created200,
+          createdAt: created200,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      service.decayRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'scheduler', now: NOW }),
+    );
+
+    expect(result.transitions).toBe(0);
+    expect(result.emitted).toBe(0);
+    expect(tx.customerScore.upsert).toHaveBeenCalledTimes(1); // still scored
+    expect(tx.customer.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('NOT-yet-initialized merchant (scoringInitializedAt null) + band crossed → state update but NO emit (§1 gate)', async () => {
+    const { service } = makeService();
+    const prisma = makeDecayPrisma(tx, {
+      currency: 'USD',
+      shop: SHOP,
+      scoringInitializedAt: null, // gate CLOSED
+    });
+    tx.$queryRaw.mockResolvedValue(sufficientCohort());
+
+    const created200 = new Date(NOW.getTime() - 200 * 86_400_000);
+    tx.customer.findMany
+      .mockResolvedValueOnce([
+        {
+          id: 'cust_gated',
+          state: 'warm',
+          shopifyCustomerId: SHOP_CUSTOMER_GID,
+          shopifyCreatedAt: created200,
+          createdAt: created200,
+        },
+      ])
+      .mockResolvedValue([]);
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      service.decayRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'scheduler', now: NOW }),
+    );
+
+    // Band data write happens (unconditional, lock #22 / C9)...
+    expect(result.transitions).toBe(1);
+    expect(tx.customer.update).toHaveBeenCalledWith({
+      where: { id: 'cust_gated' },
+      data: { state: 'dormant' },
+    });
+    // ...but emission is suppressed (gate closed).
+    expect(result.emitted).toBe(0);
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+    expect(tx.outboxEvent.create).not.toHaveBeenCalled();
+  });
+
+  it('boundary: lurker exactly 90 days old → warm (≤ wins), with PINNED clock for determinism', async () => {
+    // Pin the clock so the floor-of-day arithmetic in lurkerRDays is exact:
+    // a real-clock `now` would make (now - createdAt) drift a few ms over
+    // exactly-90-days and could floor to 90 or, on a slow boundary, jitter.
+    const pinnedNow = new Date('2026-06-10T12:00:00.000Z');
+    vi.useFakeTimers();
+    vi.setSystemTime(pinnedNow);
+    try {
+      const { service } = makeService();
+      const prisma = makeDecayPrisma(tx, {
+        currency: 'USD',
+        shop: SHOP,
+        scoringInitializedAt: new Date('2026-05-01T00:00:00.000Z'),
+      });
+      tx.$queryRaw.mockResolvedValue(sufficientCohort());
+
+      // Exactly 90 days before pinnedNow → rDays = 90 → stateFromRecency(90)
+      // = warm (warm_max = 90, ≤ wins). Currently 'active' → crosses to warm.
+      const created90 = new Date(pinnedNow.getTime() - 90 * 86_400_000);
+      tx.customer.findMany
+        .mockResolvedValueOnce([
+          {
+            id: 'cust_boundary',
+            state: 'active',
+            shopifyCustomerId: SHOP_CUSTOMER_GID,
+            shopifyCreatedAt: created90,
+            createdAt: created90,
+          },
+        ])
+        .mockResolvedValue([]);
+
+      // No explicit `now` → method defaults to Date.now() (pinned).
+      await withTenantScope(MERCHANT_ID, async () =>
+        service.decayRescore(prisma, { merchantId: MERCHANT_ID, actorId: 'scheduler' }),
+      );
+
+      expect(tx.customer.update).toHaveBeenCalledWith({
+        where: { id: 'cust_boundary' },
+        data: { state: 'warm' }, // 90 → warm, NOT at_risk (91 would be at_risk)
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

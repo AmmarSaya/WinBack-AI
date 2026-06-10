@@ -1671,4 +1671,178 @@ describe('drainer integration (real Postgres)', () => {
       expect(initAudits).toHaveLength(2);
     });
   });
+
+  // ---------------------------------------------------------------------
+  // decay-rescore sweep (real DB)
+  //
+  // The steady-state calendar-driven transition detector. Re-evaluates
+  // the working set (active/warm/at_risk/dormant), emits
+  // customer.state_changed for real decay transitions (gated on
+  // scoringInitializedAt), skips terminal `lost` + cohort-driven
+  // `insufficient_data`. `now` is injected so transitions are
+  // deterministic without clock-pinning.
+  // ---------------------------------------------------------------------
+
+  describe('decay-rescore sweep (real DB)', () => {
+    function makeService(): CustomerScoreService {
+      const client = getTestClient();
+      return new CustomerScoreService(
+        new CustomerScoreRepository(client),
+        new AuditLogRepository(client),
+      );
+    }
+
+    async function setCustomerState(customerId: string, state: string): Promise<void> {
+      await withSystemScope('test.set_state', async () => {
+        await getTestClient().customer.update({
+          where: { id: customerId },
+          // Cast — the test deliberately presets the band to the "before"
+          // value; production only writes it through CustomerScoreService.
+          data: { state: state as never },
+        });
+      });
+    }
+
+    it('initialized merchant: emits exactly for customers whose band crossed; skips lost; respects no-change', async () => {
+      const merchantId = await createTestMerchant(SHOP); // initialized (default)
+      const now = new Date('2026-06-10T00:00:00.000Z');
+      const daysAgo = (n: number): Date => new Date(now.getTime() - n * 86_400_000);
+
+      // 5 scorable customers (all orders within 365d → cohort sufficient).
+      const a = await seedScorableCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/700001',
+        shopifyOrderId: 'gid://shopify/Order/7000010',
+        placedAt: daysAgo(95), // → at_risk
+        totalCents: 5_000n,
+      });
+      const b = await seedScorableCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/700002',
+        shopifyOrderId: 'gid://shopify/Order/7000020',
+        placedAt: daysAgo(50), // → warm
+        totalCents: 4_000n,
+      });
+      const c = await seedScorableCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/700003',
+        shopifyOrderId: 'gid://shopify/Order/7000030',
+        placedAt: daysAgo(20), // → active
+        totalCents: 3_000n,
+      });
+      const d = await seedScorableCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/700004',
+        shopifyOrderId: 'gid://shopify/Order/7000040',
+        placedAt: daysAgo(200), // → dormant
+        totalCents: 2_000n,
+      });
+      const e = await seedScorableCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/700005',
+        shopifyOrderId: 'gid://shopify/Order/7000050',
+        placedAt: daysAgo(120), // → at_risk
+        totalCents: 1_000n,
+      });
+      // A lost lurker (no order) — must be SKIPPED by the working-set filter.
+      const fId = await createTestCustomer({
+        merchantId,
+        shopifyCustomerId: 'gid://shopify/Customer/700006',
+      });
+
+      // Preset the "before" bands.
+      await setCustomerState(a.customerId, 'warm'); // → crosses to at_risk
+      await setCustomerState(b.customerId, 'warm'); // → stays warm
+      await setCustomerState(c.customerId, 'active'); // → stays active
+      await setCustomerState(d.customerId, 'at_risk'); // → crosses to dormant
+      await setCustomerState(e.customerId, 'at_risk'); // → stays at_risk
+      await setCustomerState(fId, 'lost'); // → SKIPPED (terminal)
+
+      const result = await withTenantScope(merchantId, async () =>
+        makeService().decayRescore(getTestClient(), { merchantId, now, actorId: 'scheduler' }),
+      );
+
+      // 5 in the working set evaluated (F=lost excluded); 2 crossed (A, D).
+      expect(result.customersEvaluated).toBe(5);
+      expect(result.transitions).toBe(2);
+      expect(result.emitted).toBe(2);
+
+      // A: warm → at_risk; D: at_risk → dormant.
+      const aRow = await assertRead(() =>
+        getTestClient().customer.findUnique({ where: { id: a.customerId } }),
+      );
+      expect(aRow?.state).toBe('at_risk');
+      const dRow = await assertRead(() =>
+        getTestClient().customer.findUnique({ where: { id: d.customerId } }),
+      );
+      expect(dRow?.state).toBe('dormant');
+
+      // F stays lost — never touched.
+      const fRow = await assertRead(() =>
+        getTestClient().customer.findUnique({ where: { id: fId } }),
+      );
+      expect(fRow?.state).toBe('lost');
+
+      // Exactly 2 customer.state_changed OutboxEvents + 2 AuditLogs.
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(2);
+      const audits = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audits).toHaveLength(2);
+      // The decay discriminator is on the audit context.
+      expect(audits.every((a2) => (a2.context as { trigger?: string }).trigger === 'decay_sweep')).toBe(true);
+    });
+
+    it('NOT-yet-initialized merchant: band updates but ZERO emit (§1 gate)', async () => {
+      const merchantId = await createTestMerchant(SHOP, { scoringInitializedAt: null });
+      const now = new Date('2026-06-10T00:00:00.000Z');
+      const daysAgo = (n: number): Date => new Date(now.getTime() - n * 86_400_000);
+
+      // 5 scorable for a sufficient cohort; one preset to a stale band.
+      const targets = [];
+      for (let i = 0; i < 5; i++) {
+        targets.push(
+          await seedScorableCustomer({
+            merchantId,
+            shopifyCustomerId: `gid://shopify/Customer/${String(710001 + i)}`,
+            shopifyOrderId: `gid://shopify/Order/${String((710001 + i) * 10)}`,
+            placedAt: daysAgo(95 + i * 30), // 95,125,155,185,215 → various decayed bands
+            totalCents: BigInt(1000 * (i + 1)),
+          }),
+        );
+      }
+      // Preset all to 'warm' so each crosses to a more-decayed band.
+      for (const t of targets) {
+        await setCustomerState(t.customerId, 'warm');
+      }
+
+      const result = await withTenantScope(merchantId, async () =>
+        makeService().decayRescore(getTestClient(), { merchantId, now, actorId: 'scheduler' }),
+      );
+
+      // Bands updated (data write unconditional)...
+      expect(result.transitions).toBeGreaterThan(0);
+      // ...but emission fully suppressed (gate closed).
+      expect(result.emitted).toBe(0);
+      const events = await assertRead(() =>
+        getTestClient().outboxEvent.findMany({
+          where: { merchantId, type: OUTBOX_EVENTS.customer.state_changed },
+        }),
+      );
+      expect(events).toHaveLength(0);
+      const audits = await assertRead(() =>
+        getTestClient().auditLog.findMany({
+          where: { merchantId, action: 'customer.state_changed' },
+        }),
+      );
+      expect(audits).toHaveLength(0);
+    });
+  });
 });

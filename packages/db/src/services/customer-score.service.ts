@@ -33,6 +33,28 @@ const BULK_RESCORE_BATCH_SIZE = 500;
  */
 const BULK_RESCORE_TX_TIMEOUT_MS = 60_000;
 
+/**
+ * Batch size for `decayRescore` — customers evaluated per tx. Same value
+ * as `bulkRescore`; independently named for future tuning (the sweep's
+ * per-customer write count is lower than bulkRescore's on a typical day —
+ * only CHANGED customers emit — so the same chunk is comfortably under the
+ * tx timeout).
+ */
+const DECAY_RESCORE_BATCH_SIZE = 500;
+
+/** Per-batch tx timeout for `decayRescore`. Mirrors `bulkRescore`. */
+const DECAY_RESCORE_TX_TIMEOUT_MS = 60_000;
+
+/**
+ * The decay sweep's WORKING SET — only these recency-driven bands are
+ * re-evaluated. `lost` is terminal for decay (`rDays` only grows; a lost
+ * customer can never decay-transition again — only a new order resets
+ * them, which fires a webhook → `recompute`). `insufficient_data` is
+ * cohort-driven, not recency-driven (a decay sweep can't move it). Both
+ * are excluded from the sweep's customer pagination.
+ */
+const DECAY_WORKING_SET_STATES = ['active', 'warm', 'at_risk', 'dormant'] as const;
+
 const log = getLogger('db.customer-score.service');
 
 /**
@@ -570,11 +592,351 @@ export class CustomerScoreService {
 
     return { customersScored, batches, cohortSize: cohort.length, durationMs };
   }
+
+  /**
+   * Periodic decay-rescore sweep for ONE merchant (post-Epic-F, the
+   * steady-state companion to §1's `bulkRescore`). Run daily by the
+   * scheduler's decay-sweep cron (`apps/scheduler/src/handlers/decay-sweep.ts`).
+   *
+   * WHY THIS EXISTS. Scoring is otherwise webhook-only: `recompute`
+   * fires from `orders/*` + `customers/*` events. A customer who goes
+   * quiet AFTER install emits zero webhooks, so `recompute` never runs
+   * for them and they sit at their last band FOREVER — even as `rDays`
+   * climbs past the active/warm/at_risk/dormant thresholds. The sweep
+   * re-evaluates customers on the calendar so a band that decays purely
+   * from the passage of time (e.g. `active → dormant` with no new
+   * orders) is detected and fires a winback. Hard prereq for ONGOING
+   * winback (gates Epic G's steady-state value).
+   *
+   * DESIGN (Option B — cohort-once batch + emit). The band
+   * (`stateFromRecency(rDays)`) is recency-only; quintiles do NOT affect
+   * it. So a cheaper "stored_rDays + elapsed" re-eval (Option A) would
+   * suffice for the band ALONE. We deliberately chose B anyway:
+   *   - Robustness: B re-derives `rDays` from the live `Order` table
+   *     every sweep, so it can never be wrong even if a future
+   *     order-write path forgot to `recompute`. Option A would couple
+   *     the sweep's correctness to the same-tx-recompute invariant held
+   *     in `apps/drainer/src/handlers/order.ts` — a cross-file coupling
+   *     no test guards.
+   *   - Free correctness: B refreshes quintiles + churnRisk +
+   *     `insufficient_data` flips for the same O(N)-per-merchant cost
+   *     (cohort read ONCE, like `bulkRescore`; NOT O(N²)).
+   *
+   * ALGORITHM (mirrors `bulkRescore`, two deltas — emits + filters):
+   *   1. Read merchant once: currency snapshot (§S-11), shop (audit),
+   *      AND `scoringInitializedAt` (the §1 emission gate).
+   *   2. Read the scorable cohort ONCE + boundaries ONCE (held for the
+   *      whole pass — same snapshot semantics as `bulkRescore`).
+   *   3. Paginate ONLY the WORKING SET — customers in
+   *      `{active, warm, at_risk, dormant}`. `lost` is skipped (terminal
+   *      for decay — `rDays` only grows, so a lost customer can never
+   *      decay-transition again; only a NEW order resets them, and that
+   *      fires a webhook → `recompute`). `insufficient_data` is skipped
+   *      (cohort-driven, not recency-driven — a decay sweep can't move
+   *      it; only cohort growth via a new order does). Per customer:
+   *      resolve via the same branch `recompute`/`bulkRescore` use,
+   *      upsert the score (refreshes `computedAt`), and ON BAND CHANGE:
+   *      update `Customer.state` (unconditional data write) + — GATED on
+   *      `scoringInitializedAt` — append the `customer.state_changed`
+   *      AuditLog + OutboxEvent, all in the SAME batch tx.
+   *
+   * EMISSION GATE (§1 / Lock V10). Identical to `recompute`: emit ONLY
+   * when `scoringInitializedAt` is non-null. The cron handler already
+   * filters to initialized merchants, but the method gates defensively
+   * so a mis-targeted call writes band data without emitting (no
+   * phantom install-day storm). This is why `decayRescore` joins the
+   * Lock #22 single-OWNER set as the THIRD method: it writes
+   * `Customer.state` and emits transitions (like `recompute`), but
+   * batch-shaped (like `bulkRescore`). See ARCHITECTURE.md "Customer
+   * State Single-Owner Policy".
+   *
+   * RATE-LIMITING. None here. The emitted `customer.state_changed`
+   * events flow through the drainer to `handleCustomerStateChanged`,
+   * where A2's per-merchant hourly generation cap (STEP 4.5) bounds the
+   * downstream LLM burst — regardless of whether the event came from a
+   * webhook or this sweep. A sweep that flips thousands of customers at
+   * once does NOT produce thousands of generations; A2 denies the
+   * over-cap ones. (This is why A2 was sequenced before the sweep.)
+   * The residual is the sweep's own outbox-write burst — cheap DB I/O,
+   * a scale-future throughput item, not an LLM-cost concern.
+   *
+   * IDEMPOTENCY. Re-running the sweep re-reads `Customer.state` and only
+   * emits on an actual band change, so a same-day re-run is a no-op for
+   * already-transitioned customers. `upsertScore` is keyed on
+   * `customerId`.
+   *
+   * LAUNCH PREREQUISITE (record honestly). The sweep marches customers
+   * toward lapse based on OUR `Order` table. A merchant's PRE-INSTALL
+   * order history is never backfilled (no order backfill exists —
+   * `BACKFILL_RESOURCES.orders` is an unwired placeholder; install
+   * backfills customers only), and missed `orders/create` webhooks are
+   * never reconciled. So a customer who actually bought recently but
+   * whose orders we never captured is scored as an account-age lurker
+   * and WILL be decayed toward lapse — a false-lapse winback. This is
+   * NOT specific to the sweep (it equally affects §1's bulkRescore), but
+   * the sweep makes it ACTIVE. The sweep MUST NOT be enabled for a real
+   * merchant with significant pre-install history until an
+   * order-backfill (or order-reconciliation sweep) exists. Safe at
+   * current scale (dev stores, no real orders). See
+   * POST-EPIC-F-CONSCIOUS-DECISION.md "Decay-rescore sweep" +
+   * handoff.md carry-forwards.
+   *
+   * Caller MUST already be in `withTenantScope(merchantId)` (same
+   * contract as `recompute` + `bulkRescore`).
+   */
+  async decayRescore(
+    prisma: WinbackPrisma,
+    args: {
+      readonly merchantId: string;
+      readonly actorId: string;
+      readonly now?: Date;
+      readonly batchSize?: number;
+    },
+  ): Promise<DecayRescoreResult> {
+    const startMs = Date.now();
+    const { merchantId, actorId } = args;
+    const now = args.now ?? new Date();
+    const batchSize = args.batchSize ?? DECAY_RESCORE_BATCH_SIZE;
+
+    assertScopeMatchesMerchant(merchantId);
+
+    const uow = new UnitOfWork(prisma);
+
+    // (1) Merchant read — currency (§S-11), shop (audit), and the §1
+    // emission gate flag.
+    const merchant = await prisma.merchant.findUnique({
+      where: { id: merchantId },
+      select: { currency: true, shop: true, scoringInitializedAt: true },
+    });
+    if (merchant === null) {
+      throw new Error(`decayRescore: merchant ${merchantId} not found`);
+    }
+    const currency = (merchant.currency ?? 'USD').toUpperCase();
+    const emit = merchant.scoringInitializedAt !== null;
+
+    // (2) Cohort read ONCE + boundaries ONCE — held for the whole pass
+    // (same snapshot semantics as bulkRescore).
+    const cohort = await uow.run(
+      async (ctx) => this.customerScoreRepo.readCohort({ merchantId, now, tx: ctx.db }),
+      { timeout: DECAY_RESCORE_TX_TIMEOUT_MS },
+    );
+    const isInsufficientCohort = cohort.length < INSUFFICIENT_COHORT_THRESHOLD;
+    const boundaries: QuintileBoundaries | null = isInsufficientCohort
+      ? null
+      : computeQuintileBoundaries(cohort);
+    const cohortMap = new Map(cohort.map((row) => [row.customerId, row]));
+
+    // (3) Paginate the WORKING SET only — non-terminal, recency-driven
+    // bands. Skip `lost` (terminal for decay) + `insufficient_data`
+    // (cohort-driven). Per batch tx: resolve + upsert + (on band change)
+    // state update + gated emit.
+    let cursor: string | null = null;
+    let customersEvaluated = 0;
+    let transitions = 0;
+    let emitted = 0;
+    let batches = 0;
+    let done = false;
+    while (!done) {
+      const processed = await uow.run(
+        async (ctx) => {
+          const tx = ctx.db;
+          const customers = await tx.customer.findMany({
+            where: {
+              merchantId,
+              // Spread to a mutable array — Prisma's `in` filter type is
+              // `CustomerState[]`, not a readonly tuple.
+              state: { in: [...DECAY_WORKING_SET_STATES] },
+            },
+            select: {
+              id: true,
+              state: true,
+              shopifyCustomerId: true,
+              shopifyCreatedAt: true,
+              createdAt: true,
+            },
+            orderBy: { id: 'asc' },
+            take: batchSize,
+            ...(cursor !== null && { cursor: { id: cursor }, skip: 1 }),
+          });
+
+          let batchTransitions = 0;
+          let batchEmitted = 0;
+
+          for (const c of customers) {
+            const cohortRow = cohortMap.get(c.id);
+            const resolved: ResolvedCustomerScore =
+              cohortRow !== undefined
+                ? resolveScorableCustomerWithBoundaries({
+                    row: cohortRow,
+                    boundaries,
+                    isInsufficientCohort,
+                  })
+                : resolveLurker({
+                    referenceCreatedAt: c.shopifyCreatedAt ?? c.createdAt,
+                    now,
+                    isInsufficientCohort,
+                  });
+
+            // Always refresh the score row (computedAt + any quintile
+            // shift), same as recompute step (5).
+            await this.customerScoreRepo.upsertScore({
+              merchantId,
+              customerId: c.id,
+              rDays: resolved.rDays,
+              fCount: resolved.fCount,
+              mCents: resolved.mCents,
+              currency,
+              rQuintile: resolved.rQuintile,
+              fQuintile: resolved.fQuintile,
+              mQuintile: resolved.mQuintile,
+              churnRiskScore: resolved.churnRiskScore,
+              computedAt: now,
+              tx,
+            });
+
+            if (c.state === resolved.newState) {
+              continue;
+            }
+
+            // BAND CHANGED. Data write is UNCONDITIONAL (lock #22 / C9 —
+            // Customer.state must always reflect the computed band).
+            batchTransitions += 1;
+            await tx.customer.update({
+              where: { id: c.id },
+              data: { state: resolved.newState },
+            });
+
+            // Transition-reaction side-effects — GATED on the §1 flag,
+            // exactly as recompute step (6). A not-yet-initialized
+            // merchant updates the band but suppresses emission.
+            if (!emit) {
+              continue;
+            }
+            batchEmitted += 1;
+
+            await this.auditLogRepo.append(
+              {
+                merchantId,
+                shop: merchant.shop,
+                actorType: 'system',
+                actorId,
+                action: AUDIT_ACTIONS.customer.state_changed,
+                targetType: 'customer',
+                targetId: c.id,
+                context: {
+                  oldState: c.state,
+                  newState: resolved.newState,
+                  rDays: resolved.rDays,
+                  fCount: resolved.fCount,
+                  mCents: resolved.mCents.toString(),
+                  rQuintile: resolved.rQuintile,
+                  fQuintile: resolved.fQuintile,
+                  mQuintile: resolved.mQuintile,
+                  churnRiskScore: resolved.churnRiskScore,
+                  currency,
+                  cohortSize: cohort.length,
+                  branch: cohortRow !== undefined ? 'scorable' : 'lurker',
+                  // Discriminator: distinguishes decay-sweep transitions
+                  // from webhook-driven recompute transitions in the
+                  // audit trail. Extra context key only — the OutboxEvent
+                  // payload below stays the schema-validated shape.
+                  trigger: 'decay_sweep',
+                },
+              },
+              tx,
+            );
+
+            const payload = buildCustomerStateChangedPayload({
+              merchantId,
+              customerId: c.id,
+              shopifyCustomerId: c.shopifyCustomerId,
+              oldState: c.state,
+              newState: resolved.newState,
+              computedAt: now,
+              rfmScore: {
+                rDays: resolved.rDays,
+                fCount: resolved.fCount,
+                mCents: resolved.mCents,
+                rQuintile: resolved.rQuintile,
+                fQuintile: resolved.fQuintile,
+                mQuintile: resolved.mQuintile,
+              },
+            });
+
+            await tx.outboxEvent.create({
+              data: {
+                merchantId,
+                type: OUTBOX_EVENTS.customer.state_changed,
+                payload,
+              },
+            });
+          }
+
+          return {
+            count: customers.length,
+            lastId: customers.at(-1)?.id ?? null,
+            batchTransitions,
+            batchEmitted,
+          };
+        },
+        { timeout: DECAY_RESCORE_TX_TIMEOUT_MS },
+      );
+
+      customersEvaluated += processed.count;
+      transitions += processed.batchTransitions;
+      emitted += processed.batchEmitted;
+      batches += 1;
+
+      if (processed.count < batchSize || processed.lastId === null) {
+        done = true;
+      } else {
+        cursor = processed.lastId;
+      }
+    }
+
+    const durationMs = Date.now() - startMs;
+    log.info(
+      {
+        merchantId,
+        customersEvaluated,
+        transitions,
+        emitted,
+        suppressed: transitions - emitted,
+        batches,
+        cohortSize: cohort.length,
+        emit,
+        durationMs,
+      },
+      'decayRescore: sweep pass complete',
+    );
+
+    return {
+      customersEvaluated,
+      transitions,
+      emitted,
+      batches,
+      cohortSize: cohort.length,
+      durationMs,
+    };
+  }
 }
 
 /** Result metadata from a `CustomerScoreService.bulkRescore` pass. */
 export interface BulkRescoreResult {
   readonly customersScored: number;
+  readonly batches: number;
+  readonly cohortSize: number;
+  readonly durationMs: number;
+}
+
+/** Result metadata from a `CustomerScoreService.decayRescore` sweep pass. */
+export interface DecayRescoreResult {
+  /** Customers in the working set that were re-evaluated. */
+  readonly customersEvaluated: number;
+  /** Of those, how many changed band (Customer.state updated). */
+  readonly transitions: number;
+  /** Of the transitions, how many emitted (gate open). `transitions - emitted` = suppressed (gate closed). */
+  readonly emitted: number;
   readonly batches: number;
   readonly cohortSize: number;
   readonly durationMs: number;
