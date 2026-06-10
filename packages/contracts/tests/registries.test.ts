@@ -175,8 +175,8 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     // Same literal, two registries — coincidence, not coupling.
   });
 
-  it('contains the fourteen reasons currently used across the codebase', () => {
-    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(14);
+  it('contains the fifteen reasons currently used across the codebase', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(15);
     expect(SYSTEM_SCOPE_REASONS.admin.token_resolve).toBe('admin.token_resolve');
     expect(SYSTEM_SCOPE_REASONS.admin.token_revoke).toBe('admin.token_revoke');
     expect(SYSTEM_SCOPE_REASONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
@@ -185,6 +185,8 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     expect(SYSTEM_SCOPE_REASONS.outbox.dead_letter).toBe('outbox.dead_letter');
     expect(SYSTEM_SCOPE_REASONS.rollup.daily).toBe('rollup.daily');
     expect(SYSTEM_SCOPE_REASONS.enrichment.sweep).toBe('enrichment.sweep');
+    // Decay-rescore sweep (post-Epic-F) — daily steady-state companion to §1.
+    expect(SYSTEM_SCOPE_REASONS.scoring.decay_sweep).toBe('scoring.decay_sweep');
     expect(SYSTEM_SCOPE_REASONS.shopify.install).toBe('shopify.install');
     expect(SYSTEM_SCOPE_REASONS.webhook.ingest).toBe('webhook.ingest');
     expect(SYSTEM_SCOPE_REASONS.healthcheck.readyz).toBe('healthcheck.readyz');

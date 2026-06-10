@@ -3,9 +3,13 @@
  *
  * Dispatches by `job.name` so future sweep types (idempotency cleanup,
  * backfill recovery) can land on the same queue without a new queue
- * registration. D3 ships ONE sweep type:
+ * registration. Sweep types today:
  *
- *   - `'enrichment-sweep'` → runEnrichmentSweep
+ *   - `'enrichment-sweep'` → runEnrichmentSweep (every 15 min)
+ *   - `'decay-sweep'`      → runDecaySweep      (daily 03:00 UTC)
+ *
+ * The two coexist on one queue with different repeat cadences (BullMQ
+ * deduplicates repeatables by name+pattern/every).
  *
  * Unknown job names: log + return (no throw). A rolling deploy where
  * the producer adds a new sweep type before the consumer knows about
@@ -22,8 +26,9 @@ import { createRedisClient } from '@winback/queue';
 import { Worker, type Job } from 'bullmq';
 
 import type { SchedulerContext } from '../context.js';
+import { runDecaySweep } from '../handlers/decay-sweep.js';
 import { runEnrichmentSweep } from '../handlers/enrichment-sweep.js';
-import { SWEEP_ENRICHMENT_JOB_NAME } from '../scheduling.js';
+import { SWEEP_DECAY_JOB_NAME, SWEEP_ENRICHMENT_JOB_NAME } from '../scheduling.js';
 
 const log = getLogger('scheduler.worker.sweep');
 
@@ -39,6 +44,9 @@ export function createSweepWorker(ctx: SchedulerContext): Worker {
       switch (job.name) {
         case SWEEP_ENRICHMENT_JOB_NAME:
           await runEnrichmentSweep(ctx);
+          return;
+        case SWEEP_DECAY_JOB_NAME:
+          await runDecaySweep(ctx);
           return;
         default:
           log.warn(

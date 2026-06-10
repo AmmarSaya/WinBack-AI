@@ -33,7 +33,11 @@ import { getShopifyConfig } from '@winback/shopify';
 
 import type { SchedulerContext } from './context.js';
 import { disconnectPrisma, getPrisma } from './db.js';
-import { registerRollupRepeat, registerSweepRepeat } from './scheduling.js';
+import {
+  registerDecaySweepRepeat,
+  registerRollupRepeat,
+  registerSweepRepeat,
+} from './scheduling.js';
 import { createRollupWorker } from './workers/rollup-worker.js';
 import { createSweepWorker } from './workers/sweep-worker.js';
 
@@ -53,11 +57,13 @@ async function main(): Promise<void> {
 
   await registerRollupRepeat(queues.cronRollup);
   await registerSweepRepeat(queues.cronSweep);
+  await registerDecaySweepRepeat(queues.cronSweep);
 
   log.info(
     {
       rollupCadence: 'cron pattern 0 * * * * (hourly at minute 0 UTC)',
       sweepCadence: 'every 15 min (interval)',
+      decaySweepCadence: 'cron pattern 0 3 * * * (daily at 03:00 UTC)',
     },
     'scheduler: repeatable jobs registered; workers running',
   );

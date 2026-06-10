@@ -97,6 +97,20 @@ export const SYSTEM_SCOPE_REASONS = {
     sweep: 'enrichment.sweep',
   },
   /**
+   * Periodic decay-rescore sweep (post-Epic-F, the steady-state
+   * companion to §1's install-day bulk-rescore). The daily cron does a
+   * cross-tenant SELECT of initialized merchants
+   * (`scoringInitializedAt IS NOT NULL`), then per merchant opens
+   * `withTenantScope` and calls `CustomerScoreService.decayRescore` —
+   * re-evaluating recency-band transitions for customers whose `rDays`
+   * has crept across a threshold with no new order webhook to trigger
+   * an event-driven recompute. Emits `customer.state_changed` for real
+   * decay transitions (gated on the §1 flag, same as `recompute`).
+   */
+  scoring: {
+    decay_sweep: 'scoring.decay_sweep',
+  },
+  /**
    * Install flow in @winback/shopify. Required because no Merchant row
    * exists yet — the install IS the row-creating write.
    */
@@ -153,6 +167,7 @@ export type SystemScopeReason =
   | (typeof SYSTEM_SCOPE_REASONS.outbox)[keyof typeof SYSTEM_SCOPE_REASONS.outbox]
   | (typeof SYSTEM_SCOPE_REASONS.rollup)[keyof typeof SYSTEM_SCOPE_REASONS.rollup]
   | (typeof SYSTEM_SCOPE_REASONS.enrichment)[keyof typeof SYSTEM_SCOPE_REASONS.enrichment]
+  | (typeof SYSTEM_SCOPE_REASONS.scoring)[keyof typeof SYSTEM_SCOPE_REASONS.scoring]
   | (typeof SYSTEM_SCOPE_REASONS.shopify)[keyof typeof SYSTEM_SCOPE_REASONS.shopify]
   | (typeof SYSTEM_SCOPE_REASONS.webhook)[keyof typeof SYSTEM_SCOPE_REASONS.webhook]
   | (typeof SYSTEM_SCOPE_REASONS.healthcheck)[keyof typeof SYSTEM_SCOPE_REASONS.healthcheck]
@@ -165,6 +180,7 @@ export const ALL_SYSTEM_SCOPE_REASONS: ReadonlySet<SystemScopeReason> = new Set(
   ...Object.values(SYSTEM_SCOPE_REASONS.outbox),
   ...Object.values(SYSTEM_SCOPE_REASONS.rollup),
   ...Object.values(SYSTEM_SCOPE_REASONS.enrichment),
+  ...Object.values(SYSTEM_SCOPE_REASONS.scoring),
   ...Object.values(SYSTEM_SCOPE_REASONS.shopify),
   ...Object.values(SYSTEM_SCOPE_REASONS.webhook),
   ...Object.values(SYSTEM_SCOPE_REASONS.healthcheck),

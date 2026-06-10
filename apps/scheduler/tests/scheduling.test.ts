@@ -18,8 +18,11 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   ROLLUP_CRON_PATTERN,
   ROLLUP_JOB_NAME,
+  SWEEP_DECAY_CRON_PATTERN,
+  SWEEP_DECAY_JOB_NAME,
   SWEEP_ENRICHMENT_JOB_NAME,
   SWEEP_INTERVAL_MS,
+  registerDecaySweepRepeat,
   registerRollupRepeat,
   registerSweepRepeat,
 } from '../src/scheduling.js';
@@ -69,20 +72,49 @@ describe('registerSweepRepeat', () => {
   });
 });
 
+describe('registerDecaySweepRepeat', () => {
+  it('calls queue.add with cron PATTERN (NOT interval) for the daily 03:00 UTC decay sweep', async () => {
+    const { queue, addMock } = makeStubQueue();
+    await registerDecaySweepRepeat(queue);
+
+    expect(addMock).toHaveBeenCalledTimes(1);
+    expect(addMock).toHaveBeenCalledWith(
+      SWEEP_DECAY_JOB_NAME,
+      {},
+      { repeat: { pattern: SWEEP_DECAY_CRON_PATTERN } },
+    );
+  });
+
+  it('the decay cron pattern is exactly "0 3 * * *" (daily 03:00 UTC — regression lock)', () => {
+    expect(SWEEP_DECAY_CRON_PATTERN).toBe('0 3 * * *');
+  });
+
+  it('the decay sweep job name is distinct from the enrichment sweep (both on cron.sweep)', () => {
+    expect(SWEEP_DECAY_JOB_NAME).toBe('decay-sweep');
+    expect(SWEEP_DECAY_JOB_NAME).not.toBe(SWEEP_ENRICHMENT_JOB_NAME);
+  });
+});
+
 describe('regression — pattern vs every distinction must not flip', () => {
-  it('rollup option uses `pattern`, sweep option uses `every`', async () => {
+  it('rollup option uses `pattern`, sweep option uses `every`, decay uses `pattern`', async () => {
     const rollup = makeStubQueue();
     const sweep = makeStubQueue();
+    const decay = makeStubQueue();
 
     await registerRollupRepeat(rollup.queue);
     await registerSweepRepeat(sweep.queue);
+    await registerDecaySweepRepeat(decay.queue);
 
     const rollupOpts = rollup.addMock.mock.calls[0]?.[2] as { repeat: Record<string, unknown> };
     const sweepOpts = sweep.addMock.mock.calls[0]?.[2] as { repeat: Record<string, unknown> };
+    const decayOpts = decay.addMock.mock.calls[0]?.[2] as { repeat: Record<string, unknown> };
 
     expect(rollupOpts.repeat).toHaveProperty('pattern');
     expect(rollupOpts.repeat).not.toHaveProperty('every');
     expect(sweepOpts.repeat).toHaveProperty('every');
     expect(sweepOpts.repeat).not.toHaveProperty('pattern');
+    // Decay is calendar-anchored → cron pattern, NOT interval.
+    expect(decayOpts.repeat).toHaveProperty('pattern');
+    expect(decayOpts.repeat).not.toHaveProperty('every');
   });
 });

@@ -558,6 +558,90 @@ Other locked details (Phase-1 sign-off):
 
 ---
 
+## Decay-rescore sweep (post-§1-§5, net-new — no original §-spec)
+
+This sub-phase has no numbered section in the original §1-§12 plan — it
+surfaced during §1 (A1) Phase 1 as the steady-state companion that §1's
+bulk-rescore explicitly defers to ("catching up genuinely-missed lapses
+with sends is the job of a separate, rate-limited periodic
+decay-rescore sweep"). Recorded here as the launch contract for it.
+
+### Why it exists
+
+Scoring is webhook-only: `recompute` fires from `orders/*` + `customers/*`
+events. A customer who goes quiet AFTER install emits zero webhooks →
+`recompute` never runs for them → their band sits FOREVER even as `rDays`
+climbs past the active/warm/at_risk/dormant thresholds. Post-install
+lapses are therefore invisible — the winback product can't win back the
+customers it most needs to. A scheduled sweep re-evaluates customers so
+calendar-decay transitions (`active → dormant` from `rDays` alone, no
+new orders) get detected and fire winbacks. Hard prereq for ONGOING
+winback; gates Epic G's steady-state value.
+
+### Design decisions (locked 2026-06-10, after a full code trace)
+
+The banked framing was an "emit-vs-cohort-efficient tension." The trace
+**reframed** it:
+
+- The BAND (`Customer.state`) is `stateFromRecency(rDays)` — **recency-only**.
+  Quintiles do NOT affect the band (they feed `churnRiskScore`, which the
+  winback payload sets `null`). So a decay transition is fundamentally a
+  recency-band re-evaluation.
+- A cheap "stored_rDays + elapsed" re-eval (Option A) would suffice for the
+  band alone — and is **sound** because the same-tx recompute in
+  `apps/drainer/src/handlers/order.ts` keeps stored `CustomerScore.rDays`
+  current-as-of-our-DB-orders (no window where an order is in our DB but
+  unreflected in the score).
+- **Chose Option B (cohort-once batch + emit) anyway.** Deciding axis was
+  NOT false-lapse (that's a wash — see below). It was:
+  - **Regression-robustness**: B re-derives `rDays` from the live `Order`
+    table every sweep, so it's correct even if a future order-write path
+    forgets to `recompute`. Option A would couple the sweep's correctness to
+    a same-tx invariant held in a DIFFERENT file, guarded by no test.
+  - **Free correctness**: B refreshes quintiles + `insufficient_data` flips
+    for the same O(N)-per-merchant cost (cohort read ONCE, like
+    `bulkRescore`; NOT O(N²) — you never loop `recompute`).
+
+| Decision | Choice |
+|---|---|
+| Method | New 3rd `CustomerScoreService.decayRescore` — extends Lock #22 single-owner to THREE. Body = bulkRescore's read-cohort-once + `resolveScorableCustomerWithBoundaries` + recompute's per-customer emit-on-change. |
+| Emission gate | Gated on `scoringInitializedAt` (same §1 gate as `recompute`). Cron also filters to initialized merchants at the SELECT; method gates defensively. |
+| Cadence | Daily, `0 3 * * *` (cron-pattern, wall-clock-aligned). rDays thresholds are day-granular → daily catches every transition; hourly is wasted. 03:00 UTC off-peak, past the day boundary. |
+| Scheduler | New `decay-sweep` job on the existing `cron.sweep` queue (dispatched by job name). Handler models on `runEnrichmentSweep` (withSystemScope cross-tenant SELECT → per-merchant withTenantScope → per-merchant try/catch). |
+| Rate-limiting | NONE new. A2's per-merchant hourly cap bounds the downstream LLM burst (same gate a webhook hits). This is why A2 was sequenced first. |
+| Schema | NONE. Stateless. `lastDecaySweptAt` deferred. |
+| Working set | `state IN (active, warm, at_risk, dormant)`. Skip `lost` (terminal for decay) + `insufficient_data` (cohort-driven). |
+
+### LAUNCH PREREQUISITE — order backfill (affects §1 too, not just the sweep)
+
+There is **no order backfill and no order reconciliation**.
+`BACKFILL_RESOURCES.orders` is an unwired registry placeholder; install
+backfills **customers only** (`apps/drainer/src/handlers/merchant.ts` runs
+only `CUSTOMER_BACKFILL_RESOURCE`). Consequence:
+
+- A real merchant's **pre-install order history is invisible to us**. Their
+  customers are imported (with a `numberOfOrders` count but zero `Order`
+  rows), so §1's `bulkRescore` (ALREADY SHIPPED) scores the whole base as
+  account-age **lurkers**, and the decay sweep would then **march those
+  mis-scored customers toward lapse and fire winbacks at actively-buying
+  customers**.
+- The false-lapse axis does NOT discriminate Option A from B — `readCohort`
+  reads OUR `Order` table, the same source A's stored rDays is kept current
+  against. Both are equally blind to Shopify-but-not-our-DB orders. **B does
+  not fix this; an order backfill does.**
+
+This is a **hard prerequisite for real-merchant onboarding**, gating both
+§1's scoring-against-real-data and the decay sweep's enablement. The §1
+close-out's "validated mechanism, NOT scoring-against-real-data" caveat is
+the same root cause. The decay sweep is **enablement-gated**: safe to build
+and run at current scale (dev stores, no real orders → nothing to
+mis-lapse), but MUST NOT be enabled for a real merchant with significant
+pre-install history until order-backfill (or an order-reconciliation sweep)
+exists. Same shape as A1a: build the mechanism; enablement is a separate
+gated step.
+
+---
+
 ## Section 6 — Path 3: M10 one-liner scope assertions
 
 ### Why this exists, why now
