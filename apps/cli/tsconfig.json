@@ -10,6 +10,7 @@
     { "path": "../../packages/errors" },
     { "path": "../../packages/config" },
     { "path": "../../packages/logger" },
-    { "path": "../../packages/db" }
+    { "path": "../../packages/db" },
+    { "path": "../../packages/shopify" }
   ]
 }

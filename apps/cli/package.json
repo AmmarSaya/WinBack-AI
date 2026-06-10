@@ -9,6 +9,7 @@
     "outbox:replay": "node dist/outbox.js replay",
     "outbox:dead-letter": "node dist/outbox.js dead-letter",
     "scoring:bulk-rescore": "node dist/scoring.js bulk-rescore",
+    "backfill:orders": "node dist/backfill.js orders",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -18,7 +19,8 @@
     "@winback/contracts": "workspace:*",
     "@winback/db": "workspace:*",
     "@winback/errors": "workspace:*",
-    "@winback/logger": "workspace:*"
+    "@winback/logger": "workspace:*",
+    "@winback/shopify": "workspace:*"
   },
   "devDependencies": {
     "vitest": "2.1.9"
