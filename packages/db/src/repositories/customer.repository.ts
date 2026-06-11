@@ -1,4 +1,4 @@
-import { type Customer, Prisma } from '@prisma/client';
+import { type Customer, type EmailMarketingConsentState, Prisma } from '@prisma/client';
 import { ValidationError } from '@winback/errors';
 
 import { toShopifyCustomerGid } from '../gid.js';
@@ -6,6 +6,37 @@ import { assertScopeMatchesMerchant } from '../tenant-scope.js';
 import type { ShopifyCustomerWebhookBody } from '../webhook-bodies.js';
 
 import { BaseRepository } from './base.js';
+
+/**
+ * Normalize a Shopify marketing-consent state → `EmailMarketingConsentState`
+ * (Epic G / G-Q7). The SHARED normalizer for BOTH ingest paths, so webhook +
+ * backfill can never diverge:
+ *   - Webhook (REST):   `email_marketing_consent.state`     — lowercase
+ *   - Backfill (GraphQL): `emailMarketingConsent.marketingState` — UPPERCASE
+ * Each call site EXTRACTS the value from its own shape; this function
+ * normalizes only the VALUE (lowercase + match). ONLY `subscribed` permits a
+ * send (dispatch gate 2) — the same send-permitting predicate the shipped
+ * `acceptsMarketing` derivation already uses. FAILS CLOSED: Shopify's
+ * `redacted` / `invalid` and any unknown/future value → `not_subscribed`
+ * (collapse is intentional — for the field's one job, gating sends, all of
+ * those are non-sending; redaction forensics live in the redact/audit system).
+ */
+export function toEmailMarketingConsentState(
+  shopifyState: string | null | undefined,
+): EmailMarketingConsentState {
+  switch ((shopifyState ?? '').toLowerCase()) {
+    case 'subscribed':
+      return 'subscribed';
+    case 'pending':
+      return 'pending';
+    case 'unsubscribed':
+      return 'unsubscribed';
+    case 'not_subscribed':
+      return 'not_subscribed';
+    default:
+      return 'not_subscribed'; // redacted / invalid / unknown → fail closed
+  }
+}
 
 /**
  * Customer repository — typed write chokepoint for the Customer table.
@@ -112,6 +143,16 @@ export class CustomerRepository extends BaseRepository {
     const acceptsSms =
       body.sms_marketing_consent?.state === 'subscribed' ? true : undefined;
 
+    // Channel-specific email consent (G-Q7). Set whenever the consent object is
+    // present — captures transitions TO unsubscribed/pending (unlike the
+    // acceptsMarketing-only-to-true quirk above, which the send gate no longer
+    // relies on); omit when absent so a webhook that doesn't carry consent
+    // doesn't clobber the stored state. Fails closed via the normalizer.
+    const emailMarketingConsentState =
+      body.email_marketing_consent != null
+        ? toEmailMarketingConsentState(body.email_marketing_consent.state)
+        : undefined;
+
     // Tags split per P-6. `null` / `undefined` → empty array.
     const tags = splitTags(body.tags ?? null);
 
@@ -129,6 +170,7 @@ export class CustomerRepository extends BaseRepository {
       lastName: body.last_name ?? null,
       ...(acceptsMarketing !== undefined && { acceptsMarketing }),
       ...(acceptsSms !== undefined && { acceptsSms }),
+      ...(emailMarketingConsentState !== undefined && { emailMarketingConsentState }),
       ...(body.orders_count !== null && body.orders_count !== undefined
         ? { ordersCount: body.orders_count }
         : {}),

@@ -270,6 +270,12 @@ model Merchant {
   aiGenerations       AiGeneration[]
   messages            Message[]
   aiSpendBuckets      AiSpendBucket[]
+  // Epic G batch 8.1 — campaigns + dispatch.
+  campaigns           Campaign[]
+  campaignTargets     CampaignTarget[]
+  suppressions        Suppression[]
+  messageEvents       MessageEvent[]
+  messageQuotaBuckets MessageQuotaBucket[]
   settings            MerchantSettings?
   billingSubscription BillingSubscription?
 
@@ -302,7 +308,14 @@ model MerchantSettings {
   // Cost / volume ceilings — ENFORCED from M6/M7, not deferred to M10.
   // Defaults are conservative; merchants raise via onboarding/settings UI.
   monthlyAiSpendCapCents BigInt @default(50000) // $500/mo
-  monthlySendsCap        Int    @default(1000)
+
+  // Send SAFETY ceilings (Epic G / G-Q9) — circuit-breakers, NOT plan budgets.
+  // Success-based pricing ($99/$199 + revenue-share) means an overly-tight cap
+  // suppresses the founder's OWN commission, so these fire only on malfunction
+  // / true abuse. Plan-tier send limits are a Billing-workstream decision
+  // (G-Q11), not encoded here. monthlySendsCap default RAISED 1000 → 50000.
+  monthlySendsCap        Int    @default(50000) // monthly true-abuse ceiling
+  dailySendCap           Int    @default(2000)  // daily runaway-protection
 
   // A2 / POST-EPIC-F §2 — per-merchant hourly AI generation cap.
   // Burst-starvation defence: a single merchant with daily Black-Friday-
@@ -474,6 +487,14 @@ model Customer {
   acceptsMarketing Boolean @default(false)
   acceptsSms       Boolean @default(false)
 
+  // Channel-specific email marketing consent (Epic G / G-Q7). Ingested from
+  // Shopify's emailMarketingConsent.marketingState via the shared normalizer
+  // (toEmailMarketingConsentState); only `subscribed` permits a send (dispatch
+  // gate 2). Supersedes the coarse `acceptsMarketing` for send-gating
+  // (acceptsMarketing retained as the Shopify-sourced bool). Fails closed:
+  // un-ingested rows default not_subscribed.
+  emailMarketingConsentState EmailMarketingConsentState @default(not_subscribed)
+
   // Cached from Shopify customers payload (NOT computed locally).
   ordersCount Int @default(0)
 
@@ -504,11 +525,15 @@ model Customer {
   // state transition; one minimal Message draft row per generation.
   aiGenerations AiGeneration[]
   messages      Message[]
+  // Epic G batch 8.1 — dispatch.
+  campaignTargets CampaignTarget[]
+  suppressions    Suppression[]
 
   @@unique([merchantId, shopifyCustomerId])
   @@index([merchantId, state])
   @@index([merchantId, lastOrderAt])
   @@index([merchantId, acceptsMarketing]) // hot path: campaign audience build
+  @@index([merchantId, emailMarketingConsentState]) // consent gate / audience build (Epic G)
   @@index([merchantId, isVip])
 }
 
@@ -1042,10 +1067,18 @@ enum AiGenerationStatus {
 
 enum MessageStatus {
   draft
-  // Epic G's batch 1 extends via ALTER TYPE ADD VALUE:
-  //   sent, suppressed, failed, bounced, opened, clicked
-  // Postgres enum extension is non-breaking — same mechanism Epic E used
-  // to add `insufficient_data` to CustomerState in session 2.
+  // Epic G batch 8.1 — added via ALTER TYPE ADD VALUE (Postgres non-breaking,
+  // same mechanism Epic E used for `insufficient_data`). `status` is the
+  // furthest-progressed lifecycle/engagement high-water-mark; MessageEvent is
+  // the authoritative append-only stream (incl. `delivered`, which is
+  // event-only — not a status). Monotonic: sent < opened < clicked (the
+  // dispatch/webhook code never regresses it); bounced/failed are terminal.
+  sent
+  suppressed
+  failed
+  bounced
+  opened
+  clicked
 }
 
 model AiGeneration {
@@ -1149,15 +1182,16 @@ model Message {
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt
 
-  // Epic G's batch 1 migration adds:
-  //   campaignId String?
-  //   campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
-  //   workflowStepExecutionId String?
-  //   workflowStepExecution   WorkflowStepExecution? @relation(fields: [workflowStepExecutionId], references: [id], onDelete: SetNull)
-  //   channel    MessageChannel  // enum: email, sms, whatsapp
-  //   sentAt     DateTime?
-  //   provider   String?         // SendGrid, Twilio, etc.
-  // Documented here so F-batch-1 reviewers see the planned shape.
+  // Epic G batch 8.1 — dispatch fields. (workflowStepExecutionId DEFERRED with
+  // the Workflow engine — G-Q2 — NOT added in v1.)
+  campaignId String?
+  campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
+  channel    MessageChannel?
+  sentAt     DateTime?
+  provider   String? // ESP, e.g. 'sendgrid'
+
+  campaignTarget CampaignTarget? // 1:1 (CampaignTarget.messageId @unique)
+  messageEvents  MessageEvent[]
 
   @@index([merchantId, status])
   @@index([merchantId, customerId])
@@ -1183,6 +1217,190 @@ model AiSpendBucket {
   // "generations per merchant per day" observability without an
   // AiGeneration COUNT(*) scan.
   generationCount Int @default(0)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@unique([merchantId, date])
+  @@index([merchantId, date])
+}
+
+// =============================================================================
+// Epic G batch 8.1 — Campaigns + Email Dispatch (EPIC-G-DESIGN.md)
+//
+// Cascade policy (every FK explicitly accounted for):
+//   Merchant → Campaign / CampaignTarget / Suppression / MessageEvent /
+//     MessageQuotaBucket : CASCADE (tenant data; GDPR shop-redact)
+//   Customer → CampaignTarget / Suppression : CASCADE (GDPR customer-redact)
+//   Campaign → CampaignTarget : CASCADE
+//   Message  → CampaignTarget (messageId @unique) / MessageEvent : CASCADE
+//   Campaign → Message (campaignId)            : SetNull (a campaign delete
+//     must NOT erase the generated Message — only un-link it)
+// =============================================================================
+
+enum MessageChannel {
+  email
+  // sms, whatsapp reserved — SMS deferred to its own batch (G-Q1).
+}
+
+// Channel-specific marketing consent (G-Q7). Mirrors the send-permitting
+// subset of Shopify's CustomerEmailMarketingState. Ingested from Shopify via
+// the shared normalizer (toEmailMarketingConsentState); only `subscribed`
+// permits a send (gate 2). Shopify's redacted/invalid collapse to
+// not_subscribed (fail-closed).
+enum EmailMarketingConsentState {
+  subscribed
+  not_subscribed
+  pending
+  unsubscribed
+}
+
+enum CampaignStatus {
+  draft
+  active
+  paused
+  archived
+}
+
+enum CampaignTargetStatus {
+  pending
+  sent
+  suppressed
+  deferred
+  failed
+}
+
+enum SuppressionReason {
+  unsubscribe
+  bounce
+  complaint
+  manual
+}
+
+enum MessageEventType {
+  sent
+  delivered
+  opened
+  clicked
+  bounced
+  complained
+  unsubscribed
+  failed
+}
+
+// Merchant's dispatch rule — the opt-in to SEND winbacks for a trigger band.
+model Campaign {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  name    String
+  status  CampaignStatus @default(draft)
+  channel MessageChannel @default(email)
+
+  // Winback trigger bands this campaign dispatches for (at_risk|dormant|lost).
+  // Array CONTENTS validated against CustomerState at the CRUD layer — Prisma
+  // can't constrain array contents (G-Q8 build-note).
+  triggerStates String[]
+
+  // Shopify Marketing Activities GID — reporting link (G-Q4). The ESP sends;
+  // Marketing Activities reports the activity/outcomes to the merchant admin.
+  marketingActivityId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  targets  CampaignTarget[]
+  messages Message[] // SetNull back-relation (Message.campaignId)
+
+  @@index([merchantId, status])
+}
+
+// The dispatch unit: one campaign's attempt to send one Message. Carries the
+// gate-chain outcome (which terminal gate suppressed it) + the send timestamps.
+model CampaignTarget {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  campaignId String
+  campaign   Campaign @relation(fields: [campaignId], references: [id], onDelete: Cascade)
+
+  // 1:1 with Message in v1 (single-touch; Workflow deferred — G-Q2).
+  messageId String  @unique
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  status CampaignTargetStatus @default(pending)
+  // Forensic: which TERMINAL gate suppressed this target
+  // (suppression|consent|freshness|frequency). Null unless suppressed.
+  suppressedByGate String?
+
+  queuedAt DateTime  @default(now())
+  sentAt   DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now()) @updatedAt
+
+  @@index([merchantId, status])
+  @@index([campaignId, status])
+}
+
+// Per-(merchant, customer, channel) hard-stop list — the FIRST send-gate.
+// Fed by unsubscribe-link clicks, SendGrid bounces/complaints, manual ops.
+model Suppression {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  customerId String
+  customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  channel MessageChannel
+  reason  SuppressionReason
+
+  createdAt DateTime @default(now())
+
+  @@unique([merchantId, customerId, channel]) // one active suppression per channel
+  @@index([merchantId, channel])
+}
+
+// Append-only delivery + engagement log. SendGrid event webhooks write it;
+// Epic H1 attribution reads it (CP-2). providerEventId gives webhook idempotency.
+model MessageEvent {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  messageId String
+  message   Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  type       MessageEventType
+  occurredAt DateTime
+
+  // SendGrid event id — webhook idempotency (skip duplicate deliveries).
+  providerEventId String?
+  metadata        Json?
+
+  createdAt DateTime @default(now())
+
+  @@unique([merchantId, providerEventId])
+  @@index([merchantId, messageId])
+  @@index([merchantId, type, occurredAt]) // H1 attribution hot path
+}
+
+// Per-merchant DAILY send count. Day's count vs MerchantSettings.dailySendCap;
+// the month's summed buckets vs monthlySendsCap (G-Q9 — AiSpendBucket pattern).
+model MessageQuotaBucket {
+  id         String   @id @default(cuid())
+  merchantId String
+  merchant   Merchant @relation(fields: [merchantId], references: [id], onDelete: Cascade)
+
+  date DateTime // UTC day bucket
+
+  sentCount Int @default(0)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt

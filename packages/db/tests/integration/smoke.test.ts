@@ -220,7 +220,8 @@ describe('M3-Smoke', () => {
     );
     expect(healed).not.toBeNull();
     // Defaults are preserved on heal (not overwritten).
-    expect(healed?.monthlySendsCap).toBe(1000);
+    // monthlySendsCap default raised 1000 → 50000 in Epic G 8.1 (safety ceiling).
+    expect(healed?.monthlySendsCap).toBe(50000);
     expect(healed?.attributionDirectWindowDays).toBe(14);
 
     // And the outbox got the reinstall event.

@@ -69,6 +69,7 @@ import {
   REDACTED_GID_SENTINEL_PREFIX,
   type OutboxEventRow,
   processCustomerRedact,
+  processShopRedact,
   withSystemScope,
 } from '@winback/db';
 import {
@@ -573,11 +574,13 @@ describe('B2 GDPR processCustomerRedact (real Postgres, mocked LLM + Shopify)', 
         >;
         return client[table]!.count({ where: { merchantId: merchantB } });
       });
-      // Note: customerScore isn't auto-created by the pipeline; only message
-      // and aiGeneration end up populated. Expect 1 for those two, 0 for
-      // customerScore — the cross-tenant guard test is about "did A's redact
-      // affect B's rows", not about "did B have a row".
-      const expected = table === 'customerScore' ? 0 : 1;
+      // Only `message` + `aiGeneration` are populated by the pipeline (handler
+      // + worker). customerScore — and the Epic G child tables campaignTarget +
+      // suppression — aren't seeded here (their producers, scoring / dispatch /
+      // suppression events, don't run in this test). The cross-tenant guard is
+      // "did A's redact affect B's rows", not "did B have a row", so 0→0 is a
+      // valid (vacuous) check for the unseeded tables.
+      const expected = table === 'message' || table === 'aiGeneration' ? 1 : 0;
       expect(
         bCount,
         `Merchant B's ${table} should NOT be touched by merchant A's redact (cross-tenant guard)`,
@@ -775,5 +778,135 @@ describe('B2 GDPR processCustomerRedact (real Postgres, mocked LLM + Shopify)', 
       }),
     );
     expect(audits, 'no_local_record audit should be written').toHaveLength(1);
+  });
+});
+
+// ===========================================================================
+// Epic G 8.1 — GDPR redact completeness for the NEW tables (real Postgres)
+//
+// Proves the new Epic G tables are ACTUALLY removed by a redact on real
+// Postgres — not inferred from all-CASCADE + registry membership. The
+// CUSTOMER-redact case is the load-bearing one: processCustomerRedact
+// SOFT-deletes the Customer (no FK cascade fires), so the explicit
+// CUSTOMER_REDACT_CHILD_TABLES loop is the ONLY thing that removes the
+// per-customer children — this test FAILS if campaignTarget / suppression are
+// dropped from that list (Article-17 regression cover).
+// ===========================================================================
+
+describe('Epic G 8.1 — GDPR redact removes the new tables (real Postgres)', () => {
+  beforeEach(async () => {
+    await resetDb();
+  });
+
+  /** Seed one row in each of the 5 Epic G tables (with their FK parents). */
+  async function seedEpicGRows(
+    merchantId: string,
+    customerId: string,
+    messageId: string,
+  ): Promise<void> {
+    await withSystemScope('test.seed_epic_g_rows', async () => {
+      const client = getTestClient();
+      const campaign = await client.campaign.create({
+        data: { merchantId, name: 'Winback', triggerStates: ['dormant'] },
+      });
+      await client.campaignTarget.create({
+        data: { merchantId, campaignId: campaign.id, messageId, customerId },
+      });
+      await client.suppression.create({
+        data: { merchantId, customerId, channel: 'email', reason: 'unsubscribe' },
+      });
+      await client.messageEvent.create({
+        data: { merchantId, messageId, type: 'sent', occurredAt: new Date() },
+      });
+      await client.messageQuotaBucket.create({
+        data: { merchantId, date: new Date(), sentCount: 1 },
+      });
+    });
+  }
+
+  function countByMerchant(table: string, merchantId: string): Promise<number> {
+    return assertRead(async () => {
+      const client = getTestClient() as unknown as Record<
+        string,
+        { count: (a: unknown) => Promise<number> }
+      >;
+      return client[table]!.count({ where: { merchantId } });
+    });
+  }
+
+  it('shop-redact removes ALL 5 Epic G tables (campaign, campaignTarget, suppression, messageEvent, messageQuotaBucket)', async () => {
+    const merchantId = await createTestMerchant(SHOP_A);
+    const { ctx, queueAdd } = makeDrainerCtx();
+    const { customerId } = await seedFullPipeline(ctx, queueAdd, merchantId, ORIGINAL_GID);
+
+    const message = await assertRead(() =>
+      getTestClient().message.findFirst({ where: { merchantId } }),
+    );
+    expect(message, 'pipeline must seed a Message').not.toBeNull();
+
+    await seedEpicGRows(merchantId, customerId, message!.id);
+
+    const epicGTables = [
+      'campaign',
+      'campaignTarget',
+      'suppression',
+      'messageEvent',
+      'messageQuotaBucket',
+    ] as const;
+
+    // Pre-state: each seeded exactly once (the assertion isn't vacuous).
+    for (const t of epicGTables) {
+      expect(await countByMerchant(t, merchantId), `${t} must be seeded pre-redact`).toBe(1);
+    }
+
+    await processShopRedact({
+      prisma: getTestClient(),
+      shop: SHOP_A,
+      payload: { shop_domain: SHOP_A, shop_id: 999 },
+    });
+
+    // After shop-redact: all 5 removed for this merchant.
+    for (const t of epicGTables) {
+      expect(await countByMerchant(t, merchantId), `${t} must be removed by shop-redact`).toBe(0);
+    }
+  });
+
+  it('customer-redact hard-deletes the per-customer children campaignTarget + suppression (Customer soft-delete → NO cascade safety net)', async () => {
+    const merchantId = await createTestMerchant(SHOP_A);
+    const { ctx, queueAdd } = makeDrainerCtx();
+    const { customerId } = await seedFullPipeline(ctx, queueAdd, merchantId, ORIGINAL_GID);
+
+    const message = await assertRead(() =>
+      getTestClient().message.findFirst({ where: { merchantId } }),
+    );
+    await seedEpicGRows(merchantId, customerId, message!.id);
+
+    const preCt = await assertRead(() =>
+      getTestClient().campaignTarget.count({ where: { merchantId, customerId } }),
+    );
+    const preSup = await assertRead(() =>
+      getTestClient().suppression.count({ where: { merchantId, customerId } }),
+    );
+    expect(preCt, 'campaignTarget seeded for the customer').toBe(1);
+    expect(preSup, 'suppression seeded for the customer').toBe(1);
+
+    await processCustomerRedact({
+      prisma: getTestClient(),
+      merchantId,
+      shop: SHOP_A,
+      payload: { shop_domain: SHOP_A, customer: { id: Number(ORIGINAL_GID_NUMERIC) } },
+    });
+
+    // processCustomerRedact SOFT-deletes the Customer — no FK cascade fires —
+    // so ONLY the explicit CUSTOMER_REDACT_CHILD_TABLES loop removes these.
+    // Article-17 regression cover: this FAILS if either is dropped from the list.
+    const postCt = await assertRead(() =>
+      getTestClient().campaignTarget.count({ where: { merchantId, customerId } }),
+    );
+    const postSup = await assertRead(() =>
+      getTestClient().suppression.count({ where: { merchantId, customerId } }),
+    );
+    expect(postCt, 'campaignTarget must be hard-deleted by customer-redact').toBe(0);
+    expect(postSup, 'suppression must be hard-deleted by customer-redact').toBe(0);
   });
 });

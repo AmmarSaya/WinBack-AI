@@ -80,7 +80,7 @@ async function seedOrder(args: {
   financialStatus?: 'paid' | 'partially_paid' | 'pending' | 'refunded';
   isTest?: boolean;
   forCustomerId?: string;
-  lineItems: ReadonlyArray<{ shopifyLineItemId: string; title: string }>;
+  lineItems: readonly { shopifyLineItemId: string; title: string }[];
 }): Promise<void> {
   await withSystemScope('test.seed_order', async () => {
     await prisma.order.create({
