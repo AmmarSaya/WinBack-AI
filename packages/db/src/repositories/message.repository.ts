@@ -129,6 +129,34 @@ export class MessageRepository {
     });
     return { updatedCount: result.count };
   }
+
+  /**
+   * Frequency gate read (Epic G batch 8.3). Counts this customer's SENT
+   * messages with `sentAt >= since`. The dispatch frequency gate calls it
+   * twice: once with `since = now − defaultCooldownHours` (a non-zero count
+   * means the cooldown hasn't elapsed) and once with `since = start-of-UTC-day`
+   * (count `>= maxDailySendsPerCustomer` means today's floor is reached). Both
+   * use the EXISTING send-policy fields — no new schema (the G-Q8 build-catch).
+   *
+   * Reads `Message.status = 'sent'` + `sentAt` (set by 8.4's mark-sent tx). In
+   * 8.3-without-8.4 nothing is `sent`, so this returns 0 live — the gate is
+   * exercised against seeded sent-history in tests. `Message` is tenant-scoped;
+   * the extension injects/asserts `merchantId` (passed explicitly too).
+   */
+  async countSentSince(args: {
+    merchantId: string;
+    customerId: string;
+    since: Date;
+  }): Promise<number> {
+    return this.prisma.message.count({
+      where: {
+        merchantId: args.merchantId,
+        customerId: args.customerId,
+        status: 'sent',
+        sentAt: { gte: args.since },
+      },
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------

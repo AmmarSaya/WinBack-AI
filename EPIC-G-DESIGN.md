@@ -174,7 +174,7 @@ Per draft `Message`, in order. Reads run outside any tx.
 |---|---|---|---|---|
 | 1 | **Suppression** | terminal | `Message.status=suppressed`, `CampaignTarget.suppressedByGate='suppression'` | `Suppression` (merchant, customer, email channel) |
 | 2 | **Consent** | terminal | suppressed (`'consent'`) | `Customer.emailMarketingConsentState == subscribed` |
-| 3 | **Freshness / drift-guard** | terminal | suppressed (`'freshness'`) | local `Order` — qualifying paid order within N days (A3 read pattern) ⇒ customer is active, don't winback |
+| 3 | **Freshness / drift-guard** | terminal | suppressed (`'freshness'`) | local `Order` (A3 qualifying defn) — a qualifying order with recency (`COALESCE(processedAt, placedAt)`) AFTER `AiGeneration.createdAt` ⇒ bought again SINCE we decided ⇒ suppress. **SINCE-GENERATION, not a fixed N-day window** (8.3 supersession — see G-Q6) |
 | 4 | **Frequency floor** | terminal | suppressed (`'frequency'`) | EXISTING `MerchantSettings.defaultCooldownHours` (7d) + `maxDailySendsPerCustomer` (1) vs the customer's `Message.sentAt` history — suppress if inside the cooldown or over the daily per-customer count (no new field) |
 | 5 | **Quiet-hours / send-time** | transient | **re-queue** for next tick (draft NOT burned) | `Merchant.timezone` + `MerchantSettings.sendTimeStartHour/EndHour` |
 | 6 | **Quota** | transient | **re-queue** | `MessageQuotaBucket` vs BOTH `MerchantSettings.dailySendCap` (day's count) AND `monthlySendsCap` (month's summed buckets) — pre-flight read; authoritative check+increment under the row lock in the send tx (G-Q9) |
@@ -195,7 +195,9 @@ After the gate chain passes:
 
 ## Drift-flaw resolution (G-Q6)
 
-The A1-parked missed-webhook gap (verbatim source: `POST-EPIC-F-CONSCIOUS-DECISION.md:615-641`) is resolved at the dispatch boundary by **gate 3 (freshness)**: before sending a winback, read the customer's most-recent qualifying local `Order`; if they purchased within N days, the "lapsed" signal is stale (drifted scoring or a missed webhook) — suppress. This neutralizes the *consequence* (firing at an actively-buying customer) without requiring the full order-reconciliation sweep, which remains DEFERRED future hardening (it fixes the *cause* — recovering missed order events — and is distinct from both the order-backfill we built in `fdebc11` and the webhook-subscription cron in §11.2).
+The A1-parked missed-webhook gap (verbatim source: `POST-EPIC-F-CONSCIOUS-DECISION.md:615-641`) is resolved at the dispatch boundary by **gate 3 (freshness)**: before sending a winback, check whether the customer placed a qualifying local `Order` AFTER we decided to winback; if so, the "lapsed" signal is stale (drifted scoring or a missed webhook) — suppress. This neutralizes the *consequence* (firing at an actively-buying customer) without requiring the full order-reconciliation sweep, which remains DEFERRED future hardening (it fixes the *cause* — recovering missed order events — and is distinct from both the order-backfill we built in `fdebc11` and the webhook-subscription cron in §11.2).
+
+**8.3 supersession — SINCE-GENERATION, not a fixed N-day window.** The build implements gate 3 as `OrderRepository.hasQualifyingOrderSince({ customerId, since: AiGeneration.createdAt })` — a qualifying order whose recency is strictly AFTER the generation/decision timestamp. Rationale: a fixed N-day window would over-suppress on purchases ALREADY accounted for in the lapse decision (a customer legitimately flagged `dormant` has an old last-order that must NOT block the winback); only a purchase NEWER than the decision is genuine drift (one our scoring never saw). A5's 24h generation-staleness skip already bounds how old `since` can be, so no extra outer look-back floor is needed. The qualifying-order definition is shared with A3's `findRecentPurchasedTitles` (`financialStatus IN ('paid','partially_paid')`, `isTest=false`, recency `COALESCE("shopifyProcessedAt","placedAt")`).
 
 ---
 

@@ -31,7 +31,12 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
-import { CampaignRepository, withSystemScope, withTenantScope } from '../../src/index.js';
+import {
+  CampaignRepository,
+  OrderRepository,
+  withSystemScope,
+  withTenantScope,
+} from '../../src/index.js';
 
 import { assertRead, createTestMerchant, getTestClient, resetDb } from './setup.js';
 
@@ -40,6 +45,7 @@ const SHOP_B = 'campaign-dispatch-b.myshopify.com';
 
 const prisma = getTestClient();
 const repo = new CampaignRepository(prisma);
+const orderRepo = new OrderRepository(prisma);
 
 let merchantId: string;
 let custA: string;
@@ -147,6 +153,31 @@ async function seedCampaign(args: {
       select: { id: true },
     });
     return c.id;
+  });
+}
+
+async function seedOrder(args: {
+  customerId: string;
+  shopifyOrderId: string;
+  recency: Date; // becomes shopifyProcessedAt (the COALESCE key)
+  financialStatus?: 'paid' | 'partially_paid' | 'pending';
+  isTest?: boolean;
+}): Promise<void> {
+  await withSystemScope('test.seed_order', async () => {
+    await prisma.order.create({
+      data: {
+        merchantId,
+        customerId: args.customerId,
+        shopifyOrderId: args.shopifyOrderId,
+        currency: 'USD',
+        subtotalAmountCents: 1000n,
+        totalAmountCents: 1000n,
+        financialStatus: args.financialStatus ?? 'paid',
+        isTest: args.isTest ?? false,
+        placedAt: args.recency,
+        shopifyProcessedAt: args.recency,
+      },
+    });
   });
 }
 
@@ -366,5 +397,107 @@ describe('CampaignRepository dispatch — claim + two-tick idempotency (integrat
     );
     expect(claim2).toBe('already_claimed');
     expect(await countTargets()).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Gate-chain DB ops (8.3) — real-Postgres proof of the SQL-load-bearing reads
+// + the terminal-write atomicity.
+// ---------------------------------------------------------------------------
+
+describe('OrderRepository.hasQualifyingOrderSince — freshness, since-generation (real Postgres)', () => {
+  const DECISION = new Date('2026-06-10T00:00:00Z'); // = AiGeneration.createdAt
+
+  function freshness(since: Date) {
+    return withTenantScope(merchantId, async () =>
+      orderRepo.hasQualifyingOrderSince({ merchantId, customerId: custA, since }),
+    );
+  }
+
+  it('FALSE when the only qualifying order is OLDER than the decision (already in the lapse decision)', async () => {
+    await seedOrder({ customerId: custA, shopifyOrderId: 'gid://shopify/Order/1', recency: new Date('2026-05-01T00:00:00Z') });
+    expect(await freshness(DECISION)).toBe(false);
+  });
+
+  it('TRUE when a qualifying order is NEWER than the decision (the drift — bought after we decided)', async () => {
+    await seedOrder({ customerId: custA, shopifyOrderId: 'gid://shopify/Order/2', recency: new Date('2026-06-11T00:00:00Z') });
+    expect(await freshness(DECISION)).toBe(true);
+  });
+
+  it('FALSE for a post-decision order that is NOT qualifying (isTest, or not paid)', async () => {
+    await seedOrder({ customerId: custA, shopifyOrderId: 'gid://shopify/Order/3', recency: new Date('2026-06-11T00:00:00Z'), isTest: true });
+    await seedOrder({ customerId: custA, shopifyOrderId: 'gid://shopify/Order/4', recency: new Date('2026-06-12T00:00:00Z'), financialStatus: 'pending' });
+    expect(await freshness(DECISION)).toBe(false);
+  });
+
+  it('isolates by customer — another customer\'s post-decision order does not count', async () => {
+    await seedOrder({ customerId: custB, shopifyOrderId: 'gid://shopify/Order/5', recency: new Date('2026-06-11T00:00:00Z') });
+    expect(await freshness(DECISION)).toBe(false);
+  });
+
+  it('BOUNDARY: an order at EXACTLY the decision instant is NOT drift (strict `>` excludes it)', async () => {
+    // recency === AiGeneration.createdAt. The predicate is strict `>`, so an
+    // order placed AT the decision instant was part of the lapse decision and
+    // must NOT suppress. Pins the boundary so a later `>` → `>=` flip fails
+    // loudly (the A5 boundary-test lesson — this is the drift-flaw gate).
+    await seedOrder({ customerId: custA, shopifyOrderId: 'gid://shopify/Order/6', recency: DECISION });
+    expect(await freshness(DECISION)).toBe(false);
+  });
+});
+
+describe('CampaignRepository.resolveTerminal — terminal atomicity (real Postgres)', () => {
+  it('suppresses CampaignTarget + Message together (one tx); re-run is a no-op (race guard)', async () => {
+    const { messageId } = await seedDraft({ forMerchantId: merchantId, customerId: custA, triggerState: 'at_risk' });
+    const campaignId = await seedCampaign({ forMerchantId: merchantId, name: 'C', triggerStates: ['at_risk'] });
+    await withTenantScope(merchantId, async () =>
+      repo.claimTarget({ merchantId, campaignId, messageId, customerId: custA }),
+    );
+
+    const r1 = await withTenantScope(merchantId, async () =>
+      repo.resolveTerminal({ messageId, reason: 'consent' }),
+    );
+    expect(r1).toEqual({ resolved: true });
+
+    const [target, message] = await assertRead(() =>
+      Promise.all([
+        prisma.campaignTarget.findUnique({ where: { messageId } }),
+        prisma.message.findUnique({ where: { id: messageId } }),
+      ]),
+    );
+    expect(target?.status).toBe('suppressed');
+    expect(target?.suppressedByGate).toBe('consent');
+    expect(message?.status).toBe('suppressed'); // the status the skeleton left at draft
+
+    // Re-run: already terminal → resolved:false, nothing changes.
+    const r2 = await withTenantScope(merchantId, async () =>
+      repo.resolveTerminal({ messageId, reason: 'frequency' }),
+    );
+    expect(r2).toEqual({ resolved: false });
+    const target2 = await assertRead(() => prisma.campaignTarget.findUnique({ where: { messageId } }));
+    expect(target2?.suppressedByGate).toBe('consent'); // unchanged — not overwritten to 'frequency'
+  });
+});
+
+describe('CampaignRepository.deferTarget + findDeferredTargets (real Postgres)', () => {
+  it('defers a target; arm-2 query returns it with campaignActive, flipping to false when the campaign is paused', async () => {
+    const { messageId } = await seedDraft({ forMerchantId: merchantId, customerId: custA, triggerState: 'at_risk' });
+    const campaignId = await seedCampaign({ forMerchantId: merchantId, name: 'C', triggerStates: ['at_risk'] });
+    await withTenantScope(merchantId, async () =>
+      repo.claimTarget({ merchantId, campaignId, messageId, customerId: custA }),
+    );
+
+    const deferred = await withTenantScope(merchantId, async () => repo.deferTarget({ messageId }));
+    expect(deferred).toEqual({ deferred: true });
+
+    const arm2a = await withTenantScope(merchantId, async () => repo.findDeferredTargets({ merchantId }));
+    expect(arm2a).toHaveLength(1);
+    expect(arm2a[0]).toMatchObject({ messageId, campaignId, customerId: custA, campaignActive: true });
+
+    // Pause the campaign → arm 2 now reports it inactive (the sweep will resolve, not re-enqueue).
+    await withSystemScope('test.pause', async () => {
+      await prisma.campaign.update({ where: { id: campaignId }, data: { status: 'paused' } });
+    });
+    const arm2b = await withTenantScope(merchantId, async () => repo.findDeferredTargets({ merchantId }));
+    expect(arm2b[0]?.campaignActive).toBe(false);
   });
 });

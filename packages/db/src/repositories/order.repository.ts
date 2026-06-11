@@ -356,6 +356,55 @@ export class OrderRepository extends BaseRepository {
 
     return rows.map((r) => r.title);
   }
+
+  /**
+   * Freshness gate (Epic G batch 8.3 / G-Q6 — the drift-flaw resolution).
+   *
+   * Answers: did this customer place a QUALIFYING order whose recency is AFTER
+   * `since`? The dispatch gate passes `since = AiGeneration.createdAt` (the
+   * moment we DECIDED to winback). A `true` result means the customer bought
+   * again AFTER that decision — a purchase our scoring never saw — so the
+   * winback is invalidated and the target is suppressed.
+   *
+   * SINCE-GENERATION, not a fixed N-day window (G-Q6 supersession, recorded in
+   * EPIC-G-DESIGN.md): a fixed window would over-suppress on purchases ALREADY
+   * accounted for in the lapse decision (a customer flagged dormant legitimately
+   * had an old last-order; that old order must NOT block the winback). Only a
+   * purchase newer than the decision point is drift. A5's 24h generation-
+   * staleness skip already bounds how old `since` can be, so no extra outer
+   * look-back floor is needed.
+   *
+   * Qualifying order = the SAME definition as `findRecentPurchasedTitles`:
+   * `financialStatus IN ('paid','partially_paid')`, `isTest = false`, recency =
+   * `COALESCE("shopifyProcessedAt", "placedAt")` (the scoring engine's recency
+   * key; `placedAt` is NOT NULL so the COALESCE never yields null). Reads LOCAL
+   * Postgres — no Shopify call (same posture as A3).
+   *
+   * Raw SQL via `queryRawScoped` (asserts the active tenant scope). `merchantId`,
+   * `customerId`, `since` are bound params; the literals are constant.
+   */
+  async hasQualifyingOrderSince(args: {
+    merchantId: string;
+    customerId: string;
+    since: Date;
+  }): Promise<boolean> {
+    const { merchantId, customerId, since } = args;
+    const rows = await this.queryRawScoped<{ exists: boolean }>(
+      merchantId,
+      Prisma.sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM "Order" o
+          WHERE o."merchantId" = ${merchantId}
+            AND o."customerId" = ${customerId}
+            AND o."isTest" = false
+            AND o."financialStatus"::text IN ('paid', 'partially_paid')
+            AND COALESCE(o."shopifyProcessedAt", o."placedAt") > ${since}
+        ) AS "exists"
+      `,
+    );
+    return rows[0]?.exists ?? false;
+  }
 }
 
 // ---------------------------------------------------------------------------

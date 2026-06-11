@@ -7,37 +7,53 @@
  * ioredis connection). The producer is the scheduler's 15-min `dispatch-sweep`
  * tick, which enqueues one job per dispatch-eligible draft.
  *
- * WHAT IT DOES (skeleton): CLAIMS the draft by creating its `CampaignTarget`
- * (status=pending) — `CampaignRepository.claimTarget`. That's it.
+ * WHAT IT DOES (8.3 — one pass): CLAIM (idempotent) → REPLAY GUARD → GATE CHAIN
+ * → apply the outcome.
+ *   1. `claimTarget` — a fresh draft (arm 1) creates the `CampaignTarget`
+ *      (pending); a re-entered deferred target (arm 2) is `already_claimed` and
+ *      we proceed to RE-GATE it. The result is discarded — both mean "the
+ *      target now exists."
+ *   2. `loadDispatchContext` → null means the target is gone (GDPR redact
+ *      cascade-deleted it) → no-op. The REPLAY GUARD then short-circuits a
+ *      target already in {suppressed, sent, failed} BEFORE any gate runs (a
+ *      duplicate/stale job does NO gate work).
+ *   3. `runGateChain` — the 6 gates, terminal-before-transient, short-circuit.
+ *   4. Apply: `suppressed(gate)` → `resolveTerminal` (CampaignTarget + Message
+ *      both → suppressed, in one tx); `deferred(gate)` → `deferTarget`
+ *      (status=deferred, the sweep's arm 2 re-evaluates next tick); `passed` →
+ *      a logged SEND-STUB (8.4 inserts the real send), target stays `pending`.
  *
- * WHAT IT DOES NOT DO (later batches): NO gate chain (suppression / consent /
- * freshness / frequency / quiet-hours / quota — 8.3). NO ESP send, NO
- * `MessageEvent`, NO quota increment, NO `Message.status` change (8.4). The
- * claimed `CampaignTarget(pending)` waits for those batches.
+ * WHAT IT DOES NOT DO (8.4): NO ESP send, NO `MessageEvent`, NO authoritative
+ * under-lock quota increment (gate 6 is pre-flight only). A `passed` target
+ * waits at `pending` for 8.4 to append the send to this same pass.
  *
- * IDEMPOTENCY: the claim is idempotent on `CampaignTarget.messageId @unique` —
- * a duplicate job or a tick/worker race resolves to `already_claimed` (a no-op,
- * not an error). This is the backstop behind the producer's `NOT EXISTS
- * CampaignTarget` pickup filter. No BullMQ jobId dedup is used (it would risk a
- * failed-job-wedge under `removeOnComplete`); the unique constraint is the
- * guarantee, the pickup filter is the optimisation.
+ * IDEMPOTENCY: the claim is idempotent on `CampaignTarget.messageId @unique`;
+ * the replay guard makes re-processing a terminal target a no-op;
+ * `resolveTerminal`/`deferTarget` are guarded on `status IN (pending,deferred)`.
+ * No BullMQ jobId dedup (it would risk a failed-job-wedge under
+ * `removeOnComplete`).
  *
- * RETRY: jobs carry `attempts: 3` + exponential backoff (set by the producer).
- * A transient claim failure (e.g. a brief DB blip) retries within seconds; an
- * exhausted job lands in BullMQ's failed set and is naturally re-picked by the
- * next 15-min tick (the draft is still unclaimed → the pickup re-enqueues it).
+ * RETRY: jobs carry `attempts: 3` + backoff. An exhausted job is re-picked by
+ * the next 15-min dispatch sweep (a still-unclaimed draft via arm 1, or a
+ * `deferred` target via arm 2).
  */
 
 import {
   type CampaignDispatchJobPayload,
   QUEUE_NAMES,
 } from '@winback/contracts';
-import { CampaignRepository, withTenantScope } from '@winback/db';
+import {
+  CampaignRepository,
+  MessageRepository,
+  OrderRepository,
+  withTenantScope,
+} from '@winback/db';
 import { getLogger } from '@winback/logger';
 import { createRedisClient } from '@winback/queue';
 import { Worker, type Job } from 'bullmq';
 
 import type { DrainerContext } from '../context.js';
+import { runGateChain } from '../dispatch/gate-chain.js';
 
 const log = getLogger('drainer.worker.dispatch');
 
@@ -62,42 +78,74 @@ export async function processCampaignDispatchJob(
   job: Job<CampaignDispatchJobPayload>,
 ): Promise<void> {
   const payload = job.data;
+  const { merchantId, messageId } = payload;
+  const logBase = { jobId: job.id, merchantId, messageId, campaignId: payload.campaignId };
 
-  await withTenantScope(payload.merchantId, async () => {
-    // The claim. `claimTarget` creates the pending CampaignTarget under the
-    // active tenant scope (the extension asserts merchantId). A P2002 on the
-    // messageId @unique returns 'already_claimed' — never throws — so a
-    // duplicate job / tick-worker race is a clean no-op.
-    const repo = new CampaignRepository(ctx.prisma);
-    const result = await repo.claimTarget({
-      merchantId: payload.merchantId,
+  await withTenantScope(merchantId, async () => {
+    const campaignRepo = new CampaignRepository(ctx.prisma);
+    const orderRepo = new OrderRepository(ctx.prisma);
+    const messageRepo = new MessageRepository(ctx.prisma);
+
+    // 1. CLAIM (idempotent). Fresh draft → creates the pending target;
+    //    re-entered deferred target → already_claimed. Either way the target
+    //    now exists; the result is intentionally discarded (8.3 re-gates a
+    //    re-entered target, unlike the 8.2 skeleton which returned here).
+    await campaignRepo.claimTarget({
+      merchantId,
       campaignId: payload.campaignId,
-      messageId: payload.messageId,
+      messageId,
       customerId: payload.customerId,
     });
 
-    if (result === 'already_claimed') {
+    // 2. LOAD CONTEXT + REPLAY GUARD.
+    const dctx = await campaignRepo.loadDispatchContext({ messageId });
+    if (dctx === null) {
+      log.info(logBase, 'dispatch: target gone (GDPR redact cascade?) or settings missing; no-op');
+      return;
+    }
+    // The target reached a terminal/sent state already (duplicate or stale job)
+    // — do NO gate work. Short-circuits BEFORE any gate read.
+    if (
+      dctx.targetStatus === 'suppressed' ||
+      dctx.targetStatus === 'sent' ||
+      dctx.targetStatus === 'failed'
+    ) {
       log.info(
-        {
-          jobId: job.id,
-          merchantId: payload.merchantId,
-          messageId: payload.messageId,
-          campaignId: payload.campaignId,
-        },
-        'dispatch: target already claimed (idempotent replay/race); no-op',
+        { ...logBase, targetStatus: dctx.targetStatus },
+        'dispatch: target already terminal (replay guard); no gate work',
       );
       return;
     }
 
+    // 3. GATE CHAIN.
+    const outcome = await runGateChain(
+      { campaignRepo, orderRepo, messageRepo, now: new Date() },
+      { merchantId, ctx: dctx },
+    );
+
+    // 4. APPLY OUTCOME.
+    if (outcome.kind === 'suppressed') {
+      const { resolved } = await campaignRepo.resolveTerminal({ messageId, reason: outcome.gate });
+      log.info(
+        { ...logBase, gate: outcome.gate, resolved },
+        'dispatch: suppressed by terminal gate (CampaignTarget + Message → suppressed)',
+      );
+      return;
+    }
+
+    if (outcome.kind === 'deferred') {
+      await campaignRepo.deferTarget({ messageId });
+      log.info(
+        { ...logBase, gate: outcome.gate },
+        'dispatch: deferred by transient gate; the 15-min sweep (arm 2) re-evaluates',
+      );
+      return;
+    }
+
+    // passed — 8.3 boundary: no send yet. 8.4 appends the send here.
     log.info(
-      {
-        jobId: job.id,
-        merchantId: payload.merchantId,
-        messageId: payload.messageId,
-        campaignId: payload.campaignId,
-        customerId: payload.customerId,
-      },
-      'dispatch: CampaignTarget claimed (pending); gates + send land in later batches',
+      { ...logBase, customerId: payload.customerId },
+      'dispatch: passed all gates — SEND STUB (8.4 sends); target stays pending',
     );
   });
 }
