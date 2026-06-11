@@ -39,5 +39,7 @@ export {
   QUEUE_NAMES,
   ALL_QUEUE_NAMES,
   isQueueName,
+  CAMPAIGN_DISPATCH_JOB_NAME,
   type QueueName,
+  type CampaignDispatchJobPayload,
 } from './queues.js';

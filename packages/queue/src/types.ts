@@ -28,4 +28,13 @@ export interface Queues {
    * replay. See EPIC-F-DESIGN.md §F-8.
    */
   readonly aiGenerate: Queue;
+  /**
+   * Epic G batch 8.2. Producer = scheduler `dispatch-sweep` tick (one job
+   * per dispatch-eligible draft Message). Consumer = dispatch Worker
+   * (separate BullMQ Worker instance inside `apps/drainer`). Per-job
+   * payload: `{ merchantId, messageId, campaignId, customerId }`. No
+   * BullMQ jobId — idempotency lives in the producer `NOT EXISTS` filter +
+   * the `CampaignTarget.messageId @unique` claim. See EPIC-G-DESIGN.md.
+   */
+  readonly campaignDispatch: Queue;
 }

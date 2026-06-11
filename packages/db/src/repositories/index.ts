@@ -57,3 +57,13 @@ export {
   type IncrementSpendArgs,
   type SumMonthSpendArgs,
 } from './ai-spend-bucket.repository.js';
+
+// --- Epic G batch 8.2 (campaign dispatch skeleton) -------------------------
+export {
+  CampaignRepository,
+  DEFAULT_DISPATCH_TAKE,
+  type ClaimTargetArgs,
+  type ClaimTargetResult,
+  type DispatchableDraft,
+  type FindDispatchableDraftsArgs,
+} from './campaign.repository.js';

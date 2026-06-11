@@ -35,6 +35,7 @@ import type { SchedulerContext } from './context.js';
 import { disconnectPrisma, getPrisma } from './db.js';
 import {
   registerDecaySweepRepeat,
+  registerDispatchSweepRepeat,
   registerRollupRepeat,
   registerSweepRepeat,
 } from './scheduling.js';
@@ -58,12 +59,14 @@ async function main(): Promise<void> {
   await registerRollupRepeat(queues.cronRollup);
   await registerSweepRepeat(queues.cronSweep);
   await registerDecaySweepRepeat(queues.cronSweep);
+  await registerDispatchSweepRepeat(queues.cronSweep);
 
   log.info(
     {
       rollupCadence: 'cron pattern 0 * * * * (hourly at minute 0 UTC)',
       sweepCadence: 'every 15 min (interval)',
       decaySweepCadence: 'cron pattern 0 3 * * * (daily at 03:00 UTC)',
+      dispatchSweepCadence: 'every 15 min (interval)',
     },
     'scheduler: repeatable jobs registered; workers running',
   );

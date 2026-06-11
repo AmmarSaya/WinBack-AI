@@ -111,6 +111,18 @@ export const SYSTEM_SCOPE_REASONS = {
     decay_sweep: 'scoring.decay_sweep',
   },
   /**
+   * Campaign dispatch sweep (Epic G batch 8.2). The 15-min `dispatch-sweep`
+   * tick (on `cron.sweep`) does a cross-tenant SELECT of merchants with ≥1
+   * active email Campaign, then per merchant opens `withTenantScope` and
+   * calls `CampaignRepository.findDispatchableDrafts` to enqueue
+   * `campaign.dispatch` jobs. System scope wraps ONLY the cross-tenant
+   * merchant SELECT (raw `$queryRaw` bypasses the tenant assertion); the
+   * per-merchant pickup runs under tenant scope via `queryRawScoped`.
+   */
+  campaign: {
+    dispatch_sweep: 'campaign.dispatch_sweep',
+  },
+  /**
    * Install flow in @winback/shopify. Required because no Merchant row
    * exists yet — the install IS the row-creating write.
    */
@@ -168,6 +180,7 @@ export type SystemScopeReason =
   | (typeof SYSTEM_SCOPE_REASONS.rollup)[keyof typeof SYSTEM_SCOPE_REASONS.rollup]
   | (typeof SYSTEM_SCOPE_REASONS.enrichment)[keyof typeof SYSTEM_SCOPE_REASONS.enrichment]
   | (typeof SYSTEM_SCOPE_REASONS.scoring)[keyof typeof SYSTEM_SCOPE_REASONS.scoring]
+  | (typeof SYSTEM_SCOPE_REASONS.campaign)[keyof typeof SYSTEM_SCOPE_REASONS.campaign]
   | (typeof SYSTEM_SCOPE_REASONS.shopify)[keyof typeof SYSTEM_SCOPE_REASONS.shopify]
   | (typeof SYSTEM_SCOPE_REASONS.webhook)[keyof typeof SYSTEM_SCOPE_REASONS.webhook]
   | (typeof SYSTEM_SCOPE_REASONS.healthcheck)[keyof typeof SYSTEM_SCOPE_REASONS.healthcheck]
@@ -181,6 +194,7 @@ export const ALL_SYSTEM_SCOPE_REASONS: ReadonlySet<SystemScopeReason> = new Set(
   ...Object.values(SYSTEM_SCOPE_REASONS.rollup),
   ...Object.values(SYSTEM_SCOPE_REASONS.enrichment),
   ...Object.values(SYSTEM_SCOPE_REASONS.scoring),
+  ...Object.values(SYSTEM_SCOPE_REASONS.campaign),
   ...Object.values(SYSTEM_SCOPE_REASONS.shopify),
   ...Object.values(SYSTEM_SCOPE_REASONS.webhook),
   ...Object.values(SYSTEM_SCOPE_REASONS.healthcheck),

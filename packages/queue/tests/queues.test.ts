@@ -98,17 +98,18 @@ afterEach(async () => {
 });
 
 describe('getQueues + closeQueues', () => {
-  it('1. returns an object with all four Queue instances using QUEUE_NAMES values', () => {
+  it('1. returns an object with all five Queue instances using QUEUE_NAMES values', () => {
     const queues = getQueues();
 
     expect(queues.outboxDrain).toBeDefined();
     expect(queues.cronRollup).toBeDefined();
     expect(queues.cronSweep).toBeDefined();
     expect(queues.aiGenerate).toBeDefined();
+    expect(queues.campaignDispatch).toBeDefined();
 
-    // BullMQ's Queue constructor was called four times with the canonical
+    // BullMQ's Queue constructor was called five times with the canonical
     // names from the QUEUE_NAMES registry — never string literals.
-    expect(QueueMock).toHaveBeenCalledTimes(4);
+    expect(QueueMock).toHaveBeenCalledTimes(5);
     expect(QueueMock).toHaveBeenNthCalledWith(
       1,
       QUEUE_NAMES.outbox.drain,
@@ -129,6 +130,11 @@ describe('getQueues + closeQueues', () => {
       QUEUE_NAMES.ai.generate,
       expect.objectContaining({ connection: expect.any(Object) }),
     );
+    expect(QueueMock).toHaveBeenNthCalledWith(
+      5,
+      QUEUE_NAMES.campaign.dispatch,
+      expect.objectContaining({ connection: expect.any(Object) }),
+    );
   });
 
   it('2. is memoized — repeated calls return the same Queues reference, single Queue + Redis client construction', () => {
@@ -139,9 +145,9 @@ describe('getQueues + closeQueues', () => {
     expect(second).toBe(first);
     expect(third).toBe(first);
 
-    // Queue constructor called exactly four times total (once per queue, on
+    // Queue constructor called exactly five times total (once per queue, on
     // the first getQueues() call only). Subsequent calls hit the cache.
-    expect(QueueMock).toHaveBeenCalledTimes(4);
+    expect(QueueMock).toHaveBeenCalledTimes(5);
 
     // Single shared ioredis client across all Queues — exactly one
     // createRedisClient invocation with the documented connection name.
@@ -172,7 +178,7 @@ describe('getQueues + closeQueues', () => {
     }
   });
 
-  it('4. closeQueues closes all four Queue instances + the shared client, clears the cache, and re-initializes fresh on next getQueues()', async () => {
+  it('4. closeQueues closes all five Queue instances + the shared client, clears the cache, and re-initializes fresh on next getQueues()', async () => {
     const first = getQueues();
 
     // Capture the mock-Queue close fns BEFORE closing — after close, the
@@ -181,6 +187,7 @@ describe('getQueues + closeQueues', () => {
     const rollupClose = (first.cronRollup as unknown as { close: Mock }).close;
     const sweepClose = (first.cronSweep as unknown as { close: Mock }).close;
     const aiGenerateClose = (first.aiGenerate as unknown as { close: Mock }).close;
+    const campaignDispatchClose = (first.campaignDispatch as unknown as { close: Mock }).close;
     // Guard the mock.results[0] access so a "no createRedisClient call was
     // recorded" regression surfaces as a clean assertion failure rather
     // than a confusing TypeError on the .quit property access below.
@@ -197,6 +204,7 @@ describe('getQueues + closeQueues', () => {
     expect(rollupClose).toHaveBeenCalledTimes(1);
     expect(sweepClose).toHaveBeenCalledTimes(1);
     expect(aiGenerateClose).toHaveBeenCalledTimes(1);
+    expect(campaignDispatchClose).toHaveBeenCalledTimes(1);
     // Shared client was disconnected (NOT quit — see queues.ts header
     // for why disconnect is the deterministic choice at shutdown).
     expect(firstClientResult.disconnect).toHaveBeenCalledTimes(1);

@@ -111,6 +111,29 @@ export const QUEUE_NAMES = {
      */
     generate: 'ai.generate',
   },
+  /**
+   * Campaign dispatch pipeline (Epic G batch 8.2). The scheduler's
+   * `dispatch-sweep` tick (a job-name on `cron.sweep`, NOT a queue of its
+   * own — see `cron.sweep`'s note) selects dispatch-eligible draft
+   * Messages per active Campaign and enqueues ONE `campaign.dispatch` job
+   * per draft, carrying `{ merchantId, messageId, campaignId, customerId }`.
+   * The dispatch Worker (a separate BullMQ Worker instance inside
+   * `apps/drainer`, sibling to the AI Worker) consumes the queue and
+   * CLAIMS each draft by creating its `CampaignTarget` (status=pending) —
+   * idempotent on `CampaignTarget.messageId @unique` (a P2002 on replay is
+   * a no-op). v1 skeleton stops at the claim: NO gate chain (8.3), NO send
+   * (8.4). See EPIC-G-DESIGN.md §dispatch.
+   */
+  campaign: {
+    /**
+     * One job per dispatch-eligible draft Message. NO BullMQ jobId is set
+     * — idempotency is carried by the producer's `NOT EXISTS CampaignTarget`
+     * pre-filter + the `messageId @unique` constraint at claim time (a
+     * jobId would risk a failed-job-wedge with `removeOnComplete`). The
+     * 15-min `dispatch-sweep` re-enqueues any still-unclaimed draft.
+     */
+    dispatch: 'campaign.dispatch',
+  },
 } as const;
 
 /**
@@ -120,13 +143,15 @@ export const QUEUE_NAMES = {
 export type QueueName =
   | (typeof QUEUE_NAMES.outbox)[keyof typeof QUEUE_NAMES.outbox]
   | (typeof QUEUE_NAMES.cron)[keyof typeof QUEUE_NAMES.cron]
-  | (typeof QUEUE_NAMES.ai)[keyof typeof QUEUE_NAMES.ai];
+  | (typeof QUEUE_NAMES.ai)[keyof typeof QUEUE_NAMES.ai]
+  | (typeof QUEUE_NAMES.campaign)[keyof typeof QUEUE_NAMES.campaign];
 
 /** Runtime Set of every registered queue name, for shape tests + iteration. */
 export const ALL_QUEUE_NAMES: ReadonlySet<QueueName> = new Set([
   ...Object.values(QUEUE_NAMES.outbox),
   ...Object.values(QUEUE_NAMES.cron),
   ...Object.values(QUEUE_NAMES.ai),
+  ...Object.values(QUEUE_NAMES.campaign),
 ] as QueueName[]);
 
 /**
@@ -136,4 +161,32 @@ export const ALL_QUEUE_NAMES: ReadonlySet<QueueName> = new Set([
  */
 export function isQueueName(value: string): value is QueueName {
   return ALL_QUEUE_NAMES.has(value as QueueName);
+}
+
+/**
+ * BullMQ job NAME (label) for every `campaign.dispatch` job (Epic G batch
+ * 8.2). The dispatch Worker consumes a DEDICATED queue and processes all jobs
+ * identically — it does NOT switch on this name (unlike the `cron.sweep`
+ * worker, whose queue carries multiple sweep types discriminated by name). The
+ * name is a producer-side observability label only.
+ */
+export const CAMPAIGN_DISPATCH_JOB_NAME = 'dispatch';
+
+/**
+ * Payload for a `campaign.dispatch` job (Epic G batch 8.2). Producer = the
+ * scheduler `dispatch-sweep` tick (one job per dispatch-eligible draft);
+ * consumer = the dispatch Worker in `apps/drainer`. Shared here because the
+ * producer and consumer live in DIFFERENT apps — `campaign.dispatch` is the
+ * first cross-app queue (every prior queue's producer + consumer were
+ * co-located, so their payload type lived in the worker file).
+ *
+ * No BullMQ jobId is derived from this payload: idempotency is the producer's
+ * `NOT EXISTS CampaignTarget` pre-filter + the `messageId @unique` claim, so a
+ * jobId would only add a failed-job-wedge risk under `removeOnComplete`.
+ */
+export interface CampaignDispatchJobPayload {
+  readonly merchantId: string;
+  readonly messageId: string;
+  readonly campaignId: string;
+  readonly customerId: string;
 }

@@ -240,15 +240,22 @@ The A1-parked missed-webhook gap (verbatim source: `POST-EPIC-F-CONSCIOUS-DECISI
 
 Supersession-with-pointer, NOT a silent replacement: the deferred SMS / Workflow / Segment work RETURNS in its own later sections written from this doc (see the Deferred-items register's "Unblocks when" column) — it is sequenced out of v1, not dropped.
 
+### Skeleton-first re-decomposition — SUPERSEDES the table above (2026-06-11)
+
+The original table bundled **8.3 = dispatch worker + gate chain + send/completion-tx + scheduler tick** behind **8.2 = SendGrid provider**. That bundles three independently-riskable concerns (the pickup/claim plumbing, the gate logic, and the external send) into one batch, and front-loads the ESP adapter before the machinery that uses it exists.
+
+Re-decomposed **skeleton-first** so each layer ships + is verified before the next builds on it: prove the pickup → claim → idempotency foundation first, THEN the gate chain over claimed targets, THEN the external send. Rationale parallels the §8→email-first supersession (sequence the riskable pieces, don't bundle them). Net effect: the old 8.3 splits into new 8.2/8.3/8.4, the old 8.2 SendGrid provider folds into the new 8.4 (built alongside the send that consumes it), and 8.4–8.7 shift down by one to 8.5–8.8.
+
 | Batch | Scope |
 |---|---|
-| **8.1 (this doc)** | `EPIC-G-DESIGN.md` + schema: the 5 tables, `Message` alters, the 4 new enums + `MessageStatus` ALTER, `Customer.emailMarketingConsentState` + **its ingestion path** (webhook body + backfill + upsert), `TENANT_SCOPED_MODELS` + cascade-policy header. One migration (+ hand-authored `ALTER TYPE`). |
-| 8.2 | SendGrid email provider (`packages/messaging`?) — adapter mirroring `packages/ai`'s `AiProvider`; mocked-SDK unit tests. |
-| 8.3 | Dispatch worker + the gate chain + the send/completion-tx (G-Q9) + scheduler tick. |
-| 8.4 | SendGrid event-webhook ingest route → `MessageEvent` + Suppression-on-bounce/complaint; CAN-SPAM unsubscribe route. |
-| 8.5 | Campaign CRUD + Marketing Activities reporting (G-Q4). |
-| 8.6 | UI shell — campaign builder + send-time settings (Polaris). |
-| 8.7 | Integration tests (real Postgres + mocked SendGrid) — draft → gate chain → send → MessageEvent end-to-end. |
+| **8.1 (done)** | `EPIC-G-DESIGN.md` + schema: the 5 tables, `Message` alters, the 4 new enums + `MessageStatus` ALTER, `Customer.emailMarketingConsentState` + **its ingestion path** (webhook body + backfill + upsert), `TENANT_SCOPED_MODELS` + cascade-policy header. One migration (+ hand-authored `ALTER TYPE`). |
+| **8.2 (this batch) — dispatch skeleton** | `campaign.dispatch` queue + `SYSTEM_SCOPE_REASONS.campaign.dispatch_sweep`; the `dispatch-sweep` tick (15-min, on `cron.sweep`) → `CampaignRepository.findDispatchableDrafts` PICKUP (completed+non-empty draft, active email campaign band-match, **oldest-campaign `createdAt ASC` tiebreak**, soft-delete + `NOT EXISTS CampaignTarget` filters) → per-draft `campaign.dispatch` jobs; the dispatch Worker (in `apps/drainer`) CLAIMS each via `CampaignTarget(pending)`, idempotent on `messageId @unique`. NO gates, NO send — `Message.status` stays `draft`. |
+| 8.3 — gate chain | The 6 terminal→transient gates (G-Q10 order) over claimed `CampaignTarget(pending)` rows: Suppression · Consent (`emailMarketingConsentState=subscribed`) · Freshness (G-Q6) · Frequency (existing `defaultCooldownHours`+`maxDailySendsPerCustomer`) · Quiet-hours (re-queue on out-of-window, the 15-min tick re-checks) · Quota (vs `dailySendCap`/`monthlySendsCap`). |
+| 8.4 — SendGrid provider + send | SendGrid email provider (`packages/messaging`?) — adapter mirroring `packages/ai`'s `AiProvider`, mocked-SDK unit tests — **plus** the external send + the G-Q9 quota-under-lock mark-sent completion tx (`Message.status` → `sent`, `CampaignTarget` → `sent`, `MessageQuotaBucket` increment). |
+| 8.5 | SendGrid event-webhook ingest route → `MessageEvent` + Suppression-on-bounce/complaint; CAN-SPAM unsubscribe route. |
+| 8.6 | Campaign CRUD + Marketing Activities reporting (G-Q4). **Build-note:** warn/prevent overlapping `triggerStates` across active campaigns — the 8.2 `createdAt ASC` tiebreak is the deterministic safety net for that misconfiguration, not a routine choice. |
+| 8.7 | UI shell — campaign builder + send-time settings (Polaris). |
+| 8.8 | Integration tests (real Postgres + mocked SendGrid) — draft → claim → gate chain → send → MessageEvent end-to-end. |
 
 (SMS, Workflow, Segment get their own later sections, written from this doc.)
 
