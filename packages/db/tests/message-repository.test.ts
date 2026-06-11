@@ -269,3 +269,47 @@ describe('MessageRepository.updateGeneratedText', () => {
     ).toHaveLength(0);
   });
 });
+
+// ===========================================================================
+// countSentSince (Epic G batch 8.3 frequency gate)
+// ===========================================================================
+
+describe('MessageRepository.countSentSince', () => {
+  it('counts SENT messages for the customer with sentAt >= since', async () => {
+    const count = vi.fn().mockResolvedValue(2);
+    const prisma = { message: { count } } as unknown as WinbackPrisma;
+    const repo = new MessageRepository(prisma);
+
+    const since = new Date('2026-06-10T00:00:00Z');
+    const result = await repo.countSentSince({
+      merchantId: 'm_1',
+      customerId: 'c_1',
+      since,
+    });
+
+    expect(result).toBe(2);
+    // Exact where shape: tenant + customer + status=sent + sentAt>=since.
+    expect(count).toHaveBeenCalledWith({
+      where: {
+        merchantId: 'm_1',
+        customerId: 'c_1',
+        status: 'sent',
+        sentAt: { gte: since },
+      },
+    });
+  });
+
+  it('returns 0 when no qualifying sends (the live 8.3 path — nothing is sent yet)', async () => {
+    const count = vi.fn().mockResolvedValue(0);
+    const prisma = { message: { count } } as unknown as WinbackPrisma;
+    const repo = new MessageRepository(prisma);
+
+    const result = await repo.countSentSince({
+      merchantId: 'm_1',
+      customerId: 'c_1',
+      since: new Date('2026-06-10T00:00:00Z'),
+    });
+
+    expect(result).toBe(0);
+  });
+});

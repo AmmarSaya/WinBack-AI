@@ -461,3 +461,54 @@ describe('OrderRepository.findRecentPurchasedTitles', () => {
     expect(queryRaw).not.toHaveBeenCalled();
   });
 });
+
+// ---------------------------------------------------------------------------
+// hasQualifyingOrderSince (Epic G batch 8.3 freshness gate / G-Q6) — wrapper
+// unit coverage. The since-generation SQL behaviour (COALESCE recency >
+// since, qualifying-order defn) is pinned against real Postgres in
+// tests/integration/campaign-dispatch.test.ts.
+// ---------------------------------------------------------------------------
+
+describe('OrderRepository.hasQualifyingOrderSince', () => {
+  const CUSTOMER_ID = 'cust_local_1';
+  const SINCE = new Date('2026-06-01T00:00:00Z');
+
+  function makeRepo(queryRaw: Mock): OrderRepository {
+    return new OrderRepository({ $queryRaw: queryRaw } as unknown as WinbackPrisma);
+  }
+
+  it('returns true when the EXISTS subquery yields true', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{ exists: true }]);
+    const repo = makeRepo(queryRaw);
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      repo.hasQualifyingOrderSince({ merchantId: MERCHANT_ID, customerId: CUSTOMER_ID, since: SINCE }),
+    );
+
+    expect(result).toBe(true);
+    expect(queryRaw).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns false when the EXISTS subquery yields false (no post-decision purchase)', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{ exists: false }]);
+    const repo = makeRepo(queryRaw);
+
+    const result = await withTenantScope(MERCHANT_ID, async () =>
+      repo.hasQualifyingOrderSince({ merchantId: MERCHANT_ID, customerId: CUSTOMER_ID, since: SINCE }),
+    );
+
+    expect(result).toBe(false);
+  });
+
+  it('asserts tenant scope BEFORE running the query (TenantScopeError, query never runs)', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([{ exists: false }]);
+    const repo = makeRepo(queryRaw);
+
+    await expect(
+      withTenantScope('m_other', async () =>
+        repo.hasQualifyingOrderSince({ merchantId: MERCHANT_ID, customerId: CUSTOMER_ID, since: SINCE }),
+      ),
+    ).rejects.toBeInstanceOf(TenantScopeError);
+    expect(queryRaw).not.toHaveBeenCalled();
+  });
+});

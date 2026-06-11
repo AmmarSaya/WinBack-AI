@@ -1334,8 +1334,11 @@ model CampaignTarget {
   customer   Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
 
   status CampaignTargetStatus @default(pending)
-  // Forensic: which TERMINAL gate suppressed this target
-  // (suppression|consent|freshness|frequency). Null unless suppressed.
+  // Forensic: the TERMINAL non-send reason — a gate name
+  // (suppression|consent|freshness|frequency) OR a dispatch-lifecycle policy
+  // reason (campaign_paused | deferred_stale, both set by the sweep's arm-2
+  // resolution). I.e. "gate name OR terminal-policy reason". Null unless the
+  // target reached a suppressed terminal.
   suppressedByGate String?
 
   queuedAt DateTime  @default(now())
