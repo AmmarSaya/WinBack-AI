@@ -109,6 +109,11 @@ function makeInitialState(): MockState {
       idempotencyKey: { rows: [] },
       backfillJob: { rows: [] },
       aiSpendBucket: { rows: [] },   // B1 addition
+      campaignTarget: { rows: [] },     // Epic G 8.1
+      messageEvent: { rows: [] },       // Epic G 8.1
+      suppression: { rows: [] },        // Epic G 8.1
+      campaign: { rows: [] },           // Epic G 8.1
+      messageQuotaBucket: { rows: [] }, // Epic G 8.1
       merchantSettings: { rows: [] },
       billingSubscription: { rows: [] },
     },
@@ -291,6 +296,27 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
     findMany: buildTenantDelegate('aiSpendBucket').findMany,
     deleteMany: buildTenantDelegate('aiSpendBucket').deleteMany,
   };
+  // Epic G 8.1 additions — match SHOP_REDACT_TABLES_IN_ORDER.
+  const campaignTarget = {
+    findMany: buildTenantDelegate('campaignTarget').findMany,
+    deleteMany: buildTenantDelegate('campaignTarget').deleteMany,
+  };
+  const messageEvent = {
+    findMany: buildTenantDelegate('messageEvent').findMany,
+    deleteMany: buildTenantDelegate('messageEvent').deleteMany,
+  };
+  const suppression = {
+    findMany: buildTenantDelegate('suppression').findMany,
+    deleteMany: buildTenantDelegate('suppression').deleteMany,
+  };
+  const campaign = {
+    findMany: buildTenantDelegate('campaign').findMany,
+    deleteMany: buildTenantDelegate('campaign').deleteMany,
+  };
+  const messageQuotaBucket = {
+    findMany: buildTenantDelegate('messageQuotaBucket').findMany,
+    deleteMany: buildTenantDelegate('messageQuotaBucket').deleteMany,
+  };
   const merchantSettings = buildOneToOneDelegate('merchantSettings');
   const billingSubscription = buildOneToOneDelegate('billingSubscription');
 
@@ -308,6 +334,11 @@ function makeMockPrisma(initial?: Partial<MockState>): MockHandle {
     idempotencyKey: idempotencyKeyDelegate,
     backfillJob,
     aiSpendBucket,
+    campaignTarget,
+    messageEvent,
+    suppression,
+    campaign,
+    messageQuotaBucket,
     merchantSettings,
     billingSubscription,
   };
@@ -458,6 +489,11 @@ describe('processShopRedact', () => {
         idempotencyKey: { rows: ['k1'] },
         backfillJob: { rows: [] },
         aiSpendBucket: { rows: ['sb1'] },      // B1
+        campaignTarget: { rows: ['ct1'] },     // Epic G 8.1
+        messageEvent: { rows: ['me1'] },       // Epic G 8.1
+        suppression: { rows: ['sp1'] },        // Epic G 8.1
+        campaign: { rows: ['cmp1'] },          // Epic G 8.1
+        messageQuotaBucket: { rows: ['qb1'] }, // Epic G 8.1
         merchantSettings: { rows: ['ms1'] },
         billingSubscription: { rows: [] },
       },

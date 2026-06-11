@@ -57,6 +57,12 @@ export const TENANT_SCOPED_MODELS: ReadonlySet<string> = new Set([
   'AiGeneration',  // Epic F batch 1 — one row per LLM call
   'Message',       // Epic F batch 1 — minimal draft row; Epic G extends
   'AiSpendBucket', // Epic F batch 1 — daily per-merchant LLM spend ledger
+  // Epic G batch 8.1 — campaigns + dispatch.
+  'Campaign',
+  'CampaignTarget',
+  'Suppression',
+  'MessageEvent',
+  'MessageQuotaBucket',
 ]);
 
 /**

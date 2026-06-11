@@ -259,9 +259,11 @@ export interface ProcessCustomerRedactArgs {
  * 3-table set is operator-confirmed complete against the live schema.
  */
 export const CUSTOMER_REDACT_CHILD_TABLES = [
+  'campaignTarget',   // Epic G — FK to Campaign + Message + Customer + Merchant (before message)
   'message',          // FK to AiGeneration + Customer + Merchant
   'aiGeneration',     // FK to Customer + Merchant
   'customerScore',    // FK to Customer + Merchant
+  'suppression',      // Epic G — FK to Customer + Merchant (no inter-child FK)
 ] as const;
 
 export async function processCustomerRedact(args: ProcessCustomerRedactArgs): Promise<void> {
@@ -465,16 +467,21 @@ export interface ProcessShopRedactArgs {
 export const SHOP_REDACT_TABLES_IN_ORDER = [
   'orderLineItem',
   'order',
+  'campaignTarget',  // Epic G — FK to Campaign + Message + Customer + Merchant (deepest child)
+  'messageEvent',    // Epic G — FK to Message + Merchant (before message)
   'message',         // B1 — FK to AiGeneration + Customer + Merchant
   'aiGeneration',    // B1 — FK to Customer + Merchant
   'customerScore',   // B1 — FK to Customer + Merchant
+  'suppression',     // Epic G — FK to Customer + Merchant (before customer)
   'productVariant',
   'product',
   'customer',
+  'campaign',        // Epic G — FK to Merchant (after campaignTarget which references it)
   'outboxEvent',
   'idempotencyKey',
   'backfillJob',
   'aiSpendBucket',   // B1 — FK to Merchant only
+  'messageQuotaBucket', // Epic G — FK to Merchant only
   'merchantSettings',
   'billingSubscription',
 ] as const;

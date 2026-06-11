@@ -1,5 +1,6 @@
 import type { Prisma } from '@prisma/client';
 import { BACKFILL_RESOURCES, type BackfillResource } from '@winback/contracts';
+import { toEmailMarketingConsentState } from '@winback/db';
 import { getLogger } from '@winback/logger';
 
 import type { AdminClient } from '../admin/client.js';
@@ -99,7 +100,7 @@ export class CustomerPageFetcher implements PageFetcher<ShopifyCustomerNode> {
 //
 //   SHOPIFY-OWNED (this processor writes; backfill + webhook may overwrite):
 //     - email, phone, firstName, lastName
-//     - acceptsMarketing, acceptsSms
+//     - acceptsMarketing, acceptsSms, emailMarketingConsentState
 //     - ordersCount, tags
 //     - shopifyCreatedAt (create-only), shopifyUpdatedAt
 //
@@ -128,6 +129,7 @@ const SHOPIFY_OWNED_FIELDS = [
   'lastName',
   'acceptsMarketing',
   'acceptsSms',
+  'emailMarketingConsentState',
   'ordersCount',
   'tags',
   'shopifyUpdatedAt',
@@ -180,6 +182,12 @@ export class CustomerPageProcessor implements PageProcessor<ShopifyCustomerNode>
         lastName: node.lastName,
         acceptsMarketing: node.emailMarketingConsent?.marketingState === 'SUBSCRIBED',
         acceptsSms: node.smsMarketingConsent?.marketingState === 'SUBSCRIBED',
+        // Channel-specific email consent (G-Q7) — full state via the shared
+        // normalizer (null/unknown → not_subscribed, fail-closed). acceptsMarketing
+        // above is retained but no longer the send-gating field.
+        emailMarketingConsentState: toEmailMarketingConsentState(
+          node.emailMarketingConsent?.marketingState,
+        ),
         ordersCount: parseIntOrZero(node.numberOfOrders),
         tags: node.tags ?? [],
         shopifyUpdatedAt: parseDateOrNull(node.updatedAt),

@@ -3,7 +3,7 @@ import { ValidationError } from '@winback/errors';
 import { beforeEach, describe, expect, it, vi, type Mock } from 'vitest';
 
 import type { WinbackPrisma } from '../src/client.js';
-import { CustomerRepository } from '../src/repositories/customer.repository.js';
+import { CustomerRepository, toEmailMarketingConsentState } from '../src/repositories/customer.repository.js';
 import { withSystemScope } from '../src/tenant-scope.js';
 import type { ShopifyCustomerWebhookBody } from '../src/webhook-bodies.js';
 
@@ -57,6 +57,30 @@ function makeBody(overrides: Partial<ShopifyCustomerWebhookBody> = {}): ShopifyC
   };
 }
 
+describe('toEmailMarketingConsentState (G-Q7 consent normalizer)', () => {
+  it('maps the four canonical states (lowercase webhook + UPPERCASE backfill) to the enum', () => {
+    expect(toEmailMarketingConsentState('subscribed')).toBe('subscribed');
+    expect(toEmailMarketingConsentState('SUBSCRIBED')).toBe('subscribed');
+    expect(toEmailMarketingConsentState('pending')).toBe('pending');
+    expect(toEmailMarketingConsentState('PENDING')).toBe('pending');
+    expect(toEmailMarketingConsentState('unsubscribed')).toBe('unsubscribed');
+    expect(toEmailMarketingConsentState('UNSUBSCRIBED')).toBe('unsubscribed');
+    expect(toEmailMarketingConsentState('not_subscribed')).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState('NOT_SUBSCRIBED')).toBe('not_subscribed');
+  });
+
+  it('fails closed: redacted / invalid / unknown / null / undefined / empty → not_subscribed (only `subscribed` sends)', () => {
+    expect(toEmailMarketingConsentState('redacted')).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState('REDACTED')).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState('invalid')).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState('INVALID')).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState('some_future_value')).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState(null)).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState(undefined)).toBe('not_subscribed');
+    expect(toEmailMarketingConsentState('')).toBe('not_subscribed');
+  });
+});
+
 describe('CustomerRepository.upsertFromWebhook', () => {
   let repo: CustomerRepository;
   let tx: MockTx;
@@ -103,6 +127,60 @@ describe('CustomerRepository.upsertFromWebhook', () => {
       }),
     );
     expect(tx.customer.upsert.mock.calls[0]![0].create.acceptsMarketing).toBe(true);
+  });
+
+  // -------- channel-specific emailMarketingConsentState (G-Q7) --------
+
+  it('email_marketing_consent.state = "subscribed" → emailMarketingConsentState=subscribed written', async () => {
+    tx.customer.findUnique.mockResolvedValue(null);
+    await withSystemScope('test.upsert_customer', async () =>
+      repo.upsertFromWebhook({
+        merchantId: MERCHANT_ID,
+        body: makeBody({ email_marketing_consent: { state: 'subscribed' } }),
+        tx: tx as unknown as Prisma.TransactionClient,
+      }),
+    );
+    expect(tx.customer.upsert.mock.calls[0]![0].create.emailMarketingConsentState).toBe('subscribed');
+  });
+
+  it('email_marketing_consent.state = "unsubscribed" → emailMarketingConsentState=unsubscribed WRITTEN (captures the opt-out, unlike acceptsMarketing)', async () => {
+    tx.customer.findUnique.mockResolvedValue(null);
+    await withSystemScope('test.upsert_customer', async () =>
+      repo.upsertFromWebhook({
+        merchantId: MERCHANT_ID,
+        body: makeBody({ email_marketing_consent: { state: 'unsubscribed' } }),
+        tx: tx as unknown as Prisma.TransactionClient,
+      }),
+    );
+    // The consent STATE field captures the unsubscribe (so dispatch gate 2
+    // suppresses) — UNLIKE acceptsMarketing, which is only-written-when-true.
+    expect(tx.customer.upsert.mock.calls[0]![0].create.emailMarketingConsentState).toBe('unsubscribed');
+  });
+
+  it('unknown email_marketing_consent.state → emailMarketingConsentState=not_subscribed (fail closed)', async () => {
+    tx.customer.findUnique.mockResolvedValue(null);
+    await withSystemScope('test.upsert_customer', async () =>
+      repo.upsertFromWebhook({
+        merchantId: MERCHANT_ID,
+        body: makeBody({ email_marketing_consent: { state: 'redacted' } }),
+        tx: tx as unknown as Prisma.TransactionClient,
+      }),
+    );
+    expect(tx.customer.upsert.mock.calls[0]![0].create.emailMarketingConsentState).toBe('not_subscribed');
+  });
+
+  it('no email_marketing_consent object → emailMarketingConsentState NOT written (does not clobber stored state)', async () => {
+    tx.customer.findUnique.mockResolvedValue(null);
+    const body = makeBody();
+    delete (body as Partial<ShopifyCustomerWebhookBody>).email_marketing_consent;
+    await withSystemScope('test.upsert_customer', async () =>
+      repo.upsertFromWebhook({
+        merchantId: MERCHANT_ID,
+        body,
+        tx: tx as unknown as Prisma.TransactionClient,
+      }),
+    );
+    expect(tx.customer.upsert.mock.calls[0]![0].create.emailMarketingConsentState).toBeUndefined();
   });
 
   it('email_marketing_consent.state = "unsubscribed" → acceptsMarketing NOT written (preserves existing value on update)', async () => {

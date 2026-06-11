@@ -12,6 +12,7 @@ export { OutboxRepository, type OutboxEventRow } from './outbox.repository.js';
 export { AuditLogRepository, type AppendAuditLogInput } from './audit-log.repository.js';
 export {
   CustomerRepository,
+  toEmailMarketingConsentState,
   type SoftDeleteCustomerArgs,
   type SoftDeleteCustomerResult,
   type UpsertCustomerFromWebhookArgs,
