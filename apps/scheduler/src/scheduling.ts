@@ -31,6 +31,8 @@ import type { Queue } from 'bullmq';
 export const ROLLUP_JOB_NAME = 'rollup-tick';
 export const SWEEP_ENRICHMENT_JOB_NAME = 'enrichment-sweep';
 export const SWEEP_DECAY_JOB_NAME = 'decay-sweep';
+/** Epic G batch 8.2 — campaign dispatch sweep (15-min interval, on cron.sweep). */
+export const SWEEP_DISPATCH_JOB_NAME = 'dispatch-sweep';
 
 /** CP-2 §Q5: hourly at minute 0 UTC. */
 export const ROLLUP_CRON_PATTERN = '0 * * * *';
@@ -78,5 +80,27 @@ export async function registerDecaySweepRepeat(queue: Queue): Promise<void> {
     SWEEP_DECAY_JOB_NAME,
     {},
     { repeat: { pattern: SWEEP_DECAY_CRON_PATTERN } },
+  );
+}
+
+/**
+ * Campaign dispatch sweep (Epic G batch 8.2): every 15 min. INTERVAL MS
+ * (`every`), NOT a cron pattern — dispatch eligibility is "since-startup"
+ * polling, not wall-clock-anchored (matches the enrichment sweep's mechanism).
+ *
+ * Registered on the SAME `cron.sweep` queue as the enrichment + decay sweeps;
+ * the sweep worker dispatches by job name. BullMQ deduplicates repeatables by
+ * (name, every, tz), so this 15-min interval job coexists with enrichment's
+ * 15-min interval and decay's daily cron — distinct job NAMES keep them
+ * separate even where the cadence matches.
+ *
+ * 15 min is the re-evaluation granularity that 8.3's quiet-hours gate will
+ * ride on (out-of-window → re-queue → re-check next tick).
+ */
+export async function registerDispatchSweepRepeat(queue: Queue): Promise<void> {
+  await queue.add(
+    SWEEP_DISPATCH_JOB_NAME,
+    {},
+    { repeat: { every: SWEEP_INTERVAL_MS } },
   );
 }

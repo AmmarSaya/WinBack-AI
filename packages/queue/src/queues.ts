@@ -114,6 +114,10 @@ export function getQueues(): Queues {
         connection: conn,
         ...SHARED_QUEUE_OPTIONS,
       }),
+      campaignDispatch: new Queue(QUEUE_NAMES.campaign.dispatch, {
+        connection: conn,
+        ...SHARED_QUEUE_OPTIONS,
+      }),
     };
   }
   return cachedQueues;
@@ -204,6 +208,7 @@ export async function closeQueues(): Promise<void> {
         cachedQueues.cronRollup.close(),
         cachedQueues.cronSweep.close(),
         cachedQueues.aiGenerate.close(),
+        cachedQueues.campaignDispatch.close(),
       ]);
     }
     if (sharedClient !== null) {

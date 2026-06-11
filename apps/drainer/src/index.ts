@@ -5,9 +5,10 @@
  *
  *   1. Read config (Shopify, ENCRYPTION_KEY, Redis).
  *   2. Construct DrainerContext (prisma, queues, shopifyConfig).
- *   3. Build TWO BullMQ Workers (Epic F batch 4 Step 2d):
- *        - `outbox.drain` Worker (createDrainerWorker)
- *        - `ai.generate` Worker (createAiGenerateWorker)
+ *   3. Build THREE BullMQ Workers:
+ *        - `outbox.drain` Worker (createDrainerWorker — D2)
+ *        - `ai.generate` Worker (createAiGenerateWorker — Epic F batch 4)
+ *        - `campaign.dispatch` Worker (createDispatchWorker — Epic G batch 8.2)
  *      Each owns its own ioredis connection per the BullMQ blocking-
  *      commands rule (see packages/queue/src/redis-client.ts header).
  *   4. Enqueue one initial tick job (the outbox Worker self-re-enqueues
@@ -19,10 +20,10 @@
  * Graceful shutdown (Q-B1: parallel worker close via Promise.allSettled
  * for per-worker error isolation + matching the handoff doc's explicit
  * "close in parallel" wording):
- *   - drainerWorker.close() + aiWorker.close() — PARALLEL via
- *     `Promise.allSettled`. Each finishes its in-flight job + refuses
- *     new jobs. Per-worker errors logged but never block the rest of
- *     the shutdown.
+ *   - drainerWorker.close() + aiWorker.close() + dispatchWorker.close()
+ *     — PARALLEL via `Promise.allSettled`. Each finishes its in-flight
+ *     job + refuses new jobs. Per-worker errors logged but never block
+ *     the rest of the shutdown.
  *   - closeQueues() — closes the shared Queue ioredis client AFTER both
  *     workers (workers may write back to the Queue handle during
  *     in-flight finish).
@@ -51,6 +52,7 @@ import { disconnectPrisma, getPrisma } from './db.js';
 import { enqueueInitialTick } from './scheduling.js';
 import { createDrainerWorker } from './worker.js';
 import { createAiGenerateWorker } from './workers/ai-generate.worker.js';
+import { createDispatchWorker } from './workers/dispatch.worker.js';
 
 const log = getLogger('drainer.main');
 
@@ -63,14 +65,18 @@ export async function main(): Promise<void> {
 
   const ctx: DrainerContext = { prisma, queues, shopifyConfig };
 
-  // Q-B3: explicit `drainerWorker` rename. Two Workers in one process,
-  // an unnamed `worker` is a refactor hazard.
+  // Q-B3: explicit per-worker names. Three Workers in one process, an
+  // unnamed `worker` is a refactor hazard.
   const drainerWorker = createDrainerWorker(ctx);
   const aiWorker = createAiGenerateWorker(ctx);
+  // Epic G batch 8.2 — consumes `campaign.dispatch` (producer = scheduler
+  // dispatch-sweep tick). Claims a CampaignTarget per draft; gates + send land
+  // in later batches.
+  const dispatchWorker = createDispatchWorker(ctx);
 
   await enqueueInitialTick(queues.outboxDrain);
   log.info(
-    'drainer: initial tick enqueued; outbox drain + ai-generate workers running',
+    'drainer: initial tick enqueued; outbox drain + ai-generate + campaign-dispatch workers running',
   );
 
   let shuttingDown = false;
@@ -90,9 +96,10 @@ export async function main(): Promise<void> {
     // contention) so concurrent close is safe. Per-worker error
     // isolation: if one close throws, the other still completes + we
     // get separate log lines for each failure.
-    const [drainerResult, aiResult] = await Promise.allSettled([
+    const [drainerResult, aiResult, dispatchResult] = await Promise.allSettled([
       drainerWorker.close(),
       aiWorker.close(),
+      dispatchWorker.close(),
     ]);
     if (drainerResult.status === 'rejected') {
       log.error(
@@ -109,6 +116,14 @@ export async function main(): Promise<void> {
       );
     } else {
       log.info('drainer: ai-generate worker closed');
+    }
+    if (dispatchResult.status === 'rejected') {
+      log.error(
+        { err: dispatchResult.reason },
+        'drainer: campaign-dispatch worker close threw',
+      );
+    } else {
+      log.info('drainer: campaign-dispatch worker closed');
     }
 
     try {

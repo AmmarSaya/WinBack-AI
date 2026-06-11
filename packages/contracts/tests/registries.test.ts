@@ -178,8 +178,8 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     // Same literal, two registries — coincidence, not coupling.
   });
 
-  it('contains the fifteen reasons currently used across the codebase', () => {
-    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(15);
+  it('contains the sixteen reasons currently used across the codebase', () => {
+    expect(ALL_SYSTEM_SCOPE_REASONS.size).toBe(16);
     expect(SYSTEM_SCOPE_REASONS.admin.token_resolve).toBe('admin.token_resolve');
     expect(SYSTEM_SCOPE_REASONS.admin.token_revoke).toBe('admin.token_revoke');
     expect(SYSTEM_SCOPE_REASONS.gdpr.shop_redact).toBe('gdpr.shop_redact');
@@ -190,6 +190,8 @@ describe('SYSTEM_SCOPE_REASONS registry', () => {
     expect(SYSTEM_SCOPE_REASONS.enrichment.sweep).toBe('enrichment.sweep');
     // Decay-rescore sweep (post-Epic-F) — daily steady-state companion to §1.
     expect(SYSTEM_SCOPE_REASONS.scoring.decay_sweep).toBe('scoring.decay_sweep');
+    // Epic G batch 8.2 — campaign dispatch sweep cross-tenant merchant SELECT.
+    expect(SYSTEM_SCOPE_REASONS.campaign.dispatch_sweep).toBe('campaign.dispatch_sweep');
     expect(SYSTEM_SCOPE_REASONS.shopify.install).toBe('shopify.install');
     expect(SYSTEM_SCOPE_REASONS.webhook.ingest).toBe('webhook.ingest');
     expect(SYSTEM_SCOPE_REASONS.healthcheck.readyz).toBe('healthcheck.readyz');
@@ -235,8 +237,8 @@ describe('QUEUE_NAMES registry', () => {
     expect(isQueueName('Outbox.Drain')).toBe(false); // caps rejected by format
   });
 
-  it('contains the four queues currently used across the codebase', () => {
-    expect(ALL_QUEUE_NAMES.size).toBe(4);
+  it('contains the five queues currently used across the codebase', () => {
+    expect(ALL_QUEUE_NAMES.size).toBe(5);
     expect(QUEUE_NAMES.outbox.drain).toBe('outbox.drain');
     expect(QUEUE_NAMES.cron.rollup).toBe('cron.rollup');
     expect(QUEUE_NAMES.cron.sweep).toBe('cron.sweep');
@@ -245,6 +247,11 @@ describe('QUEUE_NAMES registry', () => {
     // inside `apps/drainer` (batch 4). Carries `{ aiGenerationId,
     // merchantId, customerId }`.
     expect(QUEUE_NAMES.ai.generate).toBe('ai.generate');
+    // Epic G batch 8.2 — `campaign.dispatch` BullMQ queue. Producer =
+    // scheduler `dispatch-sweep` tick (per draft). Consumer = dispatch
+    // Worker inside `apps/drainer`. Carries `{ merchantId, messageId,
+    // campaignId, customerId }`.
+    expect(QUEUE_NAMES.campaign.dispatch).toBe('campaign.dispatch');
   });
 });
 

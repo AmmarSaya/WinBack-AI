@@ -20,9 +20,11 @@ import {
   ROLLUP_JOB_NAME,
   SWEEP_DECAY_CRON_PATTERN,
   SWEEP_DECAY_JOB_NAME,
+  SWEEP_DISPATCH_JOB_NAME,
   SWEEP_ENRICHMENT_JOB_NAME,
   SWEEP_INTERVAL_MS,
   registerDecaySweepRepeat,
+  registerDispatchSweepRepeat,
   registerRollupRepeat,
   registerSweepRepeat,
 } from '../src/scheduling.js';
@@ -92,6 +94,26 @@ describe('registerDecaySweepRepeat', () => {
   it('the decay sweep job name is distinct from the enrichment sweep (both on cron.sweep)', () => {
     expect(SWEEP_DECAY_JOB_NAME).toBe('decay-sweep');
     expect(SWEEP_DECAY_JOB_NAME).not.toBe(SWEEP_ENRICHMENT_JOB_NAME);
+  });
+});
+
+describe('registerDispatchSweepRepeat', () => {
+  it('calls queue.add with INTERVAL MS (NOT cron pattern) for the 15-min dispatch sweep', async () => {
+    const { queue, addMock } = makeStubQueue();
+    await registerDispatchSweepRepeat(queue);
+
+    expect(addMock).toHaveBeenCalledTimes(1);
+    expect(addMock).toHaveBeenCalledWith(
+      SWEEP_DISPATCH_JOB_NAME,
+      {},
+      { repeat: { every: SWEEP_INTERVAL_MS } },
+    );
+  });
+
+  it('the dispatch sweep job name is "dispatch-sweep" and distinct from the other sweeps (all on cron.sweep)', () => {
+    expect(SWEEP_DISPATCH_JOB_NAME).toBe('dispatch-sweep');
+    expect(SWEEP_DISPATCH_JOB_NAME).not.toBe(SWEEP_ENRICHMENT_JOB_NAME);
+    expect(SWEEP_DISPATCH_JOB_NAME).not.toBe(SWEEP_DECAY_JOB_NAME);
   });
 });
 

@@ -35,17 +35,21 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 const mocks = vi.hoisted(() => {
   const drainerWorker = { close: vi.fn(async () => undefined) };
   const aiWorker = { close: vi.fn(async () => undefined) };
+  const dispatchWorker = { close: vi.fn(async () => undefined) };
   return {
     drainerWorker,
     aiWorker,
+    dispatchWorker,
     createDrainerWorker: vi.fn(() => drainerWorker),
     createAiGenerateWorker: vi.fn(() => aiWorker),
+    createDispatchWorker: vi.fn(() => dispatchWorker),
     enqueueInitialTick: vi.fn(async () => undefined),
     getQueues: vi.fn(() => ({
       outboxDrain: { __mock: 'outboxDrain' },
       cronRollup: { __mock: 'cronRollup' },
       cronSweep: { __mock: 'cronSweep' },
       aiGenerate: { __mock: 'aiGenerate' },
+      campaignDispatch: { __mock: 'campaignDispatch' },
     })),
     closeQueues: vi.fn(async () => undefined),
     getPrisma: vi.fn(() => ({ __mock: 'prisma' })),
@@ -59,6 +63,9 @@ vi.mock('../src/worker.js', () => ({
 }));
 vi.mock('../src/workers/ai-generate.worker.js', () => ({
   createAiGenerateWorker: mocks.createAiGenerateWorker,
+}));
+vi.mock('../src/workers/dispatch.worker.js', () => ({
+  createDispatchWorker: mocks.createDispatchWorker,
 }));
 vi.mock('../src/scheduling.js', () => ({
   enqueueInitialTick: mocks.enqueueInitialTick,
@@ -133,11 +140,12 @@ async function triggerSignal(signal: 'SIGTERM' | 'SIGINT'): Promise<void> {
 // ===========================================================================
 
 describe('main — boot', () => {
-  it('constructs BOTH workers (createDrainerWorker + createAiGenerateWorker) — required assertion #1', async () => {
+  it('constructs ALL THREE workers (createDrainerWorker + createAiGenerateWorker + createDispatchWorker) — required assertion #1', async () => {
     await main();
 
     expect(mocks.createDrainerWorker).toHaveBeenCalledTimes(1);
     expect(mocks.createAiGenerateWorker).toHaveBeenCalledTimes(1);
+    expect(mocks.createDispatchWorker).toHaveBeenCalledTimes(1);
 
     // Each Worker receives the SAME DrainerContext (prisma/queues/
     // shopifyConfig from the boot-time builders).
@@ -150,7 +158,11 @@ describe('main — boot', () => {
     const [aiCtx] = mocks.createAiGenerateWorker.mock.calls[0] as unknown as [
       Record<string, unknown>,
     ];
+    const [dispatchCtx] = mocks.createDispatchWorker.mock.calls[0] as unknown as [
+      Record<string, unknown>,
+    ];
     expect(drainerCtx).toBe(aiCtx);
+    expect(drainerCtx).toBe(dispatchCtx);
   });
 
   it('enqueues the initial outbox tick onto queues.outboxDrain', async () => {
@@ -278,6 +290,7 @@ describe('main — shutdown idempotency + error isolation', () => {
     // shutdown; the SIGINT-driven shutdown short-circuited).
     expect(mocks.drainerWorker.close).toHaveBeenCalledTimes(1);
     expect(mocks.aiWorker.close).toHaveBeenCalledTimes(1);
+    expect(mocks.dispatchWorker.close).toHaveBeenCalledTimes(1);
     expect(mocks.closeQueues).toHaveBeenCalledTimes(1);
     expect(mocks.disconnectPrisma).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledTimes(1);
@@ -313,6 +326,23 @@ describe('main — shutdown idempotency + error isolation', () => {
 
     expect(mocks.drainerWorker.close).toHaveBeenCalledTimes(1);
     expect(mocks.aiWorker.close).toHaveBeenCalledTimes(1);
+    expect(mocks.dispatchWorker.close).toHaveBeenCalledTimes(1);
+    expect(mocks.closeQueues).toHaveBeenCalledTimes(1);
+    expect(mocks.disconnectPrisma).toHaveBeenCalledTimes(1);
+    expect(exitSpy).toHaveBeenCalledWith(0);
+  });
+
+  it('dispatchWorker.close() throwing does NOT prevent the other workers + queues/prisma teardown + clean exit(0) — required assertion #5 (dispatch mirror)', async () => {
+    mocks.dispatchWorker.close.mockImplementation(async () => {
+      throw new Error('campaign-dispatch worker close blew up');
+    });
+
+    await main();
+    await triggerSignal('SIGTERM');
+
+    expect(mocks.drainerWorker.close).toHaveBeenCalledTimes(1);
+    expect(mocks.aiWorker.close).toHaveBeenCalledTimes(1);
+    expect(mocks.dispatchWorker.close).toHaveBeenCalledTimes(1);
     expect(mocks.closeQueues).toHaveBeenCalledTimes(1);
     expect(mocks.disconnectPrisma).toHaveBeenCalledTimes(1);
     expect(exitSpy).toHaveBeenCalledWith(0);

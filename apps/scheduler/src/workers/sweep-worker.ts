@@ -7,8 +7,9 @@
  *
  *   - `'enrichment-sweep'` → runEnrichmentSweep (every 15 min)
  *   - `'decay-sweep'`      → runDecaySweep      (daily 03:00 UTC)
+ *   - `'dispatch-sweep'`   → runDispatchSweep   (every 15 min — Epic G 8.2)
  *
- * The two coexist on one queue with different repeat cadences (BullMQ
+ * They coexist on one queue with different cadences/job-names (BullMQ
  * deduplicates repeatables by name+pattern/every).
  *
  * Unknown job names: log + return (no throw). A rolling deploy where
@@ -27,8 +28,13 @@ import { Worker, type Job } from 'bullmq';
 
 import type { SchedulerContext } from '../context.js';
 import { runDecaySweep } from '../handlers/decay-sweep.js';
+import { runDispatchSweep } from '../handlers/dispatch-sweep.js';
 import { runEnrichmentSweep } from '../handlers/enrichment-sweep.js';
-import { SWEEP_DECAY_JOB_NAME, SWEEP_ENRICHMENT_JOB_NAME } from '../scheduling.js';
+import {
+  SWEEP_DECAY_JOB_NAME,
+  SWEEP_DISPATCH_JOB_NAME,
+  SWEEP_ENRICHMENT_JOB_NAME,
+} from '../scheduling.js';
 
 const log = getLogger('scheduler.worker.sweep');
 
@@ -47,6 +53,9 @@ export function createSweepWorker(ctx: SchedulerContext): Worker {
           return;
         case SWEEP_DECAY_JOB_NAME:
           await runDecaySweep(ctx);
+          return;
+        case SWEEP_DISPATCH_JOB_NAME:
+          await runDispatchSweep(ctx);
           return;
         default:
           log.warn(
