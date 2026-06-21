@@ -58,7 +58,7 @@ jobs:
       DEEPSEEK_API_KEY: ci-test-deepseek-key-not-real
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # Fail-fastest: catches drifted pnpm.overrides BEFORE the ~60s install
       # and ~90s build burn. Pure Node — uses the runner's pre-installed
