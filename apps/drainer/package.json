@@ -19,6 +19,7 @@
     "@winback/contracts": "workspace:*",
     "@winback/crypto": "workspace:*",
     "@winback/db": "workspace:*",
+    "@winback/email": "workspace:*",
     "@winback/errors": "workspace:*",
     "@winback/logger": "workspace:*",
     "@winback/queue": "workspace:*",

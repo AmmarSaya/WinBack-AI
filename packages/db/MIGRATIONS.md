@@ -250,6 +250,26 @@ class CustomerRepository extends BaseRepository {
 - Use `Prisma.sql` template literals (parameter binding). Never
   string-concatenate user-supplied values into SQL.
 
+## Migration log entries — `ALTER TYPE ADD VALUE` pattern
+
+Two production migrations have followed the pattern of `ALTER TYPE
+"<EnumName>" ADD VALUE '<new-member>'` at the top of the file, then the
+remaining DDL below. Postgres 12+ accepts `ALTER TYPE ADD VALUE` inside a
+transaction so long as the new value is not USED in the same transaction
+(no `UPDATE … = '<new-member>'` etc.). Both migrations satisfy that
+restriction by adding the value alone and letting application code switch
+to the new value after the migration applies.
+
+| Migration | Enum | Added value(s) | Pattern |
+|---|---|---|---|
+| `20260610140000_epic_g_campaigns_dispatch` (8.1) | `MessageStatus` | `sent`, `suppressed`, `failed`, `bounced`, `opened`, `clicked` | `ALTER TYPE` block at top; main DDL below. The new values are referenced by app code post-deploy. |
+| `20260628120000_epic_g_dispatch_send_state` (8.4) | `CampaignTargetStatus` | `sending` | Same pattern. The tombstone state used by `startSending` / `markSentWithQuota` (Epic G batch 8.4). |
+
+If a future migration ALSO writes to the new value in the same migration
+(backfill / data migration), the `ADD VALUE` MUST land in its own
+migration FIRST + be deployed before any migration that uses the value.
+The PG documentation calls this out as the safe path.
+
 ## Things this file does NOT cover
 
 - Seeding: see `pnpm db:seed:test` (stub in B2; populated in later subsystems).

@@ -109,6 +109,22 @@ updates:
       # family + Prisma 6 (+ optionally 7).
       - dependency-name: "prisma"
       - dependency-name: "@prisma/client"
+      # @aws-sdk/client-sesv2 — DO NOT bump independently.
+      #
+      # Pinned at 3.726.1 via pnpm.overrides (Epic G batch 8.4). The AWS
+      # SDK v3 ships individual @aws-sdk/* packages that share a versioned
+      # core (`@smithy/*` + the SDK clients), so a single-package bump can
+      # produce cross-version smithy-protocol type conflicts when other
+      # AWS clients are added later. The override anchors the version;
+      # future @aws-sdk/* additions should override-pin to the same value
+      # AND join this ignore block.
+      #
+      # Unfreeze condition: a dedicated AWS-SDK refresh session that bumps
+      # @aws-sdk/client-sesv2 (and any siblings present at the time) +
+      # the @smithy/* set together, with the full integration suite as
+      # the verification surface (SES error-mapping tests + the dispatch
+      # crash-window / ACK-LOST proofs).
+      - dependency-name: "@aws-sdk/client-sesv2"
       # vite — DO NOT bump independently.
       #
       # Blocked by FOUR independent constraints (any one defers;

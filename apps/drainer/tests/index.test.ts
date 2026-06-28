@@ -84,6 +84,23 @@ vi.mock('@winback/queue', () => ({
 vi.mock('@winback/shopify', () => ({
   getShopifyConfig: mocks.getShopifyConfig,
 }));
+// Epic G batch 8.4 — mock the ESP config + selector so main() boot doesn't
+// require real AWS_SES_* env or instantiate a real SES client.
+vi.mock('@winback/email', () => ({
+  getEmailConfig: vi.fn(() => ({
+    EMAIL_PROVIDER: 'amazon-ses',
+    AWS_REGION: 'us-east-1',
+    AWS_SES_ACCESS_KEY_ID: 'fake',
+    AWS_SES_SECRET_ACCESS_KEY: 'fake',
+    AWS_SES_FROM_ADDRESS: 'winback@example.com',
+    AWS_SES_CONFIGURATION_SET: 'winback-events',
+    AWS_SES_SANDBOX: true,
+  })),
+  selectActiveEmailProvider: vi.fn(() => ({
+    name: 'amazon-ses',
+    send: vi.fn(async () => ({ providerMessageId: 'mock', latencyMs: 1 })),
+  })),
+}));
 
 // ---------------------------------------------------------------------------
 // Process spies — must be set up BEFORE main() runs so its

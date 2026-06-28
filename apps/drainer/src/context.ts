@@ -1,4 +1,5 @@
 import type { WinbackPrisma } from '@winback/db';
+import type { EmailProvider } from '@winback/email';
 import type { Queues } from '@winback/queue';
 import type { ShopifyConfig } from '@winback/shopify';
 
@@ -17,9 +18,20 @@ import type { ShopifyConfig } from '@winback/shopify';
  *   queue); the `cron.*` queues remain for the scheduler app.
  * - `shopifyConfig`: source of `ENCRYPTION_KEY` for the per-handler
  *   Cipher + AdminClient construction (merchant handler).
+ * - `emailProvider`: the ESP boundary (Epic G batch 8.4). Single instance
+ *   per process — the dispatch worker (`workers/dispatch.worker.ts`) calls
+ *   `emailProvider.send(...)` to dispatch an email; tests inject a mocked
+ *   provider through this field instead of standing up SES.
+ * - `emailFromAddress` + `emailConfigurationSetName`: SES per-send config
+ *   that's constant for the lifetime of the process (env-supplied at
+ *   boot). Carried alongside the provider so the worker doesn't re-read
+ *   env every dispatch.
  */
 export interface DrainerContext {
   readonly prisma: WinbackPrisma;
   readonly queues: Queues;
   readonly shopifyConfig: ShopifyConfig;
+  readonly emailProvider: EmailProvider;
+  readonly emailFromAddress: string;
+  readonly emailConfigurationSetName: string | undefined;
 }

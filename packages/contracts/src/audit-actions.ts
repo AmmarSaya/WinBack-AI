@@ -146,6 +146,36 @@ export const AUDIT_ACTIONS = {
      */
     created: 'discount.created',
   },
+  /**
+   * Dispatch (send) lifecycle actions (Epic G batch 8.4). Written by the
+   * dispatch worker (`apps/drainer/src/workers/dispatch.worker.ts`) AND by
+   * the post-8.4 SES SNS Delivery handler (`8.5`) inside the SAME shared
+   * completion-tx (`CampaignRepository.markSentWithQuota`) that flips
+   * `CampaignTarget.status = 'sent'`. Single shared method ⇒ a successful
+   * SES send writes exactly ONE `dispatch.sent` row regardless of which
+   * caller drove the completion. `actorType` is `system`; `actorId` is
+   * `'drainer'`.
+   *
+   * `dispatch.suppressed_by_ses` is DISTINCT from gate-driven suppressions
+   * (which carry no audit row of their own — the `CampaignTarget`'s
+   * `suppressedByGate` field IS the forensic record for those). A SES
+   * account-suppression hit is a *deliverability signal* operators want
+   * filterable separately — distinct from "the gate chain rejected this
+   * draft because the customer is on our suppression list" (`suppression`
+   * gate) and from "the customer unsubscribed" (`consent` gate). The
+   * `Suppression` row write for SES-suppressed-recipient is deferred to
+   * 8.5's unified path (CSV import + SNS bounces/complaints + this case).
+   *
+   * Context (no PII; load-bearing — never carry recipient address or body):
+   *   dispatch.sent:                { messageId, campaignId, customerId, providerMessageId }
+   *   dispatch.suppressed_by_ses:   { messageId, campaignId, customerId, errorCode }
+   */
+  dispatch: {
+    /** A SES-accepted send. providerMessageId is the SNS reverse-lookup key (8.5). */
+    sent: 'dispatch.sent',
+    /** SES rejected synchronously because the recipient is on SES's account-suppression list. */
+    suppressed_by_ses: 'dispatch.suppressed_by_ses',
+  },
 } as const;
 
 /**
@@ -168,7 +198,8 @@ export type AuditAction =
   | (typeof AUDIT_ACTIONS.customer)[keyof typeof AUDIT_ACTIONS.customer]
   | (typeof AUDIT_ACTIONS.merchant)[keyof typeof AUDIT_ACTIONS.merchant]
   | (typeof AUDIT_ACTIONS.ai)[keyof typeof AUDIT_ACTIONS.ai]
-  | (typeof AUDIT_ACTIONS.discount)[keyof typeof AUDIT_ACTIONS.discount];
+  | (typeof AUDIT_ACTIONS.discount)[keyof typeof AUDIT_ACTIONS.discount]
+  | (typeof AUDIT_ACTIONS.dispatch)[keyof typeof AUDIT_ACTIONS.dispatch];
 
 /** Runtime Set of every registered action, for shape tests + iteration. */
 export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
@@ -178,6 +209,7 @@ export const ALL_AUDIT_ACTIONS: ReadonlySet<AuditAction> = new Set([
   ...Object.values(AUDIT_ACTIONS.merchant),
   ...Object.values(AUDIT_ACTIONS.ai),
   ...Object.values(AUDIT_ACTIONS.discount),
+  ...Object.values(AUDIT_ACTIONS.dispatch),
 ] as AuditAction[]);
 
 /**

@@ -1188,7 +1188,19 @@ model Message {
   campaign   Campaign? @relation(fields: [campaignId], references: [id], onDelete: SetNull)
   channel    MessageChannel?
   sentAt     DateTime?
-  provider   String? // ESP, e.g. 'sendgrid'
+  // ESP name, e.g. 'amazon-ses' (Epic G batch 8.4 lock; supersedes earlier
+  // SendGrid framing — the EPIC-G-DESIGN.md wording fix is a parked post-8.4
+  // docs-only carry-forward).
+  provider   String?
+  // Epic G batch 8.4 — the SES MessageId returned in the SendEmail ACK,
+  // written by the completion-tx in the same atomic step as Message.status →
+  // 'sent'. The SNS reverse-lookup key 8.5's SNS-ingest handler uses to
+  // correlate Delivery/Bounce/Complaint events back to the originating row.
+  // For stuck-`sending` rows where the SES ACK was lost, this stays NULL
+  // until 8.5's SNS handler backfills it from the SNS payload's
+  // `mail.messageId` (paired with the EmailTags `wbk_target` correlation —
+  // see Phase 1 §1 of 8.4).
+  providerMessageId String?
 
   campaignTarget CampaignTarget? // 1:1 (CampaignTarget.messageId @unique)
   messageEvents  MessageEvent[]
@@ -1264,6 +1276,16 @@ enum CampaignStatus {
 
 enum CampaignTargetStatus {
   pending
+  // Epic G batch 8.4 — added via ALTER TYPE ADD VALUE (8.1 MessageStatus pattern).
+  // The tombstone state for the SES send pipeline: written by `startSending` BEFORE
+  // the external SES call, advanced to `sent` by the completion-tx (sending → sent
+  // CAS + bucket increment + Message.providerMessageId persisted). A worker that
+  // catches a RETRYABLE EmailProviderError reverts sending → pending (the SES call
+  // failed cleanly; safe to re-enter). A worker that CRASHES between pre-send tx and
+  // completion-tx leaves the row at `sending`; the replay guard + sweep arms exclude
+  // it from any auto-resend (ACK-LOST asymmetric-cost policy — Phase 1 §2 of 8.4).
+  // 8.5's SNS Delivery handler is the eventual self-healing path for stuck rows.
+  sending
   sent
   suppressed
   deferred
@@ -1337,12 +1359,23 @@ model CampaignTarget {
   // Forensic: the TERMINAL non-send reason — a gate name
   // (suppression|consent|freshness|frequency) OR a dispatch-lifecycle policy
   // reason (campaign_paused | deferred_stale, both set by the sweep's arm-2
-  // resolution). I.e. "gate name OR terminal-policy reason". Null unless the
-  // target reached a suppressed terminal.
+  // resolution) OR an 8.4 SES failure code (ses_suppressed | email_auth |
+  // email_invalid_request | email_account_suspended — the non-retryable SES
+  // outcomes mapped through `resolveTerminal`). I.e. "gate name OR terminal-
+  // policy reason OR ESP failure code". Null unless the target reached a
+  // suppressed/failed terminal.
   suppressedByGate String?
 
   queuedAt DateTime  @default(now())
   sentAt   DateTime?
+  // Epic G batch 8.4 — set ONCE by `startSending` on the pre-send tx
+  // (pending → sending). Never re-written: a `revertToPending` retryable
+  // recovery returns the column to NULL on its CAS-guarded sending → pending
+  // transition; a successful completion leaves it set (paired with sentAt).
+  // Sole purpose: operator-observability for stuck-`sending` triage
+  // (`WHERE status='sending' AND sendStartedAt < NOW() - INTERVAL '1 hour'`).
+  // Use `updatedAt` would lie once 8.5's SNS handler touches the row.
+  sendStartedAt DateTime?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @default(now()) @updatedAt

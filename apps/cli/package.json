@@ -10,6 +10,7 @@
     "outbox:dead-letter": "node dist/outbox.js dead-letter",
     "scoring:bulk-rescore": "node dist/scoring.js bulk-rescore",
     "backfill:orders": "node dist/backfill.js orders",
+    "dispatch:smoke": "node dist/dispatch.js smoke",
     "test": "vitest run",
     "test:watch": "vitest"
   },
@@ -18,6 +19,7 @@
     "@winback/config": "workspace:*",
     "@winback/contracts": "workspace:*",
     "@winback/db": "workspace:*",
+    "@winback/email": "workspace:*",
     "@winback/errors": "workspace:*",
     "@winback/logger": "workspace:*",
     "@winback/shopify": "workspace:*"

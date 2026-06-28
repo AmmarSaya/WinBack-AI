@@ -43,6 +43,7 @@
  * (`NODE_ENV=development` or unset) both auto-invoke as before.
  */
 
+import { getEmailConfig, selectActiveEmailProvider } from '@winback/email';
 import { getLogger } from '@winback/logger';
 import { closeQueues, getQueues } from '@winback/queue';
 import { getShopifyConfig } from '@winback/shopify';
@@ -63,7 +64,34 @@ export async function main(): Promise<void> {
   const prisma = getPrisma();
   const queues = getQueues();
 
-  const ctx: DrainerContext = { prisma, queues, shopifyConfig };
+  // Epic G batch 8.4 — boot the ESP. Validates env synchronously; throws
+  // ConfigError on misconfiguration so a missing AWS_SES_* surfaces at
+  // process start, not at the first dispatch.
+  //
+  // `EmailConfig` is a z.discriminatedUnion shape with a single member
+  // (`amazon-ses`) at 8.4. The fields below are accessed directly — when a
+  // second provider joins the union, narrow via `EMAIL_PROVIDER` switch.
+  const emailConfig = getEmailConfig();
+  const emailProvider = selectActiveEmailProvider(emailConfig);
+  if (!emailConfig.AWS_SES_SANDBOX) {
+    // Sandbox is the locked 8.4 build assumption. A boot that points at a
+    // production-out-of-sandbox SES account is a DELIBERATE operator action
+    // (the launch switch) — surface it loudly so it doesn't slip past in
+    // routine deploys.
+    log.warn(
+      { provider: emailConfig.EMAIL_PROVIDER },
+      'drainer: AWS_SES_SANDBOX is not true — running against PRODUCTION SES (launch-day posture)',
+    );
+  }
+
+  const ctx: DrainerContext = {
+    prisma,
+    queues,
+    shopifyConfig,
+    emailProvider,
+    emailFromAddress: emailConfig.AWS_SES_FROM_ADDRESS,
+    emailConfigurationSetName: emailConfig.AWS_SES_CONFIGURATION_SET,
+  };
 
   // Q-B3: explicit per-worker names. Three Workers in one process, an
   // unnamed `worker` is a refactor hazard.
