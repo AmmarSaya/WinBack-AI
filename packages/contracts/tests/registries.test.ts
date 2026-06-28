@@ -115,8 +115,8 @@ describe('AUDIT_ACTIONS registry', () => {
     expect(isAuditAction('CapsAreInvalid')).toBe(false);
   });
 
-  it('contains the fifteen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 4 ai: 3 Epic F batch 4 + 1 A2 + 1 A4 discount)', () => {
-    expect(ALL_AUDIT_ACTIONS.size).toBe(15);
+  it('contains the seventeen actions currently emitted (6 C6 gdpr + 2 D4 outbox + 1 Epic E session 2 customer + 1 A1a merchant + 4 ai: 3 Epic F batch 4 + 1 A2 + 1 A4 discount + 2 Epic G batch 8.4 dispatch)', () => {
+    expect(ALL_AUDIT_ACTIONS.size).toBe(17);
     expect(AUDIT_ACTIONS.gdpr.customer_data_request).toBe('gdpr.customer_data_request');
     expect(AUDIT_ACTIONS.gdpr.customer_redact).toBe('gdpr.customer_redact');
     expect(AUDIT_ACTIONS.gdpr.customer_redact_malformed).toBe('gdpr.customer_redact_malformed');
@@ -143,6 +143,14 @@ describe('AUDIT_ACTIONS registry', () => {
     // A4 (POST-EPIC-F §4 batch 4.2) — winback discount minted. Written by the
     // AI Worker in the same tx as the AiGeneration completion.
     expect(AUDIT_ACTIONS.discount.created).toBe('discount.created');
+    // Epic G batch 8.4 — dispatch (send) lifecycle. Both written inside the
+    // shared `CampaignRepository.markSentWithQuota` completion-tx (worker
+    // happy path + 8.5's future SNS Delivery handler call the same method).
+    // `suppressed_by_ses` is a SES account-suppression hit — distinct from
+    // gate-driven suppressions (which carry no audit; the CampaignTarget's
+    // suppressedByGate is the forensic record for those).
+    expect(AUDIT_ACTIONS.dispatch.sent).toBe('dispatch.sent');
+    expect(AUDIT_ACTIONS.dispatch.suppressed_by_ses).toBe('dispatch.suppressed_by_ses');
   });
 });
 

@@ -332,7 +332,129 @@ If all 11 boxes tick, you can install on a paying merchant's store. If any one d
 
 ---
 
-## §5 — When to update this doc
+## §5 — Stale 'sending' CampaignTarget — operator rescue (Epic G batch 8.4)
+
+**WHY this exists.** A `CampaignTarget` can get stuck in `'sending'` if the
+dispatch worker crashed BETWEEN the SES `SendEmail` ACK and the completion-tx
+commit (C3), or if the SES ACK was genuinely lost in transit (C2). The
+customer MAY have received the email. We cannot ask SES "did you send this"
+after the fact (SES has no client-side idempotency token — verified against
+the AWS docs 2026-06-28).
+
+The dispatch worker's design REFUSES to auto-resend a `'sending'` row under any
+circumstances — the replay guard short-circuits it BEFORE any gate read, and
+both sweep arms exclude it. This is the ACK-LOST safety: a possible
+double-send to a customer is irreversible reputation damage to the shared
+sending domain; a missed send is recoverable next cycle. The asymmetric-cost
+choice is locked.
+
+**Once 8.5 ships**, SES SNS Delivery / Bounce / Complaint events will
+auto-resolve the vast majority of stuck `sending` rows via the shared
+`markSentWithQuota` repo method (the SNS handler calls the same method the
+worker does; no drift possible). This runbook is the RESIDUAL-CASE fallback
+for 8.4 + the very rare SNS-event-never-arrived case post-8.5.
+
+### Triage query
+
+```sql
+SELECT
+  ct.id,
+  ct."messageId",
+  ct."merchantId",
+  ct."campaignId",
+  ct."customerId",
+  ct."sendStartedAt",
+  m."shop"
+FROM "CampaignTarget" ct
+JOIN "Merchant" m ON m.id = ct."merchantId"
+WHERE ct.status = 'sending'
+  AND ct."sendStartedAt" < NOW() - INTERVAL '1 hour'
+ORDER BY ct."sendStartedAt";
+```
+
+A row younger than 1 hour is likely still in-flight (in-pass retry budget +
+BullMQ retries can extend the legitimate window). Older rows are the rescue
+candidates.
+
+### Rescue paths
+
+#### Path A — Flip to `'failed'` (THE SAFE PATH — preferred default)
+
+Give up on the row; accept the false-negative. No double-send risk.
+
+```sql
+UPDATE "CampaignTarget" SET status = 'failed', "suppressedByGate" = 'operator_failed'
+WHERE id = '<target-id>';
+UPDATE "Message" SET status = 'failed' WHERE id = (
+  SELECT "messageId" FROM "CampaignTarget" WHERE id = '<target-id>'
+);
+```
+
+Always start here unless you have positive evidence the send did NOT happen.
+
+#### Path B — Flip to `'sent'` (when SES confirms the send DID happen)
+
+If the SES console event search OR an SNS Delivery event in the topic log
+shows the message was accepted + delivered, flip to `sent` and paste the
+SES `MessageId` as `providerMessageId`:
+
+```sql
+UPDATE "CampaignTarget" SET status = 'sent', "sentAt" = NOW()
+WHERE id = '<target-id>';
+UPDATE "Message" SET
+  status = 'sent', "sentAt" = NOW(), channel = 'email',
+  provider = 'amazon-ses', "providerMessageId" = '<ses-message-id-from-console>'
+WHERE id = (SELECT "messageId" FROM "CampaignTarget" WHERE id = '<target-id>');
+```
+
+This path does NOT increment `MessageQuotaBucket` (the manual fix is a
+one-off; a bucket undercount of 1 is operationally invisible at
+`dailySendCap=2000`). The audit row is also NOT written by the rescue (the
+audit chain is for code-driven actions; an operator rescue is recorded by
+the operator's commit + this runbook reference).
+
+#### Path C — Flip to `'pending'` (THE DANGEROUS PATH — requires VERIFICATION)
+
+This RE-ENABLES send. If SES already accepted the message, the customer will
+get a SECOND email — the exact double-send the ACK-LOST safety design
+forbids. Damages the shared sending-domain reputation.
+
+**PRECONDITION — DO NOT proceed without verifying ALL of:**
+
+1. The SES console event search returns NO `Send` / `Delivery` event whose
+   `mail.tags.wbk_target` matches `<target-id>` over the lookback window
+   (search by tag).
+2. The SES configuration set's SNS topic log shows NO `Send` / `Delivery`
+   event with `mail.tags.wbk_target = <target-id>`.
+3. `sendStartedAt` is older than the SES delivery-latency SLO (24h is the
+   safe waiting window — SES typically delivers in under a minute).
+
+If ALL THREE hold, the send did not happen. Flip to pending:
+
+```sql
+UPDATE "CampaignTarget" SET status = 'pending', "sendStartedAt" = NULL
+WHERE id = '<target-id>';
+```
+
+The next sweep tick will re-pickup via arm 1 (the row no longer has a
+`CampaignTarget` blocking the `NOT EXISTS` filter — wait, it DOES still have
+the row; arm 1 wouldn't re-pickup it). Correct behavior: the row stays at
+`'pending'` and will be picked up only by a future `campaign.dispatch` job for
+the same `messageId` — operator action required to re-enqueue. Typically the
+operator's next step is to enqueue a one-off job via the BullMQ admin or by
+re-running the scheduler dispatch sweep manually.
+
+### NEVER
+
+- Auto-resweep all `sending > 1h` rows in a cron. The ACK-LOST safety
+  CANNOT be automated; the per-row verification (above) is what makes Path C
+  safe.
+- Flip to `'pending'` casually because "let's try again." That defeats the
+  entire 8.4 design.
+
+---
+
+## §6 — When to update this doc
 
 Update OPERATIONS.md in the same commit as any change that affects:
 

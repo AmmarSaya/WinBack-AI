@@ -11,6 +11,7 @@
     { "path": "../../packages/config" },
     { "path": "../../packages/logger" },
     { "path": "../../packages/db" },
+    { "path": "../../packages/email" },
     { "path": "../../packages/shopify" }
   ]
 }

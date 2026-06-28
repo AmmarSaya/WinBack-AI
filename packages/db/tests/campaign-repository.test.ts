@@ -314,13 +314,32 @@ describe('CampaignRepository.resolveTerminal', () => {
       repo.resolveTerminal({ messageId: 'msg_1', reason: 'consent' }),
     ).resolves.toEqual({ resolved: true });
 
+    // 8.4 widened the CAS guard to include 'sending' so a non-retryable error
+    // caught AFTER the pre-send tx can still terminalise the row.
     expect(campaignTargetUpdateMany).toHaveBeenCalledWith({
-      where: { messageId: 'msg_1', status: { in: ['pending', 'deferred'] } },
+      where: { messageId: 'msg_1', status: { in: ['pending', 'deferred', 'sending'] } },
       data: { status: 'suppressed', suppressedByGate: 'consent' },
     });
     expect(messageUpdateMany).toHaveBeenCalledWith({
       where: { id: 'msg_1', status: 'draft' },
       data: { status: 'suppressed' },
+    });
+  });
+
+  it("8.4 widening: status='failed' advances Message → 'failed' (burned draft must not look dispatchable)", async () => {
+    const { repo, campaignTargetUpdateMany, messageUpdateMany } = makeTxRepo(1);
+
+    await expect(
+      repo.resolveTerminal({ messageId: 'msg_1', reason: 'email_auth', status: 'failed' }),
+    ).resolves.toEqual({ resolved: true });
+
+    expect(campaignTargetUpdateMany).toHaveBeenCalledWith({
+      where: { messageId: 'msg_1', status: { in: ['pending', 'deferred', 'sending'] } },
+      data: { status: 'failed', suppressedByGate: 'email_auth' },
+    });
+    expect(messageUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'msg_1', status: 'draft' },
+      data: { status: 'failed' },
     });
   });
 
