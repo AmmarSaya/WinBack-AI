@@ -259,6 +259,10 @@ Re-decomposed **skeleton-first** so each layer ships + is verified before the ne
 | 8.7 | UI shell — campaign builder + send-time settings (Polaris). |
 | 8.8 | Integration tests (real Postgres + mocked SendGrid) — draft → claim → gate chain → send → MessageEvent end-to-end. |
 
+> **Build-input (2026-06-18, from competitive analysis) — bidirectional Suppression.** Other ESPs (Klaviyo, Mailchimp, Omnisend, etc.) running alongside hard-suppress bounces/complaints *internally* and do not write back to `Customer.emailMarketingConsentState`. A merchant running WinBack AI alongside another email tool will see us keep emailing known-bad addresses we never saw bounce on our own infrastructure — damaging the shared sending-domain reputation. **8.5's Suppression-management surface must include a merchant-facing CSV import of suppressed addresses** (email + reason + source + imported_at). Imported entries flow through gate 1 unchanged; no 8.3 retrofit. ESP-specific API integration is a later batch.
+
+> **Build-input (2026-06-18, from competitive analysis) — frequency safety when running alongside another email tool.** The 8.3 frequency gate reads only our own `Message.sentAt` history. We cannot ingest any other tool's send log. The most dangerous failure mode for the "alongside, not instead" positioning is collision-driven over-mailing → spam complaints → whole-domain reputation drop → blamed on us. No clean technical fix exists. The pragmatic mitigation is a **setup-time merchant question** — "Do you run another email tool against this list?" — that, on yes, defaults to a deliberately more conservative cooldown (uplift over the standalone 168h). 8.6 owns Campaign-CRUD UI; the question itself may live there per-campaign OR in merchant-level onboarding. **Record the requirement here; the cooldown uplift value (and its placement) are TBD on customer input.**
+
 (SMS, Workflow, Segment get their own later sections, written from this doc.)
 
 ---
