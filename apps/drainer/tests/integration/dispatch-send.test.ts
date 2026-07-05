@@ -30,7 +30,7 @@
  *     guards).
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 import { AUDIT_ACTIONS, type CampaignDispatchJobPayload } from '@winback/contracts';
 import {
@@ -71,8 +71,83 @@ let customerId: string;
 let campaignId: string;
 let messageId: string;
 
+// ─────────────────────────────────────────────────────────────────────────
+// CLOCK PIN — do NOT remove without reading.
+//
+// This file's send-path tests exercise the dispatch worker's full gate
+// chain against real Postgres. Gate 5 (quiet-hours) reads
+// `new Date()` inside the worker (dispatch.worker.ts:168 → gate-chain.ts)
+// and computes merchant-local hour vs `sendTimeStartHour/EndHour`.
+// The test merchant is created via `createTestMerchant` with no timezone
+// override (null → UTC fallback per quiet-hours.ts) and no
+// MerchantSettings override (defaults 9-18). With no clock pin, gate 5
+// reads the CI wall-clock UTC hour. When CI ran between 09:00-18:00 UTC
+// the tests happened to pass; when CI ran at 07:35 UTC (as PR #122 did)
+// all 6 send-path assertions red-lit because gate 5 deferred every
+// target before the send code path could run.
+//
+// This was a wall-clock time bomb that shipped with 8.4 by luck (its
+// merge CI ran at 17:36 UTC, inside the window). Founder's ruling on
+// PR #122: FIX the class, don't re-roll the clock.
+//
+// TODAY-noon-UTC (not a fixed past date like 2026-06-11T12Z) is
+// deliberate: the seed rows in this file use Prisma `@default(now())`,
+// resolved on the POSTGRES clock at INSERT — so pinning JS to a date
+// weeks away from Postgres-now would manufacture a JS/Postgres clock
+// gap, and a future test that seeded an Order or a `sent` Message
+// would silently invert the freshness/frequency gate (JS-past vs
+// Postgres-real-now). Today-noon keeps the JS clock within hours of
+// Postgres, closing that trap.
+//
+// LATENT-TRAP CONTINGENCY: this pin is SAFE ONLY WHILE gates 3
+// (freshness), 4 (frequency) and 6 (quota) have empty tables in this
+// file's seeds — currently NO Order rows, NO `sent` Message rows, NO
+// MessageQuotaBucket rows. Those gates pass regardless of `now`
+// because their tables are empty, not because the pin is robust for
+// them. If a future test in THIS file seeds any of those tables, the
+// pinned JS clock will start being compared against Postgres-now
+// seed rows and can silently invert. RE-PIN the JS clock RELATIVE TO
+// the seed clock (or seed relative to the pin) BEFORE adding such a
+// seed. This lesson belongs in the handoff for any integration test
+// whose seeds live on the Postgres clock but whose gates read a
+// JS-side `now`.
+// ─────────────────────────────────────────────────────────────────────────
+
+/**
+ * Today's date at 12:00:00 UTC, computed from the REAL wall clock at call
+ * time. Called BEFORE `vi.useFakeTimers()` in `beforeEach`, so the wall
+ * clock is real when this runs.
+ */
+function noonUtcToday(): Date {
+  const nowReal = new Date();
+  return new Date(Date.UTC(
+    nowReal.getUTCFullYear(),
+    nowReal.getUTCMonth(),
+    nowReal.getUTCDate(),
+    12, 0, 0, 0,
+  ));
+}
+
 beforeEach(async () => {
   await resetDb();
+  // Order matters: fake timers active BEFORE `createTestMerchant` (which
+  // calls JS `new Date()` for `installedAt` + `scoringInitializedAt`) and
+  // BEFORE any seed write below. Seed rows themselves use Prisma
+  // `@default(now())` (Postgres clock) so the fake timer does not affect
+  // their timestamps; only JS-side `new Date()` calls in the worker's
+  // gate chain resolve to the pinned instant.
+  //
+  // `toFake: ['Date']` — ONLY fake the Date global; leave setTimeout /
+  // setInterval / setImmediate on the real timers. This is load-bearing:
+  // the worker's in-pass completion-tx retry budget uses a real
+  // `sleep(100ms)` (setTimeout under the hood) between attempts, and
+  // several tests in this file (HALF 1 ACK-LOST, HALF 2 RETRYABLE, the
+  // in-pass retry budget test) drive that retry loop deliberately.
+  // Faking setTimeout would stall those `sleep`s indefinitely, hanging
+  // the tests until the 30s per-test timeout expires. Date-only faking
+  // pins gate 5 (quiet-hours) without breaking the retry loop.
+  vi.useFakeTimers({ toFake: ['Date'] });
+  vi.setSystemTime(noonUtcToday());
   merchantId = await createTestMerchant(SHOP);
   // ─────────────────────────────────────────────────────────────────────
   // Seed: subscribed customer + completed AiGeneration + draft Message +
@@ -139,6 +214,13 @@ beforeEach(async () => {
       data: { merchantId, campaignId, messageId, customerId },
     });
   });
+});
+
+afterEach(() => {
+  // Restore real timers so a subsequent test's `beforeEach` starts from a
+  // clean baseline (`noonUtcToday()` needs a real `new Date()` to compute
+  // today's date).
+  vi.useRealTimers();
 });
 
 // ---------------------------------------------------------------------------
