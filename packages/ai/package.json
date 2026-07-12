@@ -19,12 +19,12 @@
     "test:watch": "vitest"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "0.100.1",
+    "@anthropic-ai/sdk": "0.111.0",
     "@winback/config": "workspace:*",
     "@winback/contracts": "workspace:*",
     "@winback/errors": "workspace:*",
     "@winback/logger": "workspace:*",
-    "openai": "6.39.1",
+    "openai": "6.46.0",
     "zod": "4.4.3"
   },
   "devDependencies": {

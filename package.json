@@ -57,10 +57,10 @@
     "eslint": "^9.17.0",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.31.0",
-    "prettier": "^3.4.2",
+    "prettier": "^3.9.5",
     "prisma": "5.22.0",
     "typescript": "^6.0.3",
-    "typescript-eslint": "^8.60.1"
+    "typescript-eslint": "^8.63.0"
   },
   "pnpm": {
     "overrides": {
