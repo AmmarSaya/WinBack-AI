@@ -26,10 +26,10 @@
     "@winback/shopify": "workspace:*",
     "bullmq": "5.78.0",
     "ioredis": "5.10.1",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
-    "tsx": "^4.22.4",
+    "tsx": "^4.23.13",
     "vitest": "2.1.9"
   }
 }

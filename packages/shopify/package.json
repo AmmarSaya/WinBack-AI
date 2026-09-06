@@ -29,7 +29,7 @@
     "@winback/db": "workspace:*",
     "@winback/errors": "workspace:*",
     "@winback/logger": "workspace:*",
-    "zod": "4.4.3"
+    "zod": "4.5.4"
   },
   "devDependencies": {
     "vitest": "2.1.9"
